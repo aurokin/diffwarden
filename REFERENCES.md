@@ -34,7 +34,7 @@ Use the upstream repository for the current SDK docs, JSON mode docs, extension 
 ## Codex review reference
 
 - OpenAI Codex repository: https://github.com/openai/codex
-- Local reference inspected on 2026-05-14: `/Users/auro/code/upstream/codex` at commit `9797296564`.
+- Local reference inspected on 2026-05-14: `/Users/auro/code/upstream/codex` at commit `02a7205250`.
 
 Use Codex as the semantic reference for review behavior, especially its review rubric and review output model. Do not duplicate large Codex prompt or protocol excerpts here; link to the upstream source and copy only what the implementation needs into source-controlled constants with attribution.
 

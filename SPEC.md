@@ -419,6 +419,13 @@ export type ReviewValidation = {
 };
 ```
 
+`parse_mode` describes how core normalized adapter output into `ReviewResult`:
+
+- `strict-json`: adapter output was parsed directly as the expected JSON object.
+- `extracted-json`: core recovered the expected JSON object from surrounding text.
+- `tool-output`: adapter output came from a structured tool or native structured-output handoff.
+- `fallback-text`: core could not recover a valid JSON object and preserved useful text in `overall_explanation`.
+
 ## 8. Review prompt requirements
 
 The prompt should be assembled from three parts:
@@ -531,17 +538,30 @@ export type ReviewAdapterOutput = {
   structured?: unknown;
   events?: ReviewAdapterEvent[];
   usage?: unknown;
+  metadata?: {
+    captureMode?: "native-structured" | "tool-call" | "text";
+    agentId?: string;
+    runId?: string;
+    readonlyCapability?: "enforced" | "tool-restricted" | "prompt-only";
+    [key: string]: unknown;
+  };
 };
 ```
 
 Central rule: adapters should not resolve diffs, validate findings, merge reviewer results, or render output. They only run the selected SDK-backed reviewer and return structured output when the SDK can provide it. The richer input object is for adapter observability, logging, and SDKs that can consume structured context; the core CLI still owns target resolution and prompt assembly.
 
-The preferred adapter contract is structured output first:
+The adapter contract should be shared across SDKs:
 
-1. Use the SDK's native schema, tool, or structured-response mechanism when available.
-2. Return `structured` as the primary output.
-3. Include `text` only as a debug or fallback channel.
-4. Let the centralized parser recover JSON from text only when an SDK cannot produce a structured value.
+1. Use the same review prompt and schema for every SDK.
+2. Use the SDK's native schema, tool, or structured-response mechanism when it is available and reliable.
+3. Return `structured` when the SDK provides a structured handoff.
+4. Return `text` when the SDK's reliable output surface is terminal text.
+5. Always let the centralized parser normalize adapter output into `ReviewResult`.
+6. Record the capture mode so validation and rendering can distinguish native structured output, tool calls, and terminal text.
+
+`captureMode` describes how the adapter captured output from the SDK. `parse_mode` describes how core parsed that captured output. For example, Cursor can have `captureMode: "text"` with `parse_mode: "extracted-json"`, while Pi can have `captureMode: "tool-call"` with `parse_mode: "tool-output"`.
+
+Codex's built-in review flow is the reference pattern: prompt the reviewer for an exact JSON review object, parse exact JSON first, attempt to extract a JSON object from surrounding text, and preserve useful plain text as a fallback rather than making the adapter responsible for rendering.
 
 ## 10. Review runner
 
@@ -589,17 +609,20 @@ Initial behavior:
 
 - Implement adapter preflight for SDK availability, auth, model, effort, and read-only capability reporting.
 - Use the Cursor Agent SDK directly.
-- Use a dedicated local MCP `review_output` tool as the preferred structured-result path.
-- Capture matching SDK `tool_call` stream events and validate the tool args as `ReviewResult`.
-- Return `{ structured }` when a valid `review_output` call is captured.
-- Return `{ text }` only as a degraded fallback/debug channel for centralized parsing.
+- Prove local SDK execution and reliable text capture before adding more SDK-specific plumbing.
+- Return `{ text }` from the terminal run result for the first Cursor path, with `metadata.captureMode = "text"`.
+- Let the shared parser recover exact JSON, extracted JSON, or fallback text from Cursor output.
+- Add a dedicated local MCP `review_output` tool as a reliability upgrade after the text path works.
+- When the MCP path is enabled, capture matching SDK `tool_call` stream events and validate the tool args as `ReviewResult`.
+- Return `{ structured }` with `metadata.captureMode = "tool-call"` when a valid `review_output` call is captured.
+- If the MCP path does not produce a valid tool call, fall back to terminal text and mark the capture mode accordingly.
 - Document what `readonly` can and cannot enforce for Cursor local mode before treating it as a hard guarantee.
 
 Verified SDK constraint:
 
 - `@cursor/sdk@1.0.13` types expose `AgentOptions.mcpServers`, `SendOptions.mcpServers`, `run.stream()`, `run.wait()`, and stream `tool_call` events.
 - Those types do not expose a Claude-style `outputFormat: { type: "json_schema" }` option or direct typed tool registration.
-- Therefore Cursor v1 should prove the MCP `review_output` path first. Prompt-only JSON extraction is allowed only as explicitly degraded behavior, with validation metadata saying structured tool output was not captured.
+- Therefore Cursor v1 should prove local SDK review execution and text output first, then prove the MCP `review_output` path as the preferred structured-output upgrade. Prompt-driven JSON is acceptable for the first useful Cursor adapter because centralized parsing and validation are core responsibilities.
 
 ### 11.2 Claude adapter, v1
 
@@ -664,8 +687,9 @@ Findings:
 - Local runs should pass `local: { cwd }` explicitly.
 - Cloud behavior can open PRs when configured. This CLI must not use cloud PR creation features.
 - Current `@cursor/sdk@1.0.13` package types do not expose a native `outputFormat: json_schema` equivalent.
-- The package types do expose MCP server configuration and stream `tool_call` events, so the preferred Cursor structured-result path is a local MCP `review_output` tool whose args are validated as `ReviewResult`.
-- Fallback text JSON extraction is allowed only as degraded behavior, not as the preferred structured-output contract.
+- Cursor's first adapter should use local SDK execution and terminal text capture to prove the end-to-end review contract quickly.
+- The package types do expose MCP server configuration and stream `tool_call` events, so a later Cursor structured-result path should use a local MCP `review_output` tool whose args are validated as `ReviewResult`.
+- Text JSON extraction is an ordinary core parser path, not Cursor-specific adapter logic. The validation artifact must still record whether the output came from native structure, a tool call, extracted JSON, or fallback text.
 
 #### Claude Agent SDK
 
@@ -965,11 +989,12 @@ If a reviewer adapter requires shell access, restrict the prompt and adapter pol
 
 Reviewers should be allowed to inspect surrounding code with read-only tools. A diff alone is often insufficient for a high-quality review. The reviewed surface remains the target diff, but adapters may expose safe context tools that allow reading files, listing/searching files, and running read-only git/shell inspection commands.
 
-Codex review reference, refreshed from `/Users/auro/code/upstream/codex` at commit `9797296564` on 2026-05-14:
+Codex review reference, refreshed from `/Users/auro/code/upstream/codex` at commit `02a7205250` on 2026-05-14:
 
 - Codex review runs as a sub-Codex review task with review-specific prompts from `codex-rs/core/src/review_prompts.rs`.
 - Codex sets the review subagent base instructions to `REVIEW_PROMPT`, uses `review_model` when configured, and sets approval policy to never in `codex-rs/core/src/tasks/review.rs`.
 - The newer review-thread path disables web search for reviews and keeps review execution constrained while preserving repository inspection context in `codex-rs/core/src/session/review.rs`.
+- Codex review output parsing first tries to deserialize the final agent message as `ReviewOutputEvent`, then extracts the first JSON object substring, then falls back to putting plain text into `overall_explanation` in `codex-rs/core/src/tasks/review.rs`.
 - The Codex tool registry includes shell/unified exec, MCP resource listing/reading, planning/goal tools, view-image, apply-patch, and multi-agent tools depending on configuration in `codex-rs/core/src/tools/spec_plan.rs`.
 - For `diffwarden`, only the read-only subset should be exposed: file read/list/search, `git diff`, `git show`, `git status`, `git grep`, `rg`, `sed`, `nl`, and equivalent inspection commands. Do not expose apply-patch, edit/write tools, web search, PR posting, GitHub comment tools, or multi-agent spawning inside reviewer adapters.
 
@@ -1067,8 +1092,9 @@ Deliverables:
 - `src/adapters/claude.ts`
 - `src/adapters/pi.ts`
 - SDK-backed execution only; no direct executable adapter as the primary path.
-- structured output support for all three adapters, using each SDK's schema/tool mechanism where available.
-- Cursor structured-output proof through a local MCP `review_output` tool and captured SDK `tool_call` event args; if tool output cannot be enforced, the degraded parser fallback must be explicit in validation metadata.
+- shared adapter output handling for `{ structured }`, `{ text }`, capture metadata, timeout, and execution errors.
+- structured output support where each SDK has a reliable schema/tool mechanism.
+- Cursor text-output proof through local SDK execution first; then structured-output proof through a local MCP `review_output` tool and captured SDK `tool_call` event args.
 - Claude structured-output implementation through `query({ options: { outputFormat: { type: "json_schema", schema } } })`.
 - Pi structured-output implementation through a typed terminating `review_output` tool.
 - preflight checks for SDK/runtime requirements, auth, provider/profile coherence, model, and effort.
@@ -1123,7 +1149,7 @@ Deliverables:
 13. The CLI exits `3` with a clear message for missing SDK/runtime requirements, missing SDK-required executables, missing auth, provider setup failures, timeouts, and SDK execution failures.
 14. Claude adapter returns `structured` from native structured output.
 15. Pi adapter returns `structured` from a terminating `review_output` tool.
-16. Cursor adapter documents and tests the local MCP `review_output` structured-output path; if Cursor does not call the tool, the degraded parser fallback is explicit in validation metadata.
+16. Cursor adapter documents and tests local SDK text capture and the later MCP `review_output` structured-output path; if Cursor does not call the tool, terminal text capture and centralized parser metadata remain explicit.
 17. The parser can recover JSON from typical fenced-code model output for adapters that cannot produce structured output directly.
 18. The renderer displays findings, file paths, line ranges, verdict, confidence, and a clear no-findings state.
 19. No files are modified by default.
@@ -1138,7 +1164,8 @@ Resolved design decisions:
 
 - Reviewer spec grammar: use `sdk[:profile]` for v1. Inline model/provider expressions are deferred.
 - Multi-reviewer deduplication: exact file, exact line range, exact priority, and normalized-title match only. Do not fuzzy-merge findings in v1.
-- Cursor structured-output path: use a local MCP `review_output` tool with streamed `tool_call` capture, based on `@cursor/sdk@1.0.13` exposing MCP config and tool-call events but no native JSON-schema output option.
+- Adapter shape: adapters run SDKs and capture output; core code owns prompt assembly, parsing, validation, rendering, and aggregation.
+- Cursor sequencing: prove local SDK execution and terminal text capture first; then add a local MCP `review_output` tool with streamed `tool_call` capture as the preferred structured-output upgrade, based on `@cursor/sdk@1.0.13` exposing MCP config and tool-call events but no native JSON-schema output option.
 - Package/repository/CLI name: `diffwarden`; public GitHub repo is `aurokin/diffwarden`; npm publishing is deferred.
 - Config file name is `diffwarden.config.json`.
 - Config is required for real SDK runs and should be discovered through project config, then XDG user config.
@@ -1161,4 +1188,4 @@ diffwarden --target base:main --reviewer-set 2
 diffwarden --target base:main --reviewer cursor --reviewer claude --reviewer pi:openrouter-high
 ```
 
-Build the core around Codex's review schema and prompt, then implement fake adapters that return fixture `ReviewResult`s. Once the contract is proven, implement SDK spikes for Claude native structured output, Pi terminating-tool output, and Cursor's best structured-output path. Keep Markdown as the default renderer because humans and coding agents can both read it, and make full JSON available for automation.
+Build the core around Codex's review schema and prompt, then implement fake adapters that return fixture `ReviewResult`s. Once the contract is proven, implement the Cursor text-capture spike first because it answers whether the CLI can get useful review output from Cursor with a thin adapter. Then implement Claude native structured output, Pi terminating-tool output, and Cursor's MCP `review_output` upgrade. Keep Markdown as the default renderer because humans and coding agents can both read it, and make full JSON available for automation.
