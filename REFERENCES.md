@@ -5,8 +5,12 @@ Point-in-time note: 2026-05-12. This file intentionally avoids copying API detai
 ## Cursor Agent SDK
 
 - Cursor TypeScript SDK documentation: https://cursor.com/docs/api/sdk/typescript
+- Cursor TypeScript SDK release post: https://cursor.com/blog/typescript-sdk
 - Cursor cookbook examples: https://github.com/cursor/cookbook
 - NPM package: https://www.npmjs.com/package/@cursor/sdk
+- Local package inspection on 2026-05-14: `@cursor/sdk@1.0.13`.
+- Cursor model docs: https://docs.cursor.com/models
+- Cursor model-list API docs: https://docs.cursor.com/en/background-agent/api/list-models
 
 Use the official docs and cookbook examples for current SDK usage, authentication, local/cloud execution, and streaming behavior.
 
@@ -23,12 +27,14 @@ Use upstream docs for current `query()` options, structured output support, tool
 - Pi mono repository: https://github.com/badlogic/pi-mono
 - Pi Coding Agent SDK package: https://www.npmjs.com/package/@earendil-works/pi-coding-agent
 - Pi Agent Core package: https://www.npmjs.com/package/@earendil-works/pi-agent-core
+- Local source inspected on 2026-05-14: `/Users/auro/code/upstream/pi-mono` at commit `f2b105dd56`.
 
 Use the upstream repository for the current SDK docs, JSON mode docs, extension examples, structured output patterns, and agent harness lifecycle.
 
 ## Codex review reference
 
 - OpenAI Codex repository: https://github.com/openai/codex
+- Local reference inspected on 2026-05-14: `/Users/auro/code/upstream/codex` at commit `9797296564`.
 
 Use Codex as the semantic reference for review behavior, especially its review rubric and review output model. Do not duplicate large Codex prompt or protocol excerpts here; link to the upstream source and copy only what the implementation needs into source-controlled constants with attribution.
 
@@ -44,6 +50,8 @@ These are convenience working copies on Auro's machine, not portable repo depend
 ```
 
 Do not require these paths for normal development. If implementation needs fixtures or copied prompt text, vendor the minimal stable artifact into this repo with clear attribution.
+
+Before implementing SDK adapters, re-check these local upstream clones and refresh them if needed. The spec should describe product behavior; version-sensitive SDK details belong near adapter code, with the upstream commit or package version noted when the implementation depends on a specific shape.
 
 ## Reference policy
 
