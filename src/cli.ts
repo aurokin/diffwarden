@@ -1,6 +1,11 @@
 #!/usr/bin/env node
+import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
 import { invalidCli } from "./core/errors.js";
+import { resolveGitTarget } from "./core/git.js";
+import { renderJson, renderMarkdown } from "./core/render.js";
+import { runReview } from "./core/runner.js";
+import { parseTargetSpec } from "./core/target.js";
 
 const program = new Command();
 
@@ -9,23 +14,47 @@ program
   .description("A small CLI for agent-callable code review.")
   .version("0.0.0")
   .option("--target <target>", "review target, such as uncommitted, base:main, or commit:abc123")
-  .option("--reviewer <spec>", "reviewer spec; repeat support is planned")
+  .option("--reviewer <spec>", "reviewer spec; only fake is implemented", "fake")
+  .option("--cwd <path>", "working directory", process.cwd())
   .option("--format <format>", "output format: markdown or json", "markdown")
   .option("--out <path>", "write the full ReviewArtifact JSON to a file")
-  .action((options: { target?: string; format: string }) => {
-    if (options.format !== "markdown" && options.format !== "json") {
-      throw invalidCli(`Invalid --format value: ${options.format}`);
-    }
+  .action(
+    async (options: {
+      target?: string;
+      reviewer: string;
+      cwd: string;
+      format: string;
+      out?: string;
+    }) => {
+      if (options.format !== "markdown" && options.format !== "json") {
+        throw invalidCli(`Invalid --format value: ${options.format}`);
+      }
 
-    if (!options.target) {
-      program.help();
-    }
+      if (!options.target) {
+        program.help();
+        return;
+      }
 
-    throw invalidCli("Review execution is not implemented yet. Scaffold is ready.");
-  });
+      const targetSpec = parseTargetSpec(options.target);
+      const resolved = await resolveGitTarget(options.cwd, targetSpec);
+      const artifact = await runReview({
+        cwd: options.cwd,
+        resolved,
+        reviewer: options.reviewer,
+      });
+
+      if (options.out) {
+        await writeFile(options.out, renderJson(artifact));
+      }
+
+      process.stdout.write(
+        options.format === "json" ? renderJson(artifact) : renderMarkdown(artifact),
+      );
+    },
+  );
 
 try {
-  program.parse();
+  await program.parseAsync(normalizeArgv(process.argv));
 } catch (error) {
   if (error instanceof Error) {
     const exitCode = "exitCode" in error && typeof error.exitCode === "number" ? error.exitCode : 1;
@@ -35,4 +64,12 @@ try {
 
   process.stderr.write("Unknown error\n");
   process.exit(1);
+}
+
+function normalizeArgv(argv: string[]): string[] {
+  if (argv[2] !== "--") {
+    return argv;
+  }
+
+  return [argv[0] ?? "node", argv[1] ?? "diffwarden", ...argv.slice(3)];
 }
