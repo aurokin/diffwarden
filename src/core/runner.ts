@@ -5,6 +5,7 @@ import type { ResolvedDiff } from "./git.js";
 import { parseReviewOutput } from "./parse.js";
 import { buildReviewPrompt } from "./prompt.js";
 import type { ReviewArtifact, ReviewReviewerArtifact } from "./schema.js";
+import { validateReviewResult } from "./validate.js";
 
 export type RunReviewOptions = {
   cwd: string;
@@ -31,12 +32,17 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
     output.structured !== undefined
       ? parseReviewOutput({ structured: output.structured })
       : parseReviewOutput({ text: output.text ?? "" });
+  const validation = validateReviewResult({
+    result: parsed.result,
+    target: options.resolved.target,
+    validation: parsed.validation,
+  });
   const timingMs = Date.now() - start;
   const reviewerArtifact: ReviewReviewerArtifact = {
     id: reviewer.id,
     sdk: reviewer.sdk,
     result: parsed.result,
-    validation: parsed.validation,
+    validation,
     timing_ms: timingMs,
   };
 
@@ -52,7 +58,7 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
     target: options.resolved.target,
     result: parsed.result,
     raw_text: parsed.rawText,
-    validation: parsed.validation,
+    validation,
     timing_ms: timingMs,
   };
 }
