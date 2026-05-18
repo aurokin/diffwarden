@@ -1,5 +1,6 @@
 import { fakeAdapter } from "../adapters/fake.js";
 import type { ReviewAdapter, ReviewReviewerConfig } from "../adapters/types.js";
+import { parseChangedLineRanges } from "./diff.js";
 import { invalidCli } from "./errors.js";
 import type { ResolvedDiff } from "./git.js";
 import { parseReviewOutput } from "./parse.js";
@@ -36,6 +37,7 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
     result: parsed.result,
     target: options.resolved.target,
     validation: parsed.validation,
+    changedLineRanges: parseChangedLineRanges(options.resolved.diff),
   });
   const timingMs = Date.now() - start;
   const reviewerArtifact: ReviewReviewerArtifact = {

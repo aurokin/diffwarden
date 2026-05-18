@@ -53,9 +53,48 @@ describe("validateReviewResult", () => {
       },
     ]);
   });
+
+  it("accepts findings that overlap changed lines", () => {
+    const result = reviewResult("/repo/src/client.ts", 12);
+
+    const nextValidation = validateReviewResult({
+      result,
+      target,
+      validation,
+      changedLineRanges: {
+        "src/client.ts": [{ start: 10, end: 12 }],
+      },
+    });
+
+    expect(nextValidation.valid_locations).toBe(true);
+    expect(nextValidation.findings_overlap_diff).toBe(true);
+    expect(nextValidation.invalid_locations).toEqual([]);
+  });
+
+  it("reports findings that do not overlap changed lines", () => {
+    const result = reviewResult("/repo/src/client.ts", 20);
+
+    const nextValidation = validateReviewResult({
+      result,
+      target,
+      validation,
+      changedLineRanges: {
+        "src/client.ts": [{ start: 10, end: 12 }],
+      },
+    });
+
+    expect(nextValidation.valid_locations).toBe(false);
+    expect(nextValidation.findings_overlap_diff).toBe(false);
+    expect(nextValidation.invalid_locations).toEqual([
+      {
+        index: 0,
+        reason: "Finding line range does not overlap changed lines: /repo/src/client.ts",
+      },
+    ]);
+  });
 });
 
-function reviewResult(filePath: string): ReviewArtifactResult {
+function reviewResult(filePath: string, line = 1): ReviewArtifactResult {
   return {
     findings: [
       {
@@ -66,8 +105,8 @@ function reviewResult(filePath: string): ReviewArtifactResult {
         code_location: {
           absolute_file_path: filePath,
           line_range: {
-            start: 1,
-            end: 1,
+            start: line,
+            end: line,
           },
         },
       },
