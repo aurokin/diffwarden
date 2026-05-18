@@ -25,7 +25,7 @@ diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 
 ## Current status
 
-Documentation scaffold only. No implementation has been created yet. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
+Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, and a Cursor Agent SDK adapter. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
 
 The intended v1 target surface is:
 
@@ -34,6 +34,28 @@ The intended v1 target surface is:
 - `commit:<sha>`
 
 `--format json` prints the full `ReviewArtifact`, including reviewers, target, result, validation, and timing metadata.
+
+## Cursor reviewer
+
+The Cursor adapter is available with:
+
+```bash
+diffwarden --target uncommitted --reviewer cursor
+```
+
+It requires `CURSOR_API_KEY` in the environment. For local development with zsh-based dotfiles, an interactive shell may be needed if the key is exported from `.zshrc`:
+
+```bash
+zsh -lic 'pnpm dev -- --target uncommitted --reviewer cursor'
+```
+
+The opt-in live smoke test is:
+
+```bash
+zsh -lic 'INTEGRATION_TEST_ON=1 pnpm vitest run test/cursor-adapter.test.ts'
+```
+
+The adapter uses `@cursor/sdk`. That SDK currently depends on `sqlite3`, so `package.json` allows pnpm to run the `sqlite3` build script through `pnpm.onlyBuiltDependencies`.
 
 The intended v1 reviewer surface is the Cursor Agent SDK, Claude Agent SDK, and Pi Agent SDK. Adapters should use SDKs directly, not shell out to agent executables as the primary integration path.
 

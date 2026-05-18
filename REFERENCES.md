@@ -9,6 +9,7 @@ Point-in-time note: 2026-05-12. This file intentionally avoids copying API detai
 - Cursor cookbook examples: https://github.com/cursor/cookbook
 - NPM package: https://www.npmjs.com/package/@cursor/sdk
 - Local package inspection on 2026-05-14: `@cursor/sdk@1.0.13`.
+- Implemented adapter dependency on 2026-05-18: `@cursor/sdk@1.0.13`; local live tests require pnpm to build the SDK's `sqlite3` dependency.
 - Cursor model docs: https://docs.cursor.com/models
 - Cursor model-list API docs: https://docs.cursor.com/en/background-agent/api/list-models
 
