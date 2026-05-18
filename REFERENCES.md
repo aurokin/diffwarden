@@ -20,6 +20,7 @@ Use the official docs and cookbook examples for current SDK usage, authenticatio
 - Claude Agent SDK TypeScript repository: https://github.com/anthropics/claude-agent-sdk-typescript
 - Claude Code / Agent SDK docs index: https://code.claude.com/docs/llms.txt
 - NPM package: https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk
+- Implemented adapter dependency on 2026-05-18: `@anthropic-ai/claude-agent-sdk@0.3.143`.
 
 Use upstream docs for current `query()` options, structured output support, tool permissions, authentication behavior, and SDK version notes.
 

@@ -1,3 +1,4 @@
+import { claudeAdapter } from "../adapters/claude.js";
 import { cursorAdapter } from "../adapters/cursor.js";
 import { fakeAdapter } from "../adapters/fake.js";
 import type { ReviewAdapter, ReviewReviewerConfig } from "../adapters/types.js";
@@ -95,6 +96,15 @@ function resolveReviewer(spec: string): ReviewReviewerConfig {
     };
   }
 
+  if (spec === "claude") {
+    return {
+      id: "claude",
+      sdk: "claude",
+      model: "claude-sonnet-4-6",
+      readonly: true,
+    };
+  }
+
   throw invalidCli(`Reviewer is not implemented yet: ${spec}`);
 }
 
@@ -105,6 +115,10 @@ function getAdapter(sdk: ReviewReviewerConfig["sdk"]): ReviewAdapter {
 
   if (sdk === "cursor") {
     return cursorAdapter;
+  }
+
+  if (sdk === "claude") {
+    return claudeAdapter;
   }
 
   throw invalidCli(`Reviewer is not implemented yet: ${sdk}`);

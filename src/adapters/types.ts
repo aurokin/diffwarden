@@ -14,7 +14,7 @@ export type ReviewAdapterInput = {
 
 export type ReviewReviewerConfig = {
   id: string;
-  sdk: "fake" | "cursor";
+  sdk: "fake" | "cursor" | "claude";
   profile?: string;
   model?: string;
   effort?: string;

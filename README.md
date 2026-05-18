@@ -25,7 +25,7 @@ diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 
 ## Current status
 
-Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, and a Cursor Agent SDK adapter. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
+Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, and Cursor and Claude Agent SDK adapters. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
 
 The intended v1 target surface is:
 
@@ -56,6 +56,28 @@ zsh -lic 'INTEGRATION_TEST_ON=1 pnpm vitest run test/cursor-adapter.test.ts'
 ```
 
 The adapter uses `@cursor/sdk`. That SDK currently depends on `sqlite3`, so `package.json` allows pnpm to run the `sqlite3` build script through `pnpm.onlyBuiltDependencies`.
+
+## Claude reviewer
+
+The Claude adapter is available with:
+
+```bash
+diffwarden --target uncommitted --reviewer claude
+```
+
+It currently requires `ANTHROPIC_API_KEY` in the environment:
+
+```bash
+ANTHROPIC_API_KEY=... pnpm dev -- --target uncommitted --reviewer claude
+```
+
+The opt-in live smoke test is:
+
+```bash
+INTEGRATION_TEST_ON=1 pnpm vitest run test/claude-adapter.test.ts
+```
+
+The adapter uses `@anthropic-ai/claude-agent-sdk` with built-in tools disabled, `permissionMode: "dontAsk"`, isolated setting sources, and text capture. Native structured output is intentionally deferred until the basic adapter path is proven.
 
 The intended v1 reviewer surface is the Cursor Agent SDK, Claude Agent SDK, and Pi Agent SDK. Adapters should use SDKs directly, not shell out to agent executables as the primary integration path.
 

@@ -89,7 +89,7 @@ export const adapterPreflightCheckSchema = z.object({
 export const adapterPreflightResultSchema = z.object({
   checks: z.array(adapterPreflightCheckSchema),
   metadata: z
-    .record(z.unknown())
+    .record(z.string(), z.unknown())
     .and(
       z.object({
         readonlyCapability: z.enum(["enforced", "tool-restricted", "prompt-only"]).optional(),
