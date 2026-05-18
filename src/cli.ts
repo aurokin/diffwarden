@@ -14,7 +14,7 @@ program
   .description("A small CLI for agent-callable code review.")
   .version("0.0.0")
   .option("--target <target>", "review target, such as uncommitted, base:main, or commit:abc123")
-  .option("--reviewer <spec>", "reviewer spec; only fake is implemented", "fake")
+  .option("--reviewer <spec>", "reviewer spec, such as fake or cursor", "fake")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--format <format>", "output format: markdown or json", "markdown")
   .option("--out <path>", "write the full ReviewArtifact JSON to a file")

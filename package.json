@@ -19,7 +19,11 @@
   "engines": {
     "node": ">=20.11"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": ["sqlite3"]
+  },
   "dependencies": {
+    "@cursor/sdk": "^1.0.13",
     "commander": "^12.1.0",
     "zod": "^3.24.1"
   },

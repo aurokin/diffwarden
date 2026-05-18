@@ -1,3 +1,4 @@
+import { cursorAdapter } from "../adapters/cursor.js";
 import { fakeAdapter } from "../adapters/fake.js";
 import type { ReviewAdapter, ReviewReviewerConfig } from "../adapters/types.js";
 import { parseChangedLineRanges } from "./diff.js";
@@ -66,20 +67,33 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
 }
 
 function resolveReviewer(spec: string): ReviewReviewerConfig {
-  if (spec !== "fake") {
-    throw invalidCli(`Reviewer is not implemented yet: ${spec}`);
+  if (spec === "fake") {
+    return {
+      id: "fake",
+      sdk: "fake",
+      readonly: true,
+    };
   }
 
-  return {
-    id: "fake",
-    sdk: "fake",
-    readonly: true,
-  };
+  if (spec === "cursor") {
+    return {
+      id: "cursor",
+      sdk: "cursor",
+      model: "composer-2",
+      readonly: true,
+    };
+  }
+
+  throw invalidCli(`Reviewer is not implemented yet: ${spec}`);
 }
 
 function getAdapter(sdk: ReviewReviewerConfig["sdk"]): ReviewAdapter {
   if (sdk === "fake") {
     return fakeAdapter;
+  }
+
+  if (sdk === "cursor") {
+    return cursorAdapter;
   }
 
   throw invalidCli(`Reviewer is not implemented yet: ${sdk}`);

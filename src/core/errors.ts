@@ -25,3 +25,15 @@ export class DiffwardenError extends Error {
 export function invalidCli(message: string): DiffwardenError {
   return new DiffwardenError("invalid_cli", message, 2);
 }
+
+export function missingAuth(message: string): DiffwardenError {
+  return new DiffwardenError("missing_auth", message, 3);
+}
+
+export function missingRequirement(message: string): DiffwardenError {
+  return new DiffwardenError("missing_requirement", message, 3);
+}
+
+export function reviewerFailed(message: string): DiffwardenError {
+  return new DiffwardenError("reviewer_failed", message, 3);
+}
