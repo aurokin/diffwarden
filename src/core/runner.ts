@@ -20,7 +20,7 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
   const adapter = getAdapter(reviewer.sdk);
   const start = Date.now();
   const prompt = buildReviewPrompt(options.resolved.target, options.resolved.diff);
-  const output = await adapter.run({
+  const adapterInput = {
     cwd: options.cwd,
     reviewer,
     target: options.resolved.target,
@@ -29,7 +29,14 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
     prompt,
     readonly: true,
     env: process.env,
+  };
+  const preflight = await adapter.preflight?.({
+    cwd: adapterInput.cwd,
+    reviewer: adapterInput.reviewer,
+    readonly: adapterInput.readonly,
+    env: adapterInput.env,
   });
+  const output = await adapter.run(adapterInput);
   const parsed =
     output.structured !== undefined
       ? parseReviewOutput({ structured: output.structured })
@@ -51,6 +58,10 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
 
   if (parsed.rawText !== undefined) {
     reviewerArtifact.raw_text = parsed.rawText;
+  }
+
+  if (preflight !== undefined) {
+    reviewerArtifact.preflight = preflight;
   }
 
   return {

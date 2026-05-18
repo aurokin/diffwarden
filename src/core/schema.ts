@@ -81,6 +81,24 @@ export const reviewTargetResolvedSchema = z.object({
 });
 
 export const reviewerSdkSchema = z.enum(["cursor", "claude", "pi", "fake"]);
+export const adapterPreflightCheckSchema = z.object({
+  name: z.string().min(1),
+  status: z.enum(["passed", "skipped", "warning"]),
+  detail: z.string().optional(),
+});
+export const adapterPreflightResultSchema = z.object({
+  checks: z.array(adapterPreflightCheckSchema),
+  metadata: z
+    .record(z.unknown())
+    .and(
+      z.object({
+        readonlyCapability: z.enum(["enforced", "tool-restricted", "prompt-only"]).optional(),
+        model: z.string().optional(),
+        effort: z.string().optional(),
+      }),
+    )
+    .optional(),
+});
 
 export const reviewReviewerArtifactSchema = z.object({
   id: z.string(),
@@ -91,6 +109,7 @@ export const reviewReviewerArtifactSchema = z.object({
   effort: z.string().optional(),
   result: reviewArtifactResultSchema,
   raw_text: z.string().optional(),
+  preflight: adapterPreflightResultSchema.optional(),
   validation: reviewValidationSchema,
   timing_ms: z.number().nonnegative().optional(),
 });
@@ -117,6 +136,8 @@ export type ParseMode = z.infer<typeof parseModeSchema>;
 export type ReviewValidation = z.infer<typeof reviewValidationSchema>;
 export type ReviewTargetResolved = z.infer<typeof reviewTargetResolvedSchema>;
 export type ReviewerSdk = z.infer<typeof reviewerSdkSchema>;
+export type AdapterPreflightCheck = z.infer<typeof adapterPreflightCheckSchema>;
+export type AdapterPreflightResult = z.infer<typeof adapterPreflightResultSchema>;
 export type ReviewReviewerArtifact = z.infer<typeof reviewReviewerArtifactSchema>;
 export type ReviewArtifact = z.infer<typeof reviewArtifactSchema>;
 

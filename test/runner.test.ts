@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveGitTarget } from "../src/core/git.js";
 import { runReview } from "../src/core/runner.js";
+import { reviewArtifactSchema } from "../src/core/schema.js";
 import { parseTargetSpec } from "../src/core/target.js";
 
 let repo: string | undefined;
@@ -30,6 +31,8 @@ describe("runReview", () => {
 
     expect(artifact.sdk).toBe("fake");
     expect(artifact.schema_version).toBe(1);
+    expect(() => reviewArtifactSchema.parse(artifact)).not.toThrow();
+    expect(artifact.reviewers?.[0]?.preflight?.metadata?.readonlyCapability).toBe("enforced");
     expect(artifact.validation.valid_schema).toBe(true);
     expect(artifact.result.overall_correctness).toBe("patch is correct");
   });

@@ -34,7 +34,31 @@ export type ReviewAdapterOutput = {
   };
 };
 
+export type ReviewAdapterPreflightInput = {
+  cwd: string;
+  reviewer: ReviewReviewerConfig;
+  readonly: boolean;
+  env?: NodeJS.ProcessEnv;
+};
+
+export type ReviewAdapterPreflightCheck = {
+  name: string;
+  status: "passed" | "skipped" | "warning";
+  detail?: string;
+};
+
+export type ReviewAdapterPreflightResult = {
+  checks: ReviewAdapterPreflightCheck[];
+  metadata?: {
+    readonlyCapability?: "enforced" | "tool-restricted" | "prompt-only";
+    model?: string;
+    effort?: string;
+    [key: string]: unknown;
+  };
+};
+
 export interface ReviewAdapter {
   name: ReviewReviewerConfig["sdk"];
+  preflight?(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult>;
   run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput>;
 }

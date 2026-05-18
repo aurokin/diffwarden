@@ -2,6 +2,25 @@ import type { ReviewAdapter, ReviewAdapterInput, ReviewAdapterOutput } from "./t
 
 export const fakeAdapter: ReviewAdapter = {
   name: "fake",
+  async preflight() {
+    return {
+      checks: [
+        {
+          name: "runtime",
+          status: "passed",
+          detail: "Fake reviewer runs in-process.",
+        },
+        {
+          name: "readonly",
+          status: "passed",
+          detail: "Fake reviewer cannot modify files.",
+        },
+      ],
+      metadata: {
+        readonlyCapability: "enforced",
+      },
+    };
+  },
   async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
     return {
       structured: {
