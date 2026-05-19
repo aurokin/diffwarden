@@ -65,10 +65,11 @@ The Claude adapter is available with:
 diffwarden --target uncommitted --reviewer claude
 ```
 
-It currently requires `ANTHROPIC_API_KEY` in the environment:
+It can use either `ANTHROPIC_API_KEY` or a locally authenticated Claude Code executable:
 
 ```bash
 ANTHROPIC_API_KEY=... pnpm dev -- --target uncommitted --reviewer claude
+pnpm dev -- --target uncommitted --reviewer claude
 ```
 
 The opt-in live smoke test is:
@@ -77,7 +78,7 @@ The opt-in live smoke test is:
 INTEGRATION_TEST_ON=1 pnpm vitest run test/claude-adapter.test.ts
 ```
 
-The adapter uses `@anthropic-ai/claude-agent-sdk` with built-in tools disabled, `permissionMode: "dontAsk"`, isolated setting sources, and text capture. Native structured output is intentionally deferred until the basic adapter path is proven.
+The adapter uses `@anthropic-ai/claude-agent-sdk` with built-in tools disabled, `permissionMode: "dontAsk"`, isolated setting sources, and text capture. If no API key is present and `claude` is available on `PATH`, the SDK is pointed at that executable so local Claude Code auth can be reused. Native structured output is intentionally deferred until the basic adapter path is proven.
 
 The intended v1 reviewer surface is the Cursor Agent SDK, Claude Agent SDK, and Pi Agent SDK. Adapters should use SDKs directly, not shell out to agent executables as the primary integration path.
 

@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   DiffwardenError,
   missingAuth,
@@ -13,19 +15,24 @@ import type {
 } from "./types.js";
 
 const defaultClaudeModel = "claude-sonnet-4-6";
+const defaultClaudeExecutable = "claude";
+const execFileAsync = promisify(execFile);
 
 export const claudeAdapter: ReviewAdapter = {
   name: "claude",
   async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
-    assertClaudeAuth(input.env);
     await loadClaudeSdk();
+    const runtime = await resolveClaudeRuntime(input.env);
 
     return {
       checks: [
         {
           name: "auth",
           status: "passed",
-          detail: "ANTHROPIC_API_KEY is present.",
+          detail:
+            runtime.authMode === "api-key"
+              ? "ANTHROPIC_API_KEY is present."
+              : "Claude Code executable is available for local auth.",
         },
         {
           name: "sdk",
@@ -47,12 +54,14 @@ export const claudeAdapter: ReviewAdapter = {
         readonlyCapability: "enforced",
         model: input.reviewer.model ?? defaultClaudeModel,
         captureMode: "text",
+        authMode: runtime.authMode,
+        executable: runtime.executable,
       },
     };
   },
   async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
-    assertClaudeAuth(input.env);
     const { query } = await loadClaudeSdk();
+    const runtime = await resolveClaudeRuntime(input.env);
 
     try {
       let result: ClaudeResultMessage | undefined;
@@ -68,6 +77,10 @@ export const claudeAdapter: ReviewAdapter = {
 
       if (input.env !== undefined) {
         options.env = input.env;
+      }
+
+      if (runtime.executable !== undefined) {
+        options.pathToClaudeCodeExecutable = runtime.executable;
       }
 
       for await (const message of query({
@@ -100,6 +113,8 @@ export const claudeAdapter: ReviewAdapter = {
           model: input.reviewer.model ?? defaultClaudeModel,
           durationMs: result.duration_ms,
           totalCostUsd: result.total_cost_usd,
+          authMode: runtime.authMode,
+          executable: runtime.executable,
         },
       };
     } catch (error) {
@@ -129,7 +144,18 @@ type ClaudeQueryOptions = {
   settingSources?: Array<"user" | "project" | "local">;
   persistSession?: boolean;
   maxTurns?: number;
+  pathToClaudeCodeExecutable?: string;
 };
+
+type ClaudeRuntime =
+  | {
+      authMode: "api-key";
+      executable?: undefined;
+    }
+  | {
+      authMode: "claude-code";
+      executable: string;
+    };
 
 type ClaudeSdkMessage =
   | {
@@ -161,12 +187,41 @@ async function loadClaudeSdk(): Promise<ClaudeSdk> {
   }
 }
 
-function assertClaudeAuth(env: NodeJS.ProcessEnv | undefined): string {
+async function resolveClaudeRuntime(env: NodeJS.ProcessEnv | undefined): Promise<ClaudeRuntime> {
   const apiKey = env?.ANTHROPIC_API_KEY?.trim();
-  if (!apiKey) {
-    throw missingAuth("Missing ANTHROPIC_API_KEY for Claude reviewer");
+  if (apiKey) {
+    return {
+      authMode: "api-key",
+    };
   }
-  return apiKey;
+
+  if (await hasClaudeExecutable(env)) {
+    return {
+      authMode: "claude-code",
+      executable: defaultClaudeExecutable,
+    };
+  }
+
+  throw missingAuth(
+    "Missing Claude auth: set ANTHROPIC_API_KEY or install and authenticate Claude Code",
+  );
+}
+
+async function hasClaudeExecutable(env: NodeJS.ProcessEnv | undefined): Promise<boolean> {
+  try {
+    const options: { env?: NodeJS.ProcessEnv; timeout: number } = {
+      timeout: 5_000,
+    };
+
+    if (env !== undefined) {
+      options.env = env;
+    }
+
+    await execFileAsync(defaultClaudeExecutable, ["--version"], options);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isClaudeResultMessage(message: ClaudeSdkMessage): message is ClaudeResultMessage {

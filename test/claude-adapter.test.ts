@@ -1,9 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { claudeAdapter } from "../src/adapters/claude.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
 
+let tempDir: string | undefined;
+
+afterEach(() => {
+  if (tempDir) {
+    rmSync(tempDir, { force: true, recursive: true });
+    tempDir = undefined;
+  }
+});
+
 describe("claudeAdapter", () => {
-  it("preflights auth before loading the SDK", async () => {
+  it("fails preflight clearly when API key and Claude Code executable are missing", async () => {
     await expect(
       claudeAdapter.preflight?.({
         cwd: process.cwd(),
@@ -14,7 +26,7 @@ describe("claudeAdapter", () => {
           readonly: true,
         },
         readonly: true,
-        env: {},
+        env: { PATH: "" },
       }),
     ).rejects.toMatchObject({
       code: "missing_auth",
@@ -22,14 +34,53 @@ describe("claudeAdapter", () => {
     });
   });
 
-  it("fails clearly when ANTHROPIC_API_KEY is missing", async () => {
-    await expect(claudeAdapter.run(input({ env: {} }))).rejects.toMatchObject({
+  it("preflights API key auth without requiring a Claude Code executable", async () => {
+    const preflight = await claudeAdapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "claude-sonnet-4-6",
+        readonly: true,
+      },
+      readonly: true,
+      env: {
+        ANTHROPIC_API_KEY: "test-key",
+        PATH: "",
+      },
+    });
+
+    expect(preflight?.metadata?.authMode).toBe("api-key");
+  });
+
+  it("preflights Claude Code executable auth without requiring an API key", async () => {
+    const fakeBin = createFakeClaudeExecutable();
+    const preflight = await claudeAdapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "claude-sonnet-4-6",
+        readonly: true,
+      },
+      readonly: true,
+      env: {
+        PATH: fakeBin,
+      },
+    });
+
+    expect(preflight?.metadata?.authMode).toBe("claude-code");
+    expect(preflight?.metadata?.executable).toBe("claude");
+  });
+
+  it("fails clearly when no Claude auth path is available", async () => {
+    await expect(claudeAdapter.run(input({ env: { PATH: "" } }))).rejects.toMatchObject({
       code: "missing_auth",
       exitCode: 3,
     });
   });
 
-  it.skipIf(process.env.INTEGRATION_TEST_ON !== "1" || !process.env.ANTHROPIC_API_KEY)(
+  it.skipIf(process.env.INTEGRATION_TEST_ON !== "1")(
     "runs a live Claude local review smoke test",
     async () => {
       const preflight = await claudeAdapter.preflight?.({
@@ -46,6 +97,7 @@ describe("claudeAdapter", () => {
       const output = await claudeAdapter.run(input({ env: process.env }));
 
       expect(preflight?.metadata?.readonlyCapability).toBe("enforced");
+      expect(["api-key", "claude-code"]).toContain(preflight?.metadata?.authMode);
       expect(output.metadata?.captureMode).toBe("text");
       expect(typeof output.text).toBe("string");
     },
@@ -74,4 +126,12 @@ function input(overrides: { env?: NodeJS.ProcessEnv } = {}): ReviewAdapterInput 
     readonly: true,
     env: overrides.env ?? process.env,
   };
+}
+
+function createFakeClaudeExecutable(): string {
+  tempDir = mkdtempSync(path.join(tmpdir(), "diffwarden-claude-"));
+  const executable = path.join(tempDir, "claude");
+  writeFileSync(executable, "#!/bin/sh\necho '2.1.143 (Claude Code)'\n");
+  chmodSync(executable, 0o755);
+  return tempDir;
 }
