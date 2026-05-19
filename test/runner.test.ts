@@ -33,6 +33,7 @@ describe("runReview", () => {
     expect(artifact.schema_version).toBe(1);
     expect(() => reviewArtifactSchema.parse(artifact)).not.toThrow();
     expect(artifact.reviewers?.[0]?.preflight?.metadata?.readonlyCapability).toBe("enforced");
+    expect(artifact.reviewers?.[0]?.adapter_metadata?.captureMode).toBe("native-structured");
     expect(artifact.validation.valid_schema).toBe(true);
     expect(artifact.result.overall_correctness).toBe("patch is correct");
   });

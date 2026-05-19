@@ -39,6 +39,74 @@ export const reviewResultSchema = z.object({
   overall_confidence_score: z.number().min(0).max(1),
 });
 
+export const reviewResultJsonSchema = {
+  type: "object",
+  required: ["findings", "overall_correctness", "overall_explanation", "overall_confidence_score"],
+  properties: {
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["title", "body", "confidence_score", "code_location"],
+        properties: {
+          title: {
+            type: "string",
+            minLength: 1,
+          },
+          body: {
+            type: "string",
+          },
+          confidence_score: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+          },
+          priority: {
+            type: "integer",
+            enum: [0, 1, 2, 3],
+          },
+          code_location: {
+            type: "object",
+            required: ["absolute_file_path", "line_range"],
+            properties: {
+              absolute_file_path: {
+                type: "string",
+                minLength: 1,
+              },
+              line_range: {
+                type: "object",
+                required: ["start", "end"],
+                properties: {
+                  start: {
+                    type: "integer",
+                    minimum: 1,
+                  },
+                  end: {
+                    type: "integer",
+                    minimum: 1,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    overall_correctness: {
+      type: "string",
+      enum: ["patch is correct", "patch is incorrect"],
+    },
+    overall_explanation: {
+      type: "string",
+    },
+    overall_confidence_score: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+    },
+  },
+} as const;
+
 export const reviewArtifactResultSchema = reviewResultSchema.extend({
   overall_correctness: artifactOverallCorrectnessSchema,
 });
@@ -110,6 +178,15 @@ export const reviewReviewerArtifactSchema = z.object({
   result: reviewArtifactResultSchema,
   raw_text: z.string().optional(),
   preflight: adapterPreflightResultSchema.optional(),
+  adapter_metadata: z
+    .record(z.string(), z.unknown())
+    .and(
+      z.object({
+        captureMode: z.enum(["native-structured", "tool-call", "text"]).optional(),
+        readonlyCapability: z.enum(["enforced", "tool-restricted", "prompt-only"]).optional(),
+      }),
+    )
+    .optional(),
   validation: reviewValidationSchema,
   timing_ms: z.number().nonnegative().optional(),
 });

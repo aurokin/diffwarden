@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { claudeAdapter } from "../src/adapters/claude.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
+import { parseReviewOutput } from "../src/core/parse.js";
 
 let tempDir: string | undefined;
 
@@ -121,8 +122,20 @@ describe("claudeAdapter", () => {
 
       expect(preflight?.metadata?.readonlyCapability).toBe("enforced");
       expect(["api-key", "claude-code"]).toContain(preflight?.metadata?.authMode);
-      expect(output.metadata?.captureMode).toBe("text");
-      expect(typeof output.text).toBe("string");
+      expect(["native-structured", "text"]).toContain(output.metadata?.captureMode);
+
+      const parsed =
+        output.structured !== undefined
+          ? parseReviewOutput({ structured: output.structured })
+          : parseReviewOutput({ text: output.text ?? "" });
+
+      expect(parsed.validation.valid_schema).toBe(true);
+      expect(parsed.result).toMatchObject({
+        findings: expect.any(Array),
+        overall_correctness: expect.any(String),
+        overall_explanation: expect.any(String),
+        overall_confidence_score: expect.any(Number),
+      });
     },
     120_000,
   );

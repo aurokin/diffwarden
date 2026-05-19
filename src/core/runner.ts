@@ -65,6 +65,10 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
     reviewerArtifact.preflight = preflight;
   }
 
+  if (output.metadata !== undefined) {
+    reviewerArtifact.adapter_metadata = output.metadata;
+  }
+
   return {
     schema_version: 1,
     sdk: reviewer.sdk,

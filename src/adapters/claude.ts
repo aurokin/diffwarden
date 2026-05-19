@@ -6,6 +6,7 @@ import {
   missingRequirement,
   reviewerFailed,
 } from "../core/errors.js";
+import { reviewResultJsonSchema, reviewResultSchema } from "../core/schema.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -16,6 +17,7 @@ import type {
 
 const defaultClaudeModel = "claude-sonnet-4-6";
 const defaultClaudeExecutable = "claude";
+const maxClaudeTurns = 3;
 const execFileAsync = promisify(execFile);
 
 export const claudeAdapter: ReviewAdapter = {
@@ -53,7 +55,7 @@ export const claudeAdapter: ReviewAdapter = {
       metadata: {
         readonlyCapability: "enforced",
         model: input.reviewer.model ?? defaultClaudeModel,
-        captureMode: "text",
+        preferredCaptureMode: "native-structured",
         authMode: runtime.authMode,
         executable: runtime.executable,
       },
@@ -64,59 +66,56 @@ export const claudeAdapter: ReviewAdapter = {
     const runtime = await resolveClaudeRuntime(input.env);
 
     try {
-      let result: ClaudeResultMessage | undefined;
-      const options: ClaudeQueryOptions = {
-        cwd: input.cwd,
-        model: input.reviewer.model ?? defaultClaudeModel,
-        tools: [],
-        permissionMode: "dontAsk",
-        settingSources: [],
-        persistSession: false,
-        maxTurns: 1,
-      };
+      const structuredResult = await runClaudeQuery({
+        query,
+        input,
+        runtime,
+        outputFormat: true,
+      });
 
-      if (input.env !== undefined) {
-        options.env = input.env;
-      }
-
-      if (runtime.executable !== undefined) {
-        options.pathToClaudeCodeExecutable = runtime.executable;
-      }
-
-      for await (const message of query({
-        prompt: input.prompt,
-        options,
-      })) {
-        if (message.type === "assistant" && message.error === "authentication_failed") {
-          throw missingAuth("Claude reviewer authentication failed");
+      if (structuredResult.subtype === "success") {
+        if (reviewResultSchema.safeParse(structuredResult.structured_output).success) {
+          return buildClaudeOutput({
+            input,
+            result: structuredResult,
+            runtime,
+            captureMode: "native-structured",
+            structured: structuredResult.structured_output,
+          });
         }
 
-        if (isClaudeResultMessage(message)) {
-          result = message;
-        }
+        const textResult = await runClaudeQuery({
+          query,
+          input,
+          runtime,
+          outputFormat: false,
+        });
+        return buildClaudeTextOutput({
+          input,
+          result: textResult,
+          runtime,
+          fallbackReason: "invalid_structured_output",
+          previousResult: structuredResult,
+        });
       }
 
-      if (!result) {
-        throw reviewerFailed("Claude reviewer did not return a result");
+      if (structuredResult.subtype === "error_max_structured_output_retries") {
+        const textResult = await runClaudeQuery({
+          query,
+          input,
+          runtime,
+          outputFormat: false,
+        });
+        return buildClaudeTextOutput({
+          input,
+          result: textResult,
+          runtime,
+          fallbackReason: structuredResult.subtype,
+          previousResult: structuredResult,
+        });
       }
 
-      if (result.subtype !== "success") {
-        throw reviewerFailed(`Claude reviewer failed: ${formatClaudeResultError(result)}`);
-      }
-
-      return {
-        text: result.result ?? "",
-        metadata: {
-          captureMode: "text",
-          sessionId: result.session_id,
-          readonlyCapability: "enforced",
-          model: input.reviewer.model ?? defaultClaudeModel,
-          durationMs: result.duration_ms,
-          totalCostUsd: result.total_cost_usd,
-          authMode: runtime.authMode,
-          executable: runtime.executable,
-        },
-      };
+      throw reviewerFailed(`Claude reviewer failed: ${formatClaudeResultError(structuredResult)}`);
     } catch (error) {
       if (error instanceof DiffwardenError) {
         throw error;
@@ -126,6 +125,13 @@ export const claudeAdapter: ReviewAdapter = {
       throw reviewerFailed(`Claude reviewer failed: ${detail}`);
     }
   },
+};
+
+type RunClaudeQueryInput = {
+  query: ClaudeSdk["query"];
+  input: ReviewAdapterInput;
+  runtime: ClaudeRuntime;
+  outputFormat: boolean;
 };
 
 type ClaudeSdk = {
@@ -145,6 +151,10 @@ type ClaudeQueryOptions = {
   persistSession?: boolean;
   maxTurns?: number;
   pathToClaudeCodeExecutable?: string;
+  outputFormat?: {
+    type: "json_schema";
+    schema: Record<string, unknown>;
+  };
 };
 
 type ClaudeRuntime =
@@ -172,11 +182,134 @@ type ClaudeResultMessage = {
   type: "result";
   subtype: string;
   result?: string;
+  structured_output?: unknown;
   duration_ms?: number;
   total_cost_usd?: number;
   session_id?: string;
   errors?: string[];
 };
+
+async function runClaudeQuery(options: RunClaudeQueryInput): Promise<ClaudeResultMessage> {
+  let result: ClaudeResultMessage | undefined;
+  const queryOptions = buildClaudeQueryOptions(options);
+
+  for await (const message of options.query({
+    prompt: options.input.prompt,
+    options: queryOptions,
+  })) {
+    if (message.type === "assistant" && message.error === "authentication_failed") {
+      throw missingAuth("Claude reviewer authentication failed");
+    }
+
+    if (isClaudeResultMessage(message)) {
+      result = message;
+    }
+  }
+
+  if (!result) {
+    throw reviewerFailed("Claude reviewer did not return a result");
+  }
+
+  return result;
+}
+
+function buildClaudeQueryOptions(options: RunClaudeQueryInput): ClaudeQueryOptions {
+  const queryOptions: ClaudeQueryOptions = {
+    cwd: options.input.cwd,
+    model: options.input.reviewer.model ?? defaultClaudeModel,
+    tools: [],
+    permissionMode: "dontAsk",
+    settingSources: [],
+    persistSession: false,
+    maxTurns: maxClaudeTurns,
+  };
+
+  if (options.outputFormat) {
+    queryOptions.outputFormat = {
+      type: "json_schema",
+      schema: reviewResultJsonSchema,
+    };
+  }
+
+  if (options.input.env !== undefined) {
+    queryOptions.env = options.input.env;
+  }
+
+  if (options.runtime.executable !== undefined) {
+    queryOptions.pathToClaudeCodeExecutable = options.runtime.executable;
+  }
+
+  return queryOptions;
+}
+
+function buildClaudeTextOutput(options: {
+  input: ReviewAdapterInput;
+  result: ClaudeResultMessage;
+  runtime: ClaudeRuntime;
+  fallbackReason: string;
+  previousResult?: ClaudeResultMessage;
+}): ReviewAdapterOutput {
+  if (options.result.subtype !== "success") {
+    throw reviewerFailed(`Claude reviewer failed: ${formatClaudeResultError(options.result)}`);
+  }
+
+  const outputOptions: Parameters<typeof buildClaudeOutput>[0] = {
+    input: options.input,
+    result: options.result,
+    runtime: options.runtime,
+    captureMode: "text",
+    text: options.result.result ?? "",
+    fallbackReason: options.fallbackReason,
+  };
+
+  if (options.previousResult !== undefined) {
+    outputOptions.previousResult = options.previousResult;
+  }
+
+  return buildClaudeOutput(outputOptions);
+}
+
+function buildClaudeOutput(options: {
+  input: ReviewAdapterInput;
+  result: ClaudeResultMessage;
+  runtime: ClaudeRuntime;
+  captureMode: "native-structured" | "text";
+  structured?: unknown;
+  text?: string;
+  fallbackReason?: string;
+  previousResult?: ClaudeResultMessage;
+}): ReviewAdapterOutput {
+  const output: ReviewAdapterOutput = {
+    metadata: {
+      captureMode: options.captureMode,
+      sessionId: options.result.session_id,
+      readonlyCapability: "enforced",
+      model: options.input.reviewer.model ?? defaultClaudeModel,
+      durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
+      totalCostUsd: sumKnownNumbers(
+        options.previousResult?.total_cost_usd,
+        options.result.total_cost_usd,
+      ),
+      authMode: options.runtime.authMode,
+      executable: options.runtime.executable,
+    },
+  };
+
+  if (options.fallbackReason !== undefined) {
+    output.metadata = {
+      ...output.metadata,
+      fallbackReason: options.fallbackReason,
+    };
+  }
+
+  if (options.structured !== undefined) {
+    output.structured = options.structured;
+  } else {
+    output.text = options.text ?? "";
+  }
+
+  return output;
+}
 
 async function loadClaudeSdk(): Promise<ClaudeSdk> {
   try {
@@ -247,4 +380,13 @@ function formatClaudeResultError(result: ClaudeResultMessage): string {
   }
 
   return result.subtype;
+}
+
+function sumKnownNumbers(...values: Array<number | undefined>): number | undefined {
+  const knownValues = values.filter((value): value is number => value !== undefined);
+  if (!knownValues.length) {
+    return undefined;
+  }
+
+  return knownValues.reduce((sum, value) => sum + value, 0);
 }

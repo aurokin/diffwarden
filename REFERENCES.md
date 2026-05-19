@@ -22,6 +22,7 @@ Use the official docs and cookbook examples for current SDK usage, authenticatio
 - NPM package: https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk
 - Implemented adapter dependency on 2026-05-18: `@anthropic-ai/claude-agent-sdk@0.3.143`.
 - Local inspection on 2026-05-19: Claude Code `2.1.143` supports `claude -p` and `claude auth status --json`; SDK `query()` can use local Claude Code auth by setting `pathToClaudeCodeExecutable: "claude"`.
+- Claude native structured output implemented on 2026-05-19 through `options.outputFormat: { type: "json_schema", schema }`; live smoke required `maxTurns` above `1` for the SDK's schema-validation flow.
 
 Use upstream docs for current `query()` options, structured output support, tool permissions, authentication behavior, and SDK version notes.
 

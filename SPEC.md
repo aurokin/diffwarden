@@ -350,6 +350,7 @@ export type ReviewReviewerArtifact = {
   effort?: string;
   result: ReviewResult;
   raw_text?: string;
+  adapter_metadata?: ReviewAdapterOutput["metadata"];
   validation: ReviewValidation;
   timing_ms?: number;
 };
