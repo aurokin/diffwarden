@@ -10,10 +10,14 @@ A small CLI for agent-callable code review.
 diffwarden --target base:main
 diffwarden --target uncommitted --reviewer cursor
 diffwarden --target base:main --reviewer claude
-diffwarden --target base:main --reviewer pi
 diffwarden --target base:main --reviewer claude --model sonnet --effort high
 diffwarden --target commit:abc123
 diffwarden --target base:main --format json
+```
+
+Future reviewer-set and Pi profile examples:
+
+```bash
 diffwarden --target base:main --reviewer-set 2
 diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 ```
@@ -25,7 +29,7 @@ diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 
 ## Current status
 
-Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, and Cursor and Claude Agent SDK adapters. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
+Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, Cursor and Claude Agent SDK adapters, and an internal Pi Agent SDK preflight scaffold. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
 
 The intended v1 target surface is:
 
@@ -79,6 +83,10 @@ INTEGRATION_TEST_ON=1 pnpm vitest run test/claude-adapter.test.ts
 ```
 
 The adapter uses `@anthropic-ai/claude-agent-sdk` with built-in tools disabled, `permissionMode: "dontAsk"`, isolated setting sources, and native JSON Schema output. If no API key is present and `claude auth status --json` reports a logged-in account, the SDK is pointed at the local `claude` executable so Claude Code auth can be reused. If the SDK does not return structured output, the adapter falls back to text capture.
+
+## Pi reviewer
+
+The Pi adapter scaffold is internal only. The current slice defines the adapter boundary and credential-free tests for loading `@earendil-works/pi-coding-agent`, checking environment-backed authenticated models through Pi `AuthStorage` and `ModelRegistry`, and reporting a tool-restricted read-only capability. `--reviewer pi` remains unavailable until review execution through a terminating `review_output` tool is implemented.
 
 The intended v1 reviewer surface is the Cursor Agent SDK, Claude Agent SDK, and Pi Agent SDK. Adapters should use SDKs directly, not shell out to agent executables as the primary integration path.
 

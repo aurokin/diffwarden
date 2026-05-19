@@ -37,6 +37,23 @@ describe("runReview", () => {
     expect(artifact.validation.valid_schema).toBe(true);
     expect(artifact.result.overall_correctness).toBe("patch is correct");
   });
+
+  it("does not expose the Pi scaffold as a runnable reviewer yet", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewer: "pi",
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_cli",
+      exitCode: 2,
+    });
+  });
 });
 
 function createRepo(): string {
