@@ -20,112 +20,130 @@ const defaultClaudeExecutable = "claude";
 const maxClaudeTurns = 3;
 const execFileAsync = promisify(execFile);
 
-export const claudeAdapter: ReviewAdapter = {
-  name: "claude",
-  async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
-    await loadClaudeSdk();
-    const runtime = await resolveClaudeRuntime(input.env);
+type ClaudeAdapterDependencies = {
+  loadSdk: () => Promise<ClaudeSdk>;
+  resolveRuntime: (env: NodeJS.ProcessEnv | undefined) => Promise<ClaudeRuntime>;
+};
 
-    return {
-      checks: [
-        {
-          name: "auth",
-          status: "passed",
-          detail:
-            runtime.authMode === "api-key"
-              ? "ANTHROPIC_API_KEY is present."
-              : "Claude Code executable reports authenticated local auth.",
-        },
-        {
-          name: "sdk",
-          status: "passed",
-          detail: "@anthropic-ai/claude-agent-sdk loaded successfully.",
-        },
-        {
-          name: "model",
-          status: "skipped",
-          detail: "Claude model capability preflight is not implemented yet.",
-        },
-        {
-          name: "readonly",
-          status: "passed",
-          detail: "Claude built-in tools are disabled for this adapter path.",
-        },
-      ],
-      metadata: {
-        readonlyCapability: "enforced",
-        model: input.reviewer.model ?? defaultClaudeModel,
-        preferredCaptureMode: "native-structured",
-        authMode: runtime.authMode,
-        executable: runtime.executable,
-      },
-    };
-  },
-  async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
-    const { query } = await loadClaudeSdk();
-    const runtime = await resolveClaudeRuntime(input.env);
+const defaultClaudeAdapterDependencies: ClaudeAdapterDependencies = {
+  loadSdk: loadClaudeSdk,
+  resolveRuntime: resolveClaudeRuntime,
+};
 
-    try {
-      const structuredResult = await runClaudeQuery({
-        query,
-        input,
-        runtime,
-        outputFormat: true,
-      });
+export function createClaudeAdapter(
+  dependencies: ClaudeAdapterDependencies = defaultClaudeAdapterDependencies,
+): ReviewAdapter {
+  return {
+    name: "claude",
+    async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
+      await dependencies.loadSdk();
+      const runtime = await dependencies.resolveRuntime(input.env);
 
-      if (structuredResult.subtype === "success") {
-        if (reviewResultSchema.safeParse(structuredResult.structured_output).success) {
-          return buildClaudeOutput({
+      return {
+        checks: [
+          {
+            name: "auth",
+            status: "passed",
+            detail:
+              runtime.authMode === "api-key"
+                ? "ANTHROPIC_API_KEY is present."
+                : "Claude Code executable reports authenticated local auth.",
+          },
+          {
+            name: "sdk",
+            status: "passed",
+            detail: "@anthropic-ai/claude-agent-sdk loaded successfully.",
+          },
+          {
+            name: "model",
+            status: "skipped",
+            detail: "Claude model capability preflight is not implemented yet.",
+          },
+          {
+            name: "readonly",
+            status: "passed",
+            detail: "Claude built-in tools are disabled for this adapter path.",
+          },
+        ],
+        metadata: {
+          readonlyCapability: "enforced",
+          model: input.reviewer.model ?? defaultClaudeModel,
+          preferredCaptureMode: "native-structured",
+          authMode: runtime.authMode,
+          executable: runtime.executable,
+        },
+      };
+    },
+    async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
+      const { query } = await dependencies.loadSdk();
+      const runtime = await dependencies.resolveRuntime(input.env);
+
+      try {
+        const structuredResult = await runClaudeQuery({
+          query,
+          input,
+          runtime,
+          outputFormat: true,
+        });
+
+        if (structuredResult.subtype === "success") {
+          if (reviewResultSchema.safeParse(structuredResult.structured_output).success) {
+            return buildClaudeOutput({
+              input,
+              result: structuredResult,
+              runtime,
+              captureMode: "native-structured",
+              structured: structuredResult.structured_output,
+            });
+          }
+
+          const textResult = await runClaudeQuery({
+            query,
             input,
-            result: structuredResult,
             runtime,
-            captureMode: "native-structured",
-            structured: structuredResult.structured_output,
+            outputFormat: false,
+          });
+          return buildClaudeTextOutput({
+            input,
+            result: textResult,
+            runtime,
+            fallbackReason: "invalid_structured_output",
+            previousResult: structuredResult,
           });
         }
 
-        const textResult = await runClaudeQuery({
-          query,
-          input,
-          runtime,
-          outputFormat: false,
-        });
-        return buildClaudeTextOutput({
-          input,
-          result: textResult,
-          runtime,
-          fallbackReason: "invalid_structured_output",
-          previousResult: structuredResult,
-        });
-      }
+        if (structuredResult.subtype === "error_max_structured_output_retries") {
+          const textResult = await runClaudeQuery({
+            query,
+            input,
+            runtime,
+            outputFormat: false,
+          });
+          return buildClaudeTextOutput({
+            input,
+            result: textResult,
+            runtime,
+            fallbackReason: structuredResult.subtype,
+            previousResult: structuredResult,
+          });
+        }
 
-      if (structuredResult.subtype === "error_max_structured_output_retries") {
-        const textResult = await runClaudeQuery({
-          query,
-          input,
-          runtime,
-          outputFormat: false,
-        });
-        return buildClaudeTextOutput({
-          input,
-          result: textResult,
-          runtime,
-          fallbackReason: structuredResult.subtype,
-          previousResult: structuredResult,
-        });
-      }
+        throw reviewerFailed(
+          `Claude reviewer failed: ${formatClaudeResultError(structuredResult)}`,
+        );
+      } catch (error) {
+        if (error instanceof DiffwardenError) {
+          throw error;
+        }
 
-      throw reviewerFailed(`Claude reviewer failed: ${formatClaudeResultError(structuredResult)}`);
-    } catch (error) {
-      if (error instanceof DiffwardenError) {
-        throw error;
+        const detail = error instanceof Error ? error.message : String(error);
+        throw reviewerFailed(`Claude reviewer failed: ${detail}`);
       }
+    },
+  };
+}
 
-      const detail = error instanceof Error ? error.message : String(error);
-      throw reviewerFailed(`Claude reviewer failed: ${detail}`);
-    }
-  },
-};
+export const claudeAdapter = createClaudeAdapter();
 
 type RunClaudeQueryInput = {
   query: ClaudeSdk["query"];

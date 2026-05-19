@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { claudeAdapter } from "../src/adapters/claude.js";
+import { claudeAdapter, createClaudeAdapter } from "../src/adapters/claude.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
 import { parseReviewOutput } from "../src/core/parse.js";
 
@@ -104,6 +104,94 @@ describe("claudeAdapter", () => {
     });
   });
 
+  it("falls back to text when native structured output fails local schema validation", async () => {
+    const { adapter, calls } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "success",
+        structured_output: {
+          findings: [
+            {
+              title: "Bad range",
+              body: "The native result is malformed.",
+              confidence_score: 0.9,
+              code_location: {
+                absolute_file_path: "/tmp/file.ts",
+                line_range: {
+                  start: 5,
+                  end: 1,
+                },
+              },
+            },
+          ],
+          overall_correctness: "patch is incorrect",
+          overall_explanation: "Malformed location.",
+          overall_confidence_score: 0.8,
+        },
+        duration_ms: 12,
+        total_cost_usd: 0.1,
+        session_id: "structured-session",
+      },
+      {
+        type: "result",
+        subtype: "success",
+        result: validReviewText(),
+        duration_ms: 20,
+        total_cost_usd: 0.2,
+        session_id: "text-session",
+      },
+    ]);
+
+    const output = await adapter.run(input({ env: { ANTHROPIC_API_KEY: "test-key" } }));
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.options?.outputFormat).toMatchObject({ type: "json_schema" });
+    expect(calls[1]?.options?.outputFormat).toBeUndefined();
+    expect(output.structured).toBeUndefined();
+    expect(output.text).toBe(validReviewText());
+    expect(output.metadata).toMatchObject({
+      captureMode: "text",
+      fallbackReason: "invalid_structured_output",
+      sessionId: "text-session",
+      durationMs: 32,
+      authMode: "api-key",
+    });
+    expect(output.metadata?.totalCostUsd).toBeCloseTo(0.3);
+  });
+
+  it("falls back to text when Claude reaches structured output retry limits", async () => {
+    const { adapter, calls } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "error_max_structured_output_retries",
+        duration_ms: 15,
+        total_cost_usd: 0.15,
+        session_id: "structured-session",
+      },
+      {
+        type: "result",
+        subtype: "success",
+        result: validReviewText(),
+        duration_ms: 25,
+        total_cost_usd: 0.25,
+        session_id: "text-session",
+      },
+    ]);
+
+    const output = await adapter.run(input({ env: { ANTHROPIC_API_KEY: "test-key" } }));
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.options?.outputFormat).toMatchObject({ type: "json_schema" });
+    expect(calls[1]?.options?.outputFormat).toBeUndefined();
+    expect(output.text).toBe(validReviewText());
+    expect(output.metadata).toMatchObject({
+      captureMode: "text",
+      fallbackReason: "error_max_structured_output_retries",
+      durationMs: 40,
+    });
+    expect(output.metadata?.totalCostUsd).toBeCloseTo(0.4);
+  });
+
   it.skipIf(process.env.INTEGRATION_TEST_ON !== "1")(
     "runs a live Claude local review smoke test",
     async () => {
@@ -140,6 +228,56 @@ describe("claudeAdapter", () => {
     120_000,
   );
 });
+
+type MockClaudeResult = {
+  type: "result";
+  subtype: string;
+  result?: string;
+  structured_output?: unknown;
+  duration_ms?: number;
+  total_cost_usd?: number;
+  session_id?: string;
+};
+
+type MockClaudeQueryCall = {
+  prompt: string;
+  options?: {
+    outputFormat?: unknown;
+    [key: string]: unknown;
+  };
+};
+
+function createMockClaudeAdapter(results: MockClaudeResult[]) {
+  const pendingResults = [...results];
+  const calls: MockClaudeQueryCall[] = [];
+  const query = async function* (params: MockClaudeQueryCall) {
+    calls.push(params);
+    const result = pendingResults.shift();
+    if (result !== undefined) {
+      yield result;
+    }
+  };
+
+  const adapter = createClaudeAdapter({
+    async loadSdk() {
+      return { query };
+    },
+    async resolveRuntime() {
+      return { authMode: "api-key" };
+    },
+  });
+
+  return { adapter, calls };
+}
+
+function validReviewText(): string {
+  return JSON.stringify({
+    findings: [],
+    overall_correctness: "patch is correct",
+    overall_explanation: "No findings.",
+    overall_confidence_score: 0.91,
+  });
+}
 
 function input(overrides: { env?: NodeJS.ProcessEnv } = {}): ReviewAdapterInput {
   return {
