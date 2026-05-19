@@ -32,7 +32,7 @@ export const claudeAdapter: ReviewAdapter = {
           detail:
             runtime.authMode === "api-key"
               ? "ANTHROPIC_API_KEY is present."
-              : "Claude Code executable is available for local auth.",
+              : "Claude Code executable reports authenticated local auth.",
         },
         {
           name: "sdk",
@@ -195,7 +195,7 @@ async function resolveClaudeRuntime(env: NodeJS.ProcessEnv | undefined): Promise
     };
   }
 
-  if (await hasClaudeExecutable(env)) {
+  if (await hasClaudeCodeAuth(env)) {
     return {
       authMode: "claude-code",
       executable: defaultClaudeExecutable,
@@ -207,7 +207,7 @@ async function resolveClaudeRuntime(env: NodeJS.ProcessEnv | undefined): Promise
   );
 }
 
-async function hasClaudeExecutable(env: NodeJS.ProcessEnv | undefined): Promise<boolean> {
+async function hasClaudeCodeAuth(env: NodeJS.ProcessEnv | undefined): Promise<boolean> {
   try {
     const options: { env?: NodeJS.ProcessEnv; timeout: number } = {
       timeout: 5_000,
@@ -217,8 +217,21 @@ async function hasClaudeExecutable(env: NodeJS.ProcessEnv | undefined): Promise<
       options.env = env;
     }
 
-    await execFileAsync(defaultClaudeExecutable, ["--version"], options);
-    return true;
+    const { stdout } = await execFileAsync(
+      defaultClaudeExecutable,
+      ["auth", "status", "--json"],
+      options,
+    );
+    return isLoggedInClaudeStatus(stdout);
+  } catch {
+    return false;
+  }
+}
+
+function isLoggedInClaudeStatus(stdout: string): boolean {
+  try {
+    const status = JSON.parse(stdout) as { loggedIn?: unknown };
+    return status.loggedIn === true;
   } catch {
     return false;
   }

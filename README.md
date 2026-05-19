@@ -78,7 +78,7 @@ The opt-in live smoke test is:
 INTEGRATION_TEST_ON=1 pnpm vitest run test/claude-adapter.test.ts
 ```
 
-The adapter uses `@anthropic-ai/claude-agent-sdk` with built-in tools disabled, `permissionMode: "dontAsk"`, isolated setting sources, and text capture. If no API key is present and `claude` is available on `PATH`, the SDK is pointed at that executable so local Claude Code auth can be reused. Native structured output is intentionally deferred until the basic adapter path is proven.
+The adapter uses `@anthropic-ai/claude-agent-sdk` with built-in tools disabled, `permissionMode: "dontAsk"`, isolated setting sources, and text capture. If no API key is present and `claude auth status --json` reports a logged-in account, the SDK is pointed at the local `claude` executable so Claude Code auth can be reused. Native structured output is intentionally deferred until the basic adapter path is proven.
 
 The intended v1 reviewer surface is the Cursor Agent SDK, Claude Agent SDK, and Pi Agent SDK. Adapters should use SDKs directly, not shell out to agent executables as the primary integration path.
 

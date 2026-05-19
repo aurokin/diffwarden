@@ -53,8 +53,31 @@ describe("claudeAdapter", () => {
     expect(preflight?.metadata?.authMode).toBe("api-key");
   });
 
-  it("preflights Claude Code executable auth without requiring an API key", async () => {
-    const fakeBin = createFakeClaudeExecutable();
+  it("rejects a Claude Code executable that is not authenticated", async () => {
+    const fakeBin = createFakeClaudeExecutable({ loggedIn: false });
+
+    await expect(
+      claudeAdapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "claude-sonnet-4-6",
+          readonly: true,
+        },
+        readonly: true,
+        env: {
+          PATH: fakeBin,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_auth",
+      exitCode: 3,
+    });
+  });
+
+  it("preflights Claude Code auth without requiring an API key", async () => {
+    const fakeBin = createFakeClaudeExecutable({ loggedIn: true });
     const preflight = await claudeAdapter.preflight?.({
       cwd: process.cwd(),
       reviewer: {
@@ -128,10 +151,19 @@ function input(overrides: { env?: NodeJS.ProcessEnv } = {}): ReviewAdapterInput 
   };
 }
 
-function createFakeClaudeExecutable(): string {
+function createFakeClaudeExecutable(options: { loggedIn: boolean }): string {
   tempDir = mkdtempSync(path.join(tmpdir(), "diffwarden-claude-"));
   const executable = path.join(tempDir, "claude");
-  writeFileSync(executable, "#!/bin/sh\necho '2.1.143 (Claude Code)'\n");
+  writeFileSync(
+    executable,
+    `#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  echo '{"loggedIn":${options.loggedIn ? "true" : "false"}}'
+  exit 0
+fi
+echo '2.1.143 (Claude Code)'
+`,
+  );
   chmodSync(executable, 0o755);
   return tempDir;
 }
