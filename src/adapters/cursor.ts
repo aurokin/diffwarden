@@ -1,5 +1,10 @@
 import type { AgentOptions } from "@cursor/sdk";
-import { missingAuth, missingRequirement, reviewerFailed } from "../core/errors.js";
+import {
+  DiffwardenError,
+  missingAuth,
+  missingRequirement,
+  reviewerFailed,
+} from "../core/errors.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -24,8 +29,14 @@ export function createCursorAdapter(
   return {
     name: "cursor",
     async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
-      assertCursorAuth(input.env);
-      await dependencies.loadSdk();
+      const apiKey = assertCursorAuth(input.env);
+      const sdk = await dependencies.loadSdk();
+      const model = input.reviewer.model ?? defaultCursorModel;
+      const modelPreflight = await preflightCursorModel({
+        sdk,
+        apiKey,
+        model,
+      });
 
       return {
         checks: [
@@ -41,8 +52,11 @@ export function createCursorAdapter(
           },
           {
             name: "model",
-            status: "skipped",
-            detail: "Cursor model-list preflight is not implemented yet.",
+            status: "passed",
+            detail:
+              modelPreflight.alias === undefined
+                ? `Cursor model is available: ${modelPreflight.canonicalModelId}.`
+                : `Cursor model alias is available: ${modelPreflight.alias} -> ${modelPreflight.canonicalModelId}.`,
           },
           {
             name: "readonly",
@@ -53,7 +67,9 @@ export function createCursorAdapter(
         ],
         metadata: {
           readonlyCapability: "prompt-only",
-          model: input.reviewer.model ?? defaultCursorModel,
+          model,
+          canonicalModel: modelPreflight.canonicalModelId,
+          ...(modelPreflight.alias !== undefined ? { modelAlias: modelPreflight.alias } : {}),
           ...(input.reviewer.effort !== undefined
             ? {
                 effort: "ignored",
@@ -123,6 +139,9 @@ export function createCursorAdapter(
           },
         };
       } catch (error) {
+        if (isCursorAuthenticationError(error)) {
+          throw missingAuth(`Cursor reviewer authentication failed: ${error.message}`);
+        }
         if (isCursorSdkError(error)) {
           throw reviewerFailed(`Cursor reviewer failed: ${error.message}`);
         }
@@ -141,6 +160,16 @@ type CursorSdk = {
   Agent: {
     create(options: AgentOptions): Promise<CursorAgent>;
   };
+  Cursor: {
+    models: {
+      list(options?: { apiKey?: string }): Promise<CursorModel[]>;
+    };
+  };
+};
+
+type CursorModel = {
+  id: string;
+  aliases?: string[];
 };
 
 type CursorAgent = {
@@ -169,6 +198,46 @@ async function loadCursorSdk(): Promise<CursorSdk> {
   }
 }
 
+async function preflightCursorModel(options: {
+  sdk: CursorSdk;
+  apiKey: string;
+  model: string;
+}): Promise<{ canonicalModelId: string; alias?: string }> {
+  try {
+    const models = await options.sdk.Cursor.models.list({ apiKey: options.apiKey });
+    const match = models.find(
+      (model) => model.id === options.model || model.aliases?.includes(options.model),
+    );
+
+    if (match === undefined) {
+      throw new DiffwardenError(
+        "invalid_model",
+        `Cursor model is not available: ${options.model}`,
+        2,
+      );
+    }
+
+    return {
+      canonicalModelId: match.id,
+      ...(match.id === options.model ? {} : { alias: options.model }),
+    };
+  } catch (error) {
+    if (error instanceof DiffwardenError) {
+      throw error;
+    }
+
+    if (isCursorAuthenticationError(error)) {
+      throw missingAuth(`Cursor model preflight authentication failed: ${error.message}`);
+    }
+
+    if (isCursorSdkError(error)) {
+      throw reviewerFailed(`Cursor model preflight failed: ${error.message}`);
+    }
+
+    throw error;
+  }
+}
+
 function assertCursorAuth(env: NodeJS.ProcessEnv | undefined): string {
   const apiKey = env?.CURSOR_API_KEY?.trim();
   if (!apiKey) {
@@ -179,6 +248,15 @@ function assertCursorAuth(env: NodeJS.ProcessEnv | undefined): string {
 
 function isCursorSdkError(error: unknown): error is Error & { isRetryable?: boolean } {
   return error instanceof Error && ("isRetryable" in error || error.name.includes("Cursor"));
+}
+
+function isCursorAuthenticationError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    (error.name === "AuthenticationError" ||
+      ("status" in error && error.status === 401) ||
+      ("code" in error && error.code === "unauthenticated"))
+  );
 }
 
 function bindAbortSignal(

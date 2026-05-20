@@ -29,6 +29,98 @@ describe("cursorAdapter", () => {
     });
   });
 
+  it("preflights requested Cursor models through the SDK model list", async () => {
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return mockCursorSdk({
+          models: [{ id: "composer-2", aliases: ["composer-latest"] }],
+        });
+      },
+    });
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "cursor",
+        sdk: "cursor",
+        model: "composer-latest",
+        readonly: true,
+      },
+      readonly: true,
+      env: { CURSOR_API_KEY: "key" },
+    });
+
+    expect(preflight?.checks.find((check) => check.name === "model")).toMatchObject({
+      status: "passed",
+      detail: "Cursor model alias is available: composer-latest -> composer-2.",
+    });
+    expect(preflight?.metadata).toMatchObject({
+      model: "composer-latest",
+      canonicalModel: "composer-2",
+      modelAlias: "composer-latest",
+    });
+  });
+
+  it("rejects unavailable Cursor models during preflight", async () => {
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return mockCursorSdk({
+          models: [{ id: "composer-2", aliases: ["composer-latest"] }],
+        });
+      },
+    });
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "cursor",
+          sdk: "cursor",
+          model: "missing-model",
+          readonly: true,
+        },
+        readonly: true,
+        env: { CURSOR_API_KEY: "key" },
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_model",
+      exitCode: 2,
+      message: "Cursor model is not available: missing-model",
+    });
+  });
+
+  it("maps Cursor model-list auth failures to missing auth", async () => {
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return mockCursorSdk({
+          async listModels() {
+            const error = new Error("invalid API key");
+            error.name = "AuthenticationError";
+            throw error;
+          },
+        });
+      },
+    });
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "cursor",
+          sdk: "cursor",
+          model: "composer-2",
+          readonly: true,
+        },
+        readonly: true,
+        env: { CURSOR_API_KEY: "bad-key" },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_auth",
+      exitCode: 3,
+      message: "Cursor model preflight authentication failed: invalid API key",
+    });
+  });
+
   it("cancels a Cursor run that appears after the signal aborts during send", async () => {
     const controller = new AbortController();
     const sendStarted = deferred<void>();
@@ -53,22 +145,20 @@ describe("cursorAdapter", () => {
     };
     const adapter = createCursorAdapter({
       async loadSdk() {
-        return {
-          Agent: {
-            async create() {
-              return {
-                agentId: "agent-1",
-                async send() {
-                  sendStarted.resolve();
-                  return sendResult.promise;
-                },
-                async [Symbol.asyncDispose]() {
-                  calls.dispose += 1;
-                },
-              };
-            },
+        return mockCursorSdk({
+          async createAgent() {
+            return {
+              agentId: "agent-1",
+              async send() {
+                sendStarted.resolve();
+                return sendResult.promise;
+              },
+              async [Symbol.asyncDispose]() {
+                calls.dispose += 1;
+              },
+            };
           },
-        };
+        });
       },
     });
 
@@ -88,30 +178,29 @@ describe("cursorAdapter", () => {
   it("reports requested effort as ignored when Cursor SDK has no effort control", async () => {
     const adapter = createCursorAdapter({
       async loadSdk() {
-        return {
-          Agent: {
-            async create() {
-              return {
-                agentId: "agent-1",
-                async send() {
-                  return {
-                    id: "run-1",
-                    async cancel() {},
-                    async wait() {
-                      return {
-                        status: "finished",
-                        result: "",
-                        model: "composer-2",
-                        durationMs: 12,
-                      };
-                    },
-                  };
-                },
-                async [Symbol.asyncDispose]() {},
-              };
-            },
+        return mockCursorSdk({
+          models: [{ id: "composer-2" }],
+          async createAgent() {
+            return {
+              agentId: "agent-1",
+              async send() {
+                return {
+                  id: "run-1",
+                  async cancel() {},
+                  async wait() {
+                    return {
+                      status: "finished",
+                      result: "",
+                      model: "composer-2",
+                      durationMs: 12,
+                    };
+                  },
+                };
+              },
+              async [Symbol.asyncDispose]() {},
+            };
           },
-        };
+        });
       },
     });
     const reviewer = {
@@ -172,6 +261,39 @@ type MockCursorRun = {
     result: string;
   }>;
 };
+
+type MockCursorAgent = {
+  agentId: string;
+  send(prompt: string): Promise<MockCursorRun>;
+  [Symbol.asyncDispose](): Promise<void>;
+};
+
+function mockCursorSdk(options: {
+  models?: Array<{ id: string; aliases?: string[] }>;
+  listModels?: () => Promise<Array<{ id: string; aliases?: string[] }>>;
+  createAgent?: () => Promise<MockCursorAgent>;
+}) {
+  return {
+    Agent: {
+      async create() {
+        if (options.createAgent === undefined) {
+          throw new Error("Unexpected Cursor Agent.create call");
+        }
+        return options.createAgent();
+      },
+    },
+    Cursor: {
+      models: {
+        async list() {
+          if (options.listModels !== undefined) {
+            return options.listModels();
+          }
+          return options.models ?? [{ id: "composer-2" }];
+        },
+      },
+    },
+  };
+}
 
 function input(overrides: Partial<ReviewAdapterInput> = {}): ReviewAdapterInput {
   return {
