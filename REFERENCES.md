@@ -31,8 +31,9 @@ Use upstream docs for current `query()` options, structured output support, tool
 - Pi mono repository: https://github.com/badlogic/pi-mono
 - Pi Coding Agent SDK package: https://www.npmjs.com/package/@earendil-works/pi-coding-agent
 - Pi Agent Core package: https://www.npmjs.com/package/@earendil-works/pi-agent-core
-- Local source inspected on 2026-05-19: `/Users/auro/code/upstream/pi-mono` at commit `48b6510c1`.
-- Scaffold target package inspected on 2026-05-19: `@earendil-works/pi-coding-agent@0.75.3`.
+- Local source inspected on 2026-05-19: `/Users/auro/code/upstream/pi-mono` at commit `04e93af5`.
+- Implemented adapter dependency on 2026-05-19: `@earendil-works/pi-coding-agent@0.75.3`.
+- Pi structured execution uses `createAgentSession()` with explicit `model` and `scopedModels`, in-memory `AuthStorage`/`ModelRegistry`, an extension-free `ResourceLoader`, and a terminating custom `review_output` tool.
 
 Use the upstream repository for the current SDK docs, JSON mode docs, extension examples, structured output patterns, and agent harness lifecycle.
 

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createPiAdapter } from "../src/adapters/pi.js";
+import { createPiAdapter, piAdapter } from "../src/adapters/pi.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
 import { missingRequirement } from "../src/core/errors.js";
+import { parseReviewOutput } from "../src/core/parse.js";
 import { reviewResultJsonSchema } from "../src/core/schema.js";
+
+const defaultPiSmokeModel = "anthropic/claude-sonnet-4-5";
 
 describe("piAdapter", () => {
   it("fails preflight clearly when no Pi models are authenticated", async () => {
@@ -333,6 +336,49 @@ describe("piAdapter", () => {
     });
     expect(calls.disposed).toBe(1);
   });
+
+  it.skipIf(process.env.INTEGRATION_TEST_ON !== "1")(
+    "runs a live Pi structured review smoke test",
+    async () => {
+      const smokeModel = process.env.PI_SMOKE_MODEL ?? defaultPiSmokeModel;
+      const reviewer = {
+        id: "pi",
+        sdk: "pi" as const,
+        readonly: true,
+        model: smokeModel,
+      };
+      const preflight = await piAdapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer,
+        readonly: true,
+        env: process.env,
+      });
+      const output = await piAdapter.run(
+        input({
+          reviewer,
+          env: process.env,
+          prompt: [
+            "This is a diffwarden Pi adapter smoke test.",
+            "Do not inspect files unless required.",
+            "Call the review_output tool exactly once with an empty findings array,",
+            'overall_correctness "patch is correct", overall_explanation "Smoke test passed.",',
+            "and overall_confidence_score 0.9.",
+          ].join(" "),
+        }),
+      );
+
+      expect(preflight?.metadata?.readonlyCapability).toBe("tool-restricted");
+      expect(preflight?.metadata?.preferredCaptureMode).toBe("tool-call");
+      expect(output.metadata?.captureMode).toBe("tool-call");
+      expect(output.metadata?.readonlyCapability).toBe("tool-restricted");
+
+      const parsed = parseReviewOutput({ structured: output.structured });
+
+      expect(parsed.validation.valid_schema).toBe(true);
+      expect(parsed.result.overall_correctness).toBe("patch is correct");
+    },
+    120_000,
+  );
 });
 
 type MockPiPromptHandler = (input: {

@@ -29,7 +29,9 @@ diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 
 ## Current status
 
-Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, Cursor and Claude Agent SDK adapters, and an internal Pi Agent SDK preflight scaffold. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
+Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, Cursor and Claude Agent SDK adapters, and an internal Pi Agent SDK adapter. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
+
+The project requires Node `>=22.19.0`, matching the Pi SDK package family.
 
 The intended v1 target surface is:
 
@@ -86,7 +88,23 @@ The adapter uses `@anthropic-ai/claude-agent-sdk` with built-in tools disabled, 
 
 ## Pi reviewer
 
-The Pi adapter scaffold is internal only. The current slice defines the adapter boundary and credential-free tests for loading `@earendil-works/pi-coding-agent`, checking environment-backed authenticated models through Pi `AuthStorage` and `ModelRegistry`, and reporting a tool-restricted read-only capability. `--reviewer pi` remains unavailable until review execution through a terminating `review_output` tool is implemented.
+The Pi adapter is internal only and is not exposed through `--reviewer pi` yet. The adapter loads `@earendil-works/pi-coding-agent`, checks environment-backed authenticated models through Pi `AuthStorage` and `ModelRegistry`, runs with a scoped model list, and captures structured output through a terminating `review_output` tool.
+
+The Pi path reports a tool-restricted read-only capability. It passes only `read`, `grep`, `find`, `ls`, and `review_output` as active tools, uses an extension-free resource loader, and keeps tests credential-free by default.
+
+The opt-in live smoke test is:
+
+```bash
+INTEGRATION_TEST_ON=1 pnpm vitest run test/pi-adapter.test.ts
+```
+
+By default, the smoke test requests `anthropic/claude-sonnet-4-5` to avoid Pi's deprecated first available Anthropic model. A different authenticated model can be selected with `PI_SMOKE_MODEL`:
+
+```bash
+INTEGRATION_TEST_ON=1 PI_SMOKE_MODEL=anthropic/claude-opus-4-5 pnpm vitest run test/pi-adapter.test.ts
+```
+
+The smoke test requires real Pi-compatible provider auth in the environment, such as `ANTHROPIC_API_KEY`, and may make a real model request. `--reviewer pi` remains unavailable until the CLI runner wiring is added.
 
 The intended v1 reviewer surface is the Cursor Agent SDK, Claude Agent SDK, and Pi Agent SDK. Adapters should use SDKs directly, not shell out to agent executables as the primary integration path.
 
