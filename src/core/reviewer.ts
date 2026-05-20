@@ -194,7 +194,7 @@ function defaultReviewerModel(
   }
 
   if (sdk === "claude") {
-    return { model: "claude-sonnet-4-6" };
+    return { model: "sonnet" };
   }
 
   return {};

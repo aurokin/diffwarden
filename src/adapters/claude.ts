@@ -15,7 +15,7 @@ import type {
   ReviewAdapterPreflightResult,
 } from "./types.js";
 
-const defaultClaudeModel = "claude-sonnet-4-6";
+const defaultClaudeModel = "sonnet";
 const defaultClaudeExecutable = "claude";
 const maxClaudeTurns = 3;
 const execFileAsync = promisify(execFile);
@@ -36,8 +36,15 @@ export function createClaudeAdapter(
   return {
     name: "claude",
     async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
-      await dependencies.loadSdk();
+      const sdk = await dependencies.loadSdk();
       const runtime = await dependencies.resolveRuntime(input.env);
+      const model = input.reviewer.model ?? defaultClaudeModel;
+      const modelPreflight = await preflightClaudeModel({
+        query: sdk.query,
+        input,
+        runtime,
+        model,
+      });
 
       return {
         checks: [
@@ -56,8 +63,8 @@ export function createClaudeAdapter(
           },
           {
             name: "model",
-            status: "skipped",
-            detail: "Claude model capability preflight is not implemented yet.",
+            status: "passed",
+            detail: `Claude model is available: ${modelPreflight.model.value}.`,
           },
           {
             name: "readonly",
@@ -67,7 +74,16 @@ export function createClaudeAdapter(
         ],
         metadata: {
           readonlyCapability: "enforced",
-          model: input.reviewer.model ?? defaultClaudeModel,
+          model: modelPreflight.model.value,
+          ...(modelPreflight.model.displayName !== undefined
+            ? { modelDisplayName: modelPreflight.model.displayName }
+            : {}),
+          ...(modelPreflight.model.supportsEffort !== undefined
+            ? { supportsEffort: modelPreflight.model.supportsEffort }
+            : {}),
+          ...(modelPreflight.model.supportedEffortLevels !== undefined
+            ? { supportedEffortLevels: modelPreflight.model.supportedEffortLevels }
+            : {}),
           ...claudeEffortMetadata(input.reviewer.effort),
           preferredCaptureMode: "native-structured",
           authMode: runtime.authMode,
@@ -155,9 +171,22 @@ type RunClaudeQueryInput = {
 
 type ClaudeSdk = {
   query(params: {
-    prompt: string;
+    prompt: string | AsyncIterable<unknown>;
     options?: ClaudeQueryOptions;
-  }): AsyncIterable<ClaudeSdkMessage>;
+  }): ClaudeQuery;
+};
+
+type ClaudeQuery = AsyncIterable<ClaudeSdkMessage> & {
+  supportedModels?: () => Promise<ClaudeModelInfo[]>;
+  close?: () => void;
+};
+
+type ClaudeModelInfo = {
+  value: string;
+  displayName?: string;
+  description?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: string[];
 };
 
 type ClaudeQueryOptions = {
@@ -178,6 +207,116 @@ type ClaudeQueryOptions = {
     schema: Record<string, unknown>;
   };
 };
+
+async function preflightClaudeModel(options: {
+  query: ClaudeSdk["query"];
+  input: ReviewAdapterPreflightInput;
+  runtime: ClaudeRuntime;
+  model: string;
+}): Promise<{ model: ClaudeModelInfo }> {
+  const abortBridge = createAbortBridge(options.input.signal);
+  const query = options.query({
+    prompt: emptyClaudeStreamingInput(),
+    options: buildClaudeModelPreflightOptions(
+      options.input,
+      options.runtime,
+      abortBridge.controller,
+    ),
+  });
+
+  try {
+    if (query.supportedModels === undefined) {
+      throw missingRequirement("Claude SDK query does not expose supportedModels()");
+    }
+
+    const models = await query.supportedModels();
+    const model = models.find((candidate) => candidate.value === options.model);
+    if (model === undefined) {
+      throw new DiffwardenError(
+        "invalid_model",
+        `Claude model is not available: ${options.model}`,
+        2,
+      );
+    }
+
+    assertClaudeEffortSupported(model, options.input.reviewer.effort);
+
+    return { model };
+  } catch (error) {
+    if (error instanceof DiffwardenError) {
+      throw error;
+    }
+
+    const detail = error instanceof Error ? error.message : String(error);
+    if (isClaudeAuthenticationErrorDetail(detail)) {
+      throw missingAuth(`Claude model preflight authentication failed: ${detail}`);
+    }
+    throw reviewerFailed(`Claude model preflight failed: ${detail}`);
+  } finally {
+    abortBridge.dispose();
+    query.close?.();
+  }
+}
+
+function buildClaudeModelPreflightOptions(
+  input: ReviewAdapterPreflightInput,
+  runtime: ClaudeRuntime,
+  abortController: AbortController | undefined,
+): ClaudeQueryOptions {
+  const queryOptions: ClaudeQueryOptions = {
+    cwd: input.cwd,
+    tools: [],
+    permissionMode: "dontAsk",
+    settingSources: [],
+    persistSession: false,
+    maxTurns: 1,
+  };
+
+  if (abortController !== undefined) {
+    queryOptions.abortController = abortController;
+  }
+
+  if (input.env !== undefined) {
+    queryOptions.env = input.env;
+  }
+
+  if (runtime.executable !== undefined) {
+    queryOptions.pathToClaudeCodeExecutable = runtime.executable;
+  }
+
+  return queryOptions;
+}
+
+async function* emptyClaudeStreamingInput(): AsyncIterable<unknown> {}
+
+function assertClaudeEffortSupported(
+  model: ClaudeModelInfo,
+  requestedEffort: string | undefined,
+): void {
+  if (requestedEffort === undefined || requestedEffort === "off") {
+    return;
+  }
+
+  if (model.supportsEffort !== true) {
+    throw new DiffwardenError(
+      "invalid_effort",
+      `Claude model does not support effort controls: ${model.value}`,
+      2,
+    );
+  }
+
+  const nativeEffort = claudeNativeEffort(requestedEffort);
+  if (
+    model.supportedEffortLevels !== undefined &&
+    !model.supportedEffortLevels.includes(nativeEffort)
+  ) {
+    throw new DiffwardenError(
+      "invalid_effort",
+      `Claude model ${model.value} does not support effort: ${nativeEffort}`,
+      2,
+    );
+  }
+}
 
 type ClaudeRuntime =
   | {
@@ -482,6 +621,10 @@ function formatClaudeResultError(result: ClaudeResultMessage): string {
   }
 
   return result.subtype;
+}
+
+function isClaudeAuthenticationErrorDetail(detail: string): boolean {
+  return /auth|api key|unauthorized|forbidden/i.test(detail);
 }
 
 function sumKnownNumbers(...values: Array<number | undefined>): number | undefined {

@@ -23,7 +23,7 @@ describe("claudeAdapter", () => {
         reviewer: {
           id: "claude",
           sdk: "claude",
-          model: "claude-sonnet-4-6",
+          model: "sonnet",
           readonly: true,
         },
         readonly: true,
@@ -41,7 +41,7 @@ describe("claudeAdapter", () => {
       reviewer: {
         id: "claude",
         sdk: "claude",
-        model: "claude-sonnet-4-6",
+        model: "sonnet",
         readonly: true,
       },
       readonly: true,
@@ -63,7 +63,7 @@ describe("claudeAdapter", () => {
         reviewer: {
           id: "claude",
           sdk: "claude",
-          model: "claude-sonnet-4-6",
+          model: "sonnet",
           readonly: true,
         },
         readonly: true,
@@ -78,23 +78,158 @@ describe("claudeAdapter", () => {
   });
 
   it("preflights Claude Code auth without requiring an API key", async () => {
-    const fakeBin = createFakeClaudeExecutable({ loggedIn: true });
-    const preflight = await claudeAdapter.preflight?.({
+    const { adapter } = createMockClaudePreflightAdapter([{ value: "sonnet" }], {
+      authMode: "claude-code",
+      executable: "claude",
+    });
+
+    const preflight = await adapter.preflight?.({
       cwd: process.cwd(),
       reviewer: {
         id: "claude",
         sdk: "claude",
-        model: "claude-sonnet-4-6",
+        model: "sonnet",
         readonly: true,
       },
       readonly: true,
       env: {
-        PATH: fakeBin,
+        PATH: "",
       },
     });
 
     expect(preflight?.metadata?.authMode).toBe("claude-code");
     expect(preflight?.metadata?.executable).toBe("claude");
+  });
+
+  it("preflights Claude model availability through the SDK model catalog", async () => {
+    const { adapter, calls, closeCalls } = createMockClaudePreflightAdapter([
+      {
+        value: "sonnet",
+        displayName: "Sonnet",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "max"],
+      },
+    ]);
+    const abortController = new AbortController();
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "sonnet",
+        effort: "xhigh",
+        readonly: true,
+      },
+      readonly: true,
+      signal: abortController.signal,
+      env: { ANTHROPIC_API_KEY: "test-key" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.options).toMatchObject({
+      cwd: process.cwd(),
+      tools: [],
+      permissionMode: "dontAsk",
+      settingSources: [],
+      persistSession: false,
+      maxTurns: 1,
+    });
+    expect(preflight?.checks.find((check) => check.name === "model")).toMatchObject({
+      status: "passed",
+      detail: "Claude model is available: sonnet.",
+    });
+    expect(preflight?.metadata).toMatchObject({
+      model: "sonnet",
+      modelDisplayName: "Sonnet",
+      effort: "max",
+      requestedEffort: "xhigh",
+      supportedEffortLevels: ["low", "medium", "high", "max"],
+    });
+    expect(calls[0]?.options?.abortController).toBeInstanceOf(AbortController);
+    expect(closeCalls()).toBe(1);
+  });
+
+  it("rejects unavailable Claude models during preflight", async () => {
+    const { adapter, closeCalls } = createMockClaudePreflightAdapter([
+      {
+        value: "sonnet",
+      },
+    ]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "opus",
+          readonly: true,
+        },
+        readonly: true,
+        env: { ANTHROPIC_API_KEY: "test-key" },
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_model",
+      exitCode: 2,
+    });
+    expect(closeCalls()).toBe(1);
+  });
+
+  it("rejects Claude efforts that the selected model does not support", async () => {
+    const { adapter, closeCalls } = createMockClaudePreflightAdapter([
+      {
+        value: "sonnet",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high"],
+      },
+    ]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "sonnet",
+          effort: "xhigh",
+          readonly: true,
+        },
+        readonly: true,
+        env: { ANTHROPIC_API_KEY: "test-key" },
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_effort",
+      exitCode: 2,
+    });
+    expect(closeCalls()).toBe(1);
+  });
+
+  it("rejects Claude efforts when the selected model omits effort capability metadata", async () => {
+    const { adapter, closeCalls } = createMockClaudePreflightAdapter([
+      {
+        value: "haiku",
+      },
+    ]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "haiku",
+          effort: "high",
+          readonly: true,
+        },
+        readonly: true,
+        env: { ANTHROPIC_API_KEY: "test-key" },
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_effort",
+      exitCode: 2,
+    });
+    expect(closeCalls()).toBe(1);
   });
 
   it("fails clearly when no Claude auth path is available", async () => {
@@ -210,7 +345,7 @@ describe("claudeAdapter", () => {
         reviewer: {
           id: "claude",
           sdk: "claude",
-          model: "claude-sonnet-4-6",
+          model: "sonnet",
           effort: "xhigh",
           readonly: true,
         },
@@ -234,7 +369,7 @@ describe("claudeAdapter", () => {
         reviewer: {
           id: "claude",
           sdk: "claude",
-          model: "claude-sonnet-4-6",
+          model: "sonnet",
           readonly: true,
         },
         readonly: true,
@@ -274,11 +409,18 @@ type MockClaudeResult = {
 };
 
 type MockClaudeQueryCall = {
-  prompt: string;
+  prompt: string | AsyncIterable<unknown>;
   options?: {
     outputFormat?: unknown;
     [key: string]: unknown;
   };
+};
+
+type MockClaudeModel = {
+  value: string;
+  displayName?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: string[];
 };
 
 function createMockClaudeAdapter(results: MockClaudeResult[]) {
@@ -302,6 +444,39 @@ function createMockClaudeAdapter(results: MockClaudeResult[]) {
   });
 
   return { adapter, calls };
+}
+
+function createMockClaudePreflightAdapter(
+  models: MockClaudeModel[],
+  runtime: { authMode: "api-key" } | { authMode: "claude-code"; executable: string } = {
+    authMode: "api-key",
+  },
+) {
+  const calls: MockClaudeQueryCall[] = [];
+  let closed = 0;
+  const query = (params: MockClaudeQueryCall) => {
+    calls.push(params);
+    return {
+      async *[Symbol.asyncIterator]() {},
+      async supportedModels() {
+        return models;
+      },
+      close() {
+        closed += 1;
+      },
+    };
+  };
+
+  const adapter = createClaudeAdapter({
+    async loadSdk() {
+      return { query };
+    },
+    async resolveRuntime() {
+      return runtime;
+    },
+  });
+
+  return { adapter, calls, closeCalls: () => closed };
 }
 
 function validReviewText(): string {
@@ -328,7 +503,7 @@ function input(overrides: Partial<ReviewAdapterInput> = {}): ReviewAdapterInput 
     reviewer: {
       id: "claude",
       sdk: "claude",
-      model: "claude-sonnet-4-6",
+      model: "sonnet",
       readonly: true,
     },
     target: {

@@ -145,7 +145,7 @@ describe("resolveReviewerConfig", () => {
     ).toMatchObject({
       id: "claude",
       sdk: "claude",
-      model: "claude-sonnet-4-6",
+      model: "sonnet",
     });
   });
 
@@ -210,7 +210,7 @@ describe("resolveReviewerConfig", () => {
     });
     expect(resolveReviewerConfig({ spec: "claude" })).toMatchObject({
       sdk: "claude",
-      model: "claude-sonnet-4-6",
+      model: "sonnet",
     });
     expect(resolveReviewerConfig({ spec: "pi" })).not.toHaveProperty("model");
   });
