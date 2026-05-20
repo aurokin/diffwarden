@@ -8,6 +8,7 @@ import { invalidCli } from "./errors.js";
 import type { ResolvedDiff } from "./git.js";
 import { parseReviewOutput } from "./parse.js";
 import { buildReviewPrompt } from "./prompt.js";
+import { resolveReviewerConfig } from "./reviewer.js";
 import type { ReviewArtifact, ReviewReviewerArtifact } from "./schema.js";
 import { validateReviewResult } from "./validate.js";
 
@@ -16,12 +17,17 @@ export type RunReviewOptions = {
   resolved: ResolvedDiff;
   reviewer: string;
   model?: string;
+  effort?: string;
   env?: NodeJS.ProcessEnv;
   adapters?: Partial<Record<ReviewReviewerConfig["sdk"], ReviewAdapter>>;
 };
 
 export async function runReview(options: RunReviewOptions): Promise<ReviewArtifact> {
-  const reviewer = resolveReviewer(options.reviewer, options.model);
+  const reviewer = resolveReviewerConfig({
+    spec: options.reviewer,
+    ...(options.model !== undefined ? { model: options.model } : {}),
+    ...(options.effort !== undefined ? { effort: options.effort } : {}),
+  });
   const adapter = getAdapter(reviewer.sdk, options.adapters);
   const start = Date.now();
   const prompt = buildReviewPrompt(options.resolved.target, options.resolved.diff);
@@ -88,46 +94,6 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
     validation,
     timing_ms: timingMs,
   };
-}
-
-function resolveReviewer(spec: string, model: string | undefined): ReviewReviewerConfig {
-  if (spec === "fake") {
-    return {
-      id: "fake",
-      sdk: "fake",
-      ...(model ? { model } : {}),
-      readonly: true,
-    };
-  }
-
-  if (spec === "cursor") {
-    return {
-      id: "cursor",
-      sdk: "cursor",
-      model: model ?? "composer-2",
-      readonly: true,
-    };
-  }
-
-  if (spec === "claude") {
-    return {
-      id: "claude",
-      sdk: "claude",
-      model: model ?? "claude-sonnet-4-6",
-      readonly: true,
-    };
-  }
-
-  if (spec === "pi") {
-    return {
-      id: "pi",
-      sdk: "pi",
-      ...(model ? { model } : {}),
-      readonly: true,
-    };
-  }
-
-  throw invalidCli(`Reviewer is not implemented yet: ${spec}`);
 }
 
 function getAdapter(

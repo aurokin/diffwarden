@@ -84,6 +84,51 @@ describe("runReview", () => {
     ]);
   });
 
+  it("rejects reviewer profiles before adapter execution", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const piAdapter = createMockAdapter("pi");
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewer: "pi:openrouter-high",
+        adapters: {
+          pi: piAdapter,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_cli",
+      exitCode: 2,
+    });
+    expect(piAdapter.calls).toEqual([]);
+  });
+
+  it("rejects effort before adapter execution", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const piAdapter = createMockAdapter("pi");
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewer: "pi",
+        effort: "high",
+        adapters: {
+          pi: piAdapter,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_cli",
+      exitCode: 2,
+    });
+    expect(piAdapter.calls).toEqual([]);
+  });
+
   it("fails Pi reviews clearly when no auth is available", async () => {
     repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");

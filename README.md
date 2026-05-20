@@ -30,7 +30,7 @@ diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 
 ## Current status
 
-Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, and Cursor, Claude, and Pi Agent SDK adapters. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
+Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, a shared `sdk[:profile]` reviewer-spec parser, and Cursor, Claude, and Pi Agent SDK adapters. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
 
 The project requires Node `>=22.19.0`, matching the Pi SDK package family.
 
@@ -96,6 +96,8 @@ diffwarden --target uncommitted --reviewer pi --model anthropic/claude-sonnet-4-
 ```
 
 The adapter loads `@earendil-works/pi-coding-agent`, checks environment-backed authenticated models through Pi `AuthStorage` and `ModelRegistry`, runs with a scoped model list, and captures structured output through a terminating `review_output` tool.
+
+Reviewer profile suffixes such as `pi:openrouter-high` are parsed but rejected until config-backed profile resolution is implemented. `--effort` is also rejected until adapters apply and report an effective effort. Use `--model` for the current single-reviewer override path.
 
 The Pi path reports a tool-restricted read-only capability. It passes only `read`, `grep`, `find`, `ls`, and `review_output` as active tools, uses an extension-free resource loader, and keeps tests credential-free by default.
 

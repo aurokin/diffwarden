@@ -14,8 +14,13 @@ program
   .description("A small CLI for agent-callable code review.")
   .version("0.0.0")
   .option("--target <target>", "review target, such as uncommitted, base:main, or commit:abc123")
-  .option("--reviewer <spec>", "reviewer spec, such as fake, cursor, claude, or pi", "fake")
+  .option(
+    "--reviewer <spec>",
+    "reviewer spec, such as fake, cursor, claude, pi, or pi:profile",
+    "fake",
+  )
   .option("--model <id>", "model override for the selected reviewer")
+  .option("--effort <level>", "effort override for the selected reviewer")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--format <format>", "output format: markdown or json", "markdown")
   .option("--out <path>", "write the full ReviewArtifact JSON to a file")
@@ -24,6 +29,7 @@ program
       target?: string;
       reviewer: string;
       model?: string;
+      effort?: string;
       cwd: string;
       format: string;
       out?: string;
@@ -43,7 +49,8 @@ program
         cwd: options.cwd,
         resolved,
         reviewer: options.reviewer,
-        ...(options.model ? { model: options.model } : {}),
+        ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.effort !== undefined ? { effort: options.effort } : {}),
       });
 
       if (options.out) {
