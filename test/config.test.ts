@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadDiffwardenConfig } from "../src/core/config.js";
+import { initDiffwardenConfig, loadDiffwardenConfig } from "../src/core/config.js";
 
 let root: string | undefined;
 
@@ -87,6 +87,60 @@ describe("loadDiffwardenConfig", () => {
       code: "invalid_config",
       exitCode: 2,
     });
+  });
+});
+
+describe("initDiffwardenConfig", () => {
+  it("creates a starter user config under XDG_CONFIG_HOME", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    const configPath = await initDiffwardenConfig({ env: { XDG_CONFIG_HOME: root } });
+
+    expect(configPath).toBe(path.join(root, "diffwarden", "diffwarden.config.json"));
+    expect(existsSync(configPath)).toBe(true);
+
+    const loaded = await loadDiffwardenConfig({
+      cwd: root,
+      repoRoot: root,
+      env: { XDG_CONFIG_HOME: root },
+    });
+
+    expect(loaded?.config.defaultReviewerSet).toBe("1");
+    expect(loaded?.config.reviewerSets?.["2"]).toEqual(["pi-default", "claude-default"]);
+    expect(loaded?.config.reviewers?.map((reviewer) => reviewer.id)).toEqual([
+      "pi-default",
+      "claude-default",
+      "cursor-default",
+    ]);
+  });
+
+  it("refuses to overwrite an existing user config", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    const configDir = path.join(root, "diffwarden");
+    mkdirSync(configDir, { recursive: true });
+    const configPath = path.join(configDir, "diffwarden.config.json");
+    writeFileSync(configPath, "{}\n");
+
+    await expect(initDiffwardenConfig({ env: { XDG_CONFIG_HOME: root } })).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+    });
+    expect(readFileSync(configPath, "utf8")).toBe("{}\n");
+  });
+
+  it("treats empty XDG_CONFIG_HOME as unset", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    const configPath = await initDiffwardenConfig({ env: { HOME: root, XDG_CONFIG_HOME: "" } });
+    expect(configPath).toBe(path.join(root, ".config", "diffwarden", "diffwarden.config.json"));
+  });
+
+  it("treats empty HOME as unset", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    const configPath = await initDiffwardenConfig({
+      env: { HOME: "", XDG_CONFIG_HOME: "" },
+      homeDir: root,
+    });
+    expect(configPath).toBe(path.join(root, ".config", "diffwarden", "diffwarden.config.json"));
+    expect(path.isAbsolute(configPath)).toBe(true);
   });
 });
 

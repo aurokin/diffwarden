@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
-import { loadDiffwardenConfig } from "./core/config.js";
+import { initDiffwardenConfig, loadDiffwardenConfig } from "./core/config.js";
 import { invalidCli } from "./core/errors.js";
 import { resolveGitTarget } from "./core/git.js";
 import { renderJson, renderMarkdown } from "./core/render.js";
@@ -73,6 +73,14 @@ program
       );
     },
   );
+
+program
+  .command("init")
+  .description("Create a starter user config file.")
+  .action(async () => {
+    const configPath = await initDiffwardenConfig();
+    process.stdout.write(`Created ${configPath}\n`);
+  });
 
 try {
   await program.parseAsync(normalizeArgv(process.argv));

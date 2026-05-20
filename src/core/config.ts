@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -74,6 +74,12 @@ export type LoadDiffwardenConfigOptions = {
   cwd: string;
   repoRoot?: string;
   env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+};
+
+export type InitDiffwardenConfigOptions = {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
 };
 
 export async function loadDiffwardenConfig(
@@ -109,23 +115,76 @@ export async function loadDiffwardenConfig(
   };
 }
 
+export async function initDiffwardenConfig(
+  options: InitDiffwardenConfigOptions = {},
+): Promise<string> {
+  const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+  try {
+    await writeFile(configPath, starterConfigJson(), { flag: "wx" });
+  } catch (error) {
+    if (isNodeErrorWithCode(error, "EEXIST")) {
+      throw invalidConfig(`Config already exists: ${configPath}`);
+    }
+    throw invalidConfig(`Unable to create config at ${configPath}: ${errorMessage(error)}`);
+  }
+  return configPath;
+}
+
 function findDiffwardenConfigPath(options: LoadDiffwardenConfigOptions): string | undefined {
   const projectPath = findProjectConfigPath(options.cwd, options.repoRoot);
   if (projectPath !== undefined) {
     return projectPath;
   }
 
-  const env = options.env ?? process.env;
-  const userConfigPath = path.join(
-    env.XDG_CONFIG_HOME ?? path.join(homedir(), ".config"),
-    "diffwarden",
-    configFileName,
-  );
-  if (existsSync(userConfigPath)) {
-    return userConfigPath;
+  const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
+  if (existsSync(configPath)) {
+    return configPath;
   }
 
   return undefined;
+}
+
+function userConfigPath(env: NodeJS.ProcessEnv, homeDir: string = homedir()): string {
+  return path.join(
+    env.XDG_CONFIG_HOME?.trim()
+      ? env.XDG_CONFIG_HOME
+      : path.join(env.HOME?.trim() ? env.HOME : homeDir, ".config"),
+    "diffwarden",
+    configFileName,
+  );
+}
+
+function starterConfigJson(): string {
+  return `${JSON.stringify(
+    {
+      defaultReviewerSet: "1",
+      reviewerSets: {
+        "1": ["pi-default"],
+        "2": ["pi-default", "claude-default"],
+        "3": ["pi-default", "claude-default", "cursor-default"],
+      },
+      reviewers: [
+        {
+          id: "pi-default",
+          sdk: "pi",
+        },
+        {
+          id: "claude-default",
+          sdk: "claude",
+        },
+        {
+          id: "cursor-default",
+          sdk: "cursor",
+        },
+      ],
+      readonly: true,
+      timeoutSeconds: 300,
+    },
+    null,
+    2,
+  )}\n`;
 }
 
 function findProjectConfigPath(cwd: string, repoRoot: string | undefined): string | undefined {
@@ -152,4 +211,13 @@ function findProjectConfigPath(cwd: string, repoRoot: string | undefined): strin
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code === code
+  );
 }

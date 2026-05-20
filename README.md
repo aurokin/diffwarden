@@ -39,6 +39,12 @@ The intended v1 target surface is:
 
 When a config file is present and no `--reviewer` or `--reviewer-set` is provided, the config must define `defaultReviewerSet`. Without config, the development fallback reviewer remains `fake`.
 
+Create a starter user config with:
+
+```bash
+diffwarden init
+```
+
 ## Cursor reviewer
 
 The Cursor adapter is available with:
