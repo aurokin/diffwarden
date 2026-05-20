@@ -11,9 +11,14 @@
     "dev": "tsx src/cli.ts",
     "build": "tsc -p tsconfig.json",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "complexity": "tsx scripts/complexity.ts",
     "format": "biome format --write .",
     "lint": "biome check .",
+    "metrics": "pnpm complexity && pnpm test:coverage",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "pnpm build && vitest run --config vitest.e2e.config.ts",
+    "test:live": "INTEGRATION_TEST_ON=1 vitest run test/cursor-adapter.test.ts test/claude-adapter.test.ts test/pi-adapter.test.ts",
     "typecheck": "tsc -p tsconfig.test.json --noEmit"
   },
   "engines": {
@@ -32,6 +37,7 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^2.1.9",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

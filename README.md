@@ -22,6 +22,7 @@ diffwarden --target base:main --format json
 
 1. [`SPEC.md`](./SPEC.md) — product and architecture specification.
 2. [`REFERENCES.md`](./REFERENCES.md) — upstream documentation and source-of-truth links.
+3. [`QUALITY.md`](./QUALITY.md) — current lint, test, coverage, complexity, and e2e commands.
 
 ## Current status
 

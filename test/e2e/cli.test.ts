@@ -1,0 +1,156 @@
+import { execFile, execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const cliPath = path.join(projectRoot, readPackageBinPath());
+
+let tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const directory of tempDirs) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+  tempDirs = [];
+});
+
+describe("diffwarden CLI e2e", () => {
+  it("reviews uncommitted changes with the fake reviewer in Markdown", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    writeFileSync(path.join(repo, "new.txt"), "new\n");
+
+    const result = await runDiffwarden(repo, [
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+    ]);
+
+    expect(result.stdout).toContain("# Code Review");
+    expect(result.stdout).toContain("Engine: fake");
+    expect(result.stdout).toContain("Target: uncommitted");
+    expect(result.stdout).toContain("Fake reviewer inspected 2 changed file(s).");
+    expect(result.stderr).toBe("");
+  });
+
+  it("reviews base branch changes with the fake reviewer in JSON", async () => {
+    const repo = createRepo();
+    git(repo, ["checkout", "-q", "-b", "feature"]);
+    writeFileSync(path.join(repo, "tracked.txt"), "feature\n");
+    git(repo, ["add", "tracked.txt"]);
+    git(repo, ["commit", "-m", "feature"]);
+
+    const result = await runDiffwarden(repo, [
+      "--target",
+      "base:main",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--format",
+      "json",
+    ]);
+    const artifact = JSON.parse(result.stdout);
+
+    expect(artifact.sdk).toBe("fake");
+    expect(artifact.target.kind).toBe("base");
+    expect(artifact.target.base_ref).toBe("main");
+    expect(artifact.target.changed_files).toEqual(["tracked.txt"]);
+    expect(artifact.result.overall_correctness).toBe("patch is correct");
+  });
+
+  it("reviews a single commit with the fake reviewer in JSON", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "commit change\n");
+    git(repo, ["add", "tracked.txt"]);
+    git(repo, ["commit", "-m", "change"]);
+    const commitSha = git(repo, ["rev-parse", "HEAD"]);
+
+    const result = await runDiffwarden(repo, [
+      "--target",
+      `commit:${commitSha}`,
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--format",
+      "json",
+    ]);
+    const artifact = JSON.parse(result.stdout);
+
+    expect(artifact.target.kind).toBe("commit");
+    expect(artifact.target.commit_sha).toBe(commitSha);
+    expect(artifact.target.changed_files).toEqual(["tracked.txt"]);
+  });
+
+  it("returns a CLI error for unsupported targets", async () => {
+    const repo = createRepo();
+
+    await expect(
+      runDiffwarden(repo, ["--target", "pr:1", "--reviewer", "fake", "--cwd", repo]),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("Invalid target: pr:1"),
+    });
+  });
+});
+
+async function runDiffwarden(
+  cwd: string,
+  args: string[],
+): Promise<{ stdout: string; stderr: string }> {
+  const env = isolatedEnv();
+  return execFileAsync(process.execPath, [cliPath, ...args], {
+    cwd,
+    env,
+    maxBuffer: 20 * 1024 * 1024,
+  });
+}
+
+function readPackageBinPath(): string {
+  const packageJson = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8"));
+  const binPath = packageJson.bin?.diffwarden;
+  if (typeof binPath !== "string") {
+    throw new Error("package.json is missing bin.diffwarden");
+  }
+  return binPath;
+}
+
+function createRepo(): string {
+  const repo = mkdtemp("diffwarden-e2e-repo-");
+  git(repo, ["init", "-b", "main"]);
+  git(repo, ["config", "user.email", "test@example.com"]);
+  git(repo, ["config", "user.name", "Test User"]);
+  writeFileSync(path.join(repo, "tracked.txt"), "initial\n");
+  git(repo, ["add", "tracked.txt"]);
+  git(repo, ["commit", "-m", "initial"]);
+  return repo;
+}
+
+function isolatedEnv(): NodeJS.ProcessEnv {
+  const home = mkdtemp("diffwarden-e2e-home-");
+  const configHome = mkdtemp("diffwarden-e2e-config-");
+  return {
+    PATH: process.env.PATH,
+    HOME: home,
+    XDG_CONFIG_HOME: configHome,
+  };
+}
+
+function mkdtemp(prefix: string): string {
+  const directory = mkdtempSync(path.join(tmpdir(), prefix));
+  tempDirs.push(directory);
+  return directory;
+}
+
+function git(cwd: string, args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
