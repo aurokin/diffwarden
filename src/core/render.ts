@@ -9,6 +9,8 @@ export function renderMarkdown(artifact: ReviewArtifact): string {
     `Verdict: ${artifact.result.overall_correctness || "unknown"}`,
     `Confidence: ${formatConfidence(artifact.result.overall_confidence_score)}`,
     "",
+    renderWarnings(artifact),
+    "",
     renderFindings(artifact.result),
     "",
     "## Overall explanation",
@@ -17,6 +19,14 @@ export function renderMarkdown(artifact: ReviewArtifact): string {
   ];
 
   return `${sections.join("\n").trimEnd()}\n`;
+}
+
+function renderWarnings(artifact: ReviewArtifact): string {
+  if (artifact.warnings === undefined || artifact.warnings.length === 0) {
+    return "";
+  }
+
+  return `## Warnings\n\n${artifact.warnings.map((warning) => `- ${warning}`).join("\n")}`;
 }
 
 function renderEngine(artifact: ReviewArtifact): string {

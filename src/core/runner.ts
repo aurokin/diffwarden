@@ -5,7 +5,15 @@ import { piAdapter } from "../adapters/pi.js";
 import type { ReviewAdapter, ReviewReviewerConfig } from "../adapters/types.js";
 import type { DiffwardenConfig } from "./config.js";
 import { parseChangedLineRanges } from "./diff.js";
-import { invalidCli, timeoutError } from "./errors.js";
+import {
+  DiffwardenError,
+  invalidCli,
+  parseFailed,
+  reviewerFailed,
+  timeoutError,
+  validationFailed,
+} from "./errors.js";
+import type { ReviewErrorCode } from "./errors.js";
 import type { ResolvedDiff } from "./git.js";
 import { parseReviewOutput } from "./parse.js";
 import { buildReviewPrompt } from "./prompt.js";
@@ -28,6 +36,7 @@ export type RunReviewOptions = {
   model?: string;
   effort?: string;
   timeoutSeconds?: number;
+  strict?: boolean;
   config?: DiffwardenConfig;
   env?: NodeJS.ProcessEnv;
   adapters?: Partial<Record<ReviewReviewerConfig["sdk"], ReviewAdapter>>;
@@ -49,53 +58,52 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
   const start = Date.now();
   const prompt = buildReviewPrompt(options.resolved.target, options.resolved.diff);
   const changedLineRanges = parseChangedLineRanges(options.resolved.diff);
-  const reviewerContexts = await Promise.all(
-    reviewers.map((reviewer) =>
-      preflightReviewer({
+  const env = options.env ?? process.env;
+  const preflightOutcomes = await Promise.all(
+    reviewers.map((reviewer) => preflightReviewerOutcome({ reviewer, options, env })),
+  );
+  const reviewerArtifacts = await Promise.all(
+    preflightOutcomes.map((outcome) =>
+      runReviewerOutcome({
+        outcome,
         cwd: options.cwd,
-        reviewer,
-        env: options.env ?? process.env,
-        ...(options.adapters !== undefined ? { adapters: options.adapters } : {}),
+        resolved: options.resolved,
+        prompt,
+        changedLineRanges,
+        env,
       }),
     ),
   );
-  const reviewerArtifacts: ReviewReviewerArtifact[] = [];
+  const successfulReviewerArtifacts = reviewerArtifacts.filter(isSuccessfulReviewerArtifact);
+  const failedReviewerArtifacts = reviewerArtifacts.filter(isFailedReviewerArtifact);
 
-  for (const context of reviewerContexts) {
-    reviewerArtifacts.push(
-      await runSingleReviewer({
-        cwd: options.cwd,
-        resolved: options.resolved,
-        reviewer: context.reviewer,
-        adapter: context.adapter,
-        ...(context.preflight !== undefined ? { preflight: context.preflight } : {}),
-        ...(context.remainingTimeoutMs !== undefined
-          ? { remainingTimeoutMs: context.remainingTimeoutMs }
-          : {}),
-        prompt,
-        changedLineRanges,
-        env: options.env ?? process.env,
-      }),
-    );
+  if (
+    successfulReviewerArtifacts.length === 0 ||
+    (options.strict && failedReviewerArtifacts.length)
+  ) {
+    throwReviewerFailures(failedReviewerArtifacts, {
+      strict: options.strict === true,
+      reviewerCount: reviewerArtifacts.length,
+    });
   }
 
   const timingMs = Date.now() - start;
   const result =
-    reviewerArtifacts.length === 1
-      ? reviewerArtifacts[0]?.result
-      : mergeReviewerResults(reviewerArtifacts);
+    reviewerArtifacts.length === 1 && successfulReviewerArtifacts.length === 1
+      ? successfulReviewerArtifacts[0]?.result
+      : mergeReviewerResults(successfulReviewerArtifacts);
 
   if (result === undefined) {
     throw invalidCli("No reviewers were selected");
   }
 
   const validation =
-    reviewerArtifacts.length === 1
-      ? reviewerArtifacts[0]?.validation
+    reviewerArtifacts.length === 1 && successfulReviewerArtifacts.length === 1
+      ? successfulReviewerArtifacts[0]?.validation
       : validateReviewResult({
           result,
           target: options.resolved.target,
-          validation: aggregateValidationSeed(reviewerArtifacts),
+          validation: aggregateValidationSeed(successfulReviewerArtifacts),
           changedLineRanges,
         });
 
@@ -103,19 +111,106 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
     throw invalidCli("No reviewers were selected");
   }
 
+  if (options.strict === true) {
+    enforceStrictValidation(validation);
+  }
+
   return {
     schema_version: 1,
-    ...(reviewerArtifacts.length === 1 ? { sdk: reviewerArtifacts[0]?.sdk } : {}),
+    ...(reviewerArtifacts.length === 1 && successfulReviewerArtifacts.length === 1
+      ? { sdk: successfulReviewerArtifacts[0]?.sdk }
+      : {}),
     reviewers: reviewerArtifacts,
     cwd: options.cwd,
     target: options.resolved.target,
     result,
-    ...(reviewerArtifacts.length === 1 && reviewerArtifacts[0]?.raw_text !== undefined
-      ? { raw_text: reviewerArtifacts[0].raw_text }
+    ...(reviewerArtifacts.length === 1 && successfulReviewerArtifacts[0]?.raw_text !== undefined
+      ? { raw_text: successfulReviewerArtifacts[0].raw_text }
       : {}),
     validation,
+    ...(failedReviewerArtifacts.length > 0
+      ? { warnings: failedReviewerArtifacts.map(formatReviewerFailureWarning) }
+      : {}),
     timing_ms: timingMs,
   };
+}
+
+type SuccessfulReviewerArtifact = ReviewReviewerArtifact & {
+  status?: "success";
+  result: ReviewArtifactResult;
+  validation: ReviewValidation;
+};
+
+type FailedReviewerArtifact = ReviewReviewerArtifact & {
+  status: "failed";
+  error: NonNullable<ReviewReviewerArtifact["error"]>;
+};
+
+type PreflightOutcome =
+  | {
+      type: "context";
+      context: ReviewerContext;
+    }
+  | {
+      type: "failure";
+      artifact: FailedReviewerArtifact;
+    };
+
+async function preflightReviewerOutcome(options: {
+  reviewer: ReviewReviewerConfig;
+  options: RunReviewOptions;
+  env: NodeJS.ProcessEnv;
+}): Promise<PreflightOutcome> {
+  const start = Date.now();
+  try {
+    return {
+      type: "context",
+      context: await preflightReviewer({
+        cwd: options.options.cwd,
+        reviewer: options.reviewer,
+        env: options.env,
+        ...(options.options.adapters !== undefined ? { adapters: options.options.adapters } : {}),
+      }),
+    };
+  } catch (error) {
+    return {
+      type: "failure",
+      artifact: createFailedReviewerArtifact(options.reviewer, error, start),
+    };
+  }
+}
+
+async function runReviewerOutcome(options: {
+  outcome: PreflightOutcome;
+  cwd: string;
+  resolved: ResolvedDiff;
+  prompt: string;
+  changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
+  env: NodeJS.ProcessEnv;
+}): Promise<ReviewReviewerArtifact> {
+  if (options.outcome.type === "failure") {
+    return options.outcome.artifact;
+  }
+
+  const start = Date.now();
+  const { context } = options.outcome;
+  try {
+    return await runSingleReviewer({
+      cwd: options.cwd,
+      resolved: options.resolved,
+      reviewer: context.reviewer,
+      adapter: context.adapter,
+      ...(context.preflight !== undefined ? { preflight: context.preflight } : {}),
+      ...(context.remainingTimeoutMs !== undefined
+        ? { remainingTimeoutMs: context.remainingTimeoutMs }
+        : {}),
+      prompt: options.prompt,
+      changedLineRanges: options.changedLineRanges,
+      env: options.env,
+    });
+  } catch (error) {
+    return createFailedReviewerArtifact(context.reviewer, error, start, context.preflight);
+  }
 }
 
 type SingleReviewerOptions = {
@@ -166,6 +261,7 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
   const reviewerArtifact: ReviewReviewerArtifact = {
     id: options.reviewer.id,
     sdk: options.reviewer.sdk,
+    status: "success",
     ...(options.reviewer.profile ? { profile: options.reviewer.profile } : {}),
     ...(options.reviewer.provider ? { provider: options.reviewer.provider } : {}),
     ...(options.reviewer.model ? { model: options.reviewer.model } : {}),
@@ -237,7 +333,94 @@ async function preflightReviewer(options: {
   };
 }
 
-function mergeReviewerResults(reviewers: ReviewReviewerArtifact[]): ReviewArtifactResult {
+function createFailedReviewerArtifact(
+  reviewer: ReviewReviewerConfig,
+  error: unknown,
+  start: number,
+  preflight?: Awaited<ReturnType<NonNullable<ReviewAdapter["preflight"]>>>,
+): FailedReviewerArtifact {
+  return {
+    id: reviewer.id,
+    sdk: reviewer.sdk,
+    status: "failed",
+    ...(reviewer.profile ? { profile: reviewer.profile } : {}),
+    ...(reviewer.provider ? { provider: reviewer.provider } : {}),
+    ...(reviewer.model ? { model: reviewer.model } : {}),
+    ...(reviewer.effort ? { effort: reviewer.effort } : {}),
+    ...(preflight !== undefined ? { preflight } : {}),
+    error: reviewerError(error),
+    timing_ms: Date.now() - start,
+  };
+}
+
+function reviewerError(error: unknown): FailedReviewerArtifact["error"] {
+  if (error instanceof DiffwardenError) {
+    return {
+      code: error.code,
+      message: error.message,
+      exit_code: error.exitCode,
+    };
+  }
+
+  return {
+    code: "reviewer_failed",
+    message: error instanceof Error ? error.message : String(error),
+    exit_code: 3,
+  };
+}
+
+function isSuccessfulReviewerArtifact(
+  reviewer: ReviewReviewerArtifact,
+): reviewer is SuccessfulReviewerArtifact {
+  return (
+    reviewer.status !== "failed" &&
+    reviewer.result !== undefined &&
+    reviewer.validation !== undefined
+  );
+}
+
+function isFailedReviewerArtifact(
+  reviewer: ReviewReviewerArtifact,
+): reviewer is FailedReviewerArtifact {
+  return reviewer.status === "failed" && reviewer.error !== undefined;
+}
+
+function throwReviewerFailures(
+  failures: FailedReviewerArtifact[],
+  options: { strict: boolean; reviewerCount: number },
+): never {
+  const [firstFailure] = failures;
+  if (options.reviewerCount === 1 && firstFailure !== undefined) {
+    const { error } = firstFailure;
+    throw new DiffwardenError(error.code as ReviewErrorCode, error.message, error.exit_code ?? 3);
+  }
+
+  throw reviewerFailed(
+    `${options.strict ? "Reviewer failed in strict mode" : "All reviewers failed"}: ${formatFailedReviewers(
+      failures,
+    )}`,
+  );
+}
+
+function formatReviewerFailureWarning(reviewer: FailedReviewerArtifact): string {
+  return `Reviewer ${reviewer.id} failed: ${reviewer.error.message}`;
+}
+
+function formatFailedReviewers(failures: FailedReviewerArtifact[]): string {
+  return failures.map((reviewer) => `${reviewer.id}: ${reviewer.error.message}`).join("; ");
+}
+
+function enforceStrictValidation(validation: ReviewValidation): void {
+  if (!validation.valid_schema || validation.parse_mode === "fallback-text") {
+    throw parseFailed("Reviewer output could not be parsed as a valid review result");
+  }
+
+  if (!validation.valid_locations || !validation.findings_overlap_diff) {
+    throw validationFailed("Reviewer output contains findings outside the reviewed diff");
+  }
+}
+
+function mergeReviewerResults(reviewers: SuccessfulReviewerArtifact[]): ReviewArtifactResult {
   const findings = reviewers.flatMap((reviewer) => reviewer.result.findings);
   const incorrect = reviewers.some(
     (reviewer) =>
@@ -266,7 +449,7 @@ function mergeReviewerResults(reviewers: ReviewReviewerArtifact[]): ReviewArtifa
   };
 }
 
-function aggregateValidationSeed(reviewers: ReviewReviewerArtifact[]): ReviewValidation {
+function aggregateValidationSeed(reviewers: SuccessfulReviewerArtifact[]): ReviewValidation {
   return {
     parse_mode: aggregateParseMode(reviewers),
     valid_schema: reviewers.every((reviewer) => reviewer.validation.valid_schema),
@@ -276,7 +459,7 @@ function aggregateValidationSeed(reviewers: ReviewReviewerArtifact[]): ReviewVal
   };
 }
 
-function aggregateParseMode(reviewers: ReviewReviewerArtifact[]): ParseMode {
+function aggregateParseMode(reviewers: SuccessfulReviewerArtifact[]): ParseMode {
   const [firstReviewer] = reviewers;
   if (
     firstReviewer !== undefined &&

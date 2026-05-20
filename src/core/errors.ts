@@ -45,3 +45,11 @@ export function reviewerFailed(message: string): DiffwardenError {
 export function timeoutError(message: string): DiffwardenError {
   return new DiffwardenError("timeout", message, 3);
 }
+
+export function parseFailed(message: string): DiffwardenError {
+  return new DiffwardenError("parse_failed", message, 4);
+}
+
+export function validationFailed(message: string): DiffwardenError {
+  return new DiffwardenError("validation_failed", message, 4);
+}

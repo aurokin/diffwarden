@@ -219,6 +219,144 @@ describe("runReview", () => {
     expect(artifact.result.overall_correctness).toBe("unknown");
   });
 
+  it("returns partial multi-reviewer results when one reviewer fails", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewers: ["pi", "claude"],
+      adapters: {
+        pi: createMockAdapter("pi"),
+        claude: createFailingRunAdapter("claude", "Claude exploded"),
+      },
+    });
+
+    expect(() => reviewArtifactSchema.parse(artifact)).not.toThrow();
+    expect(artifact.reviewers).toHaveLength(2);
+    expect(artifact.reviewers?.[0]).toMatchObject({ id: "pi", status: "success" });
+    expect(artifact.reviewers?.[1]).toMatchObject({
+      id: "claude",
+      status: "failed",
+      error: {
+        code: "reviewer_failed",
+        message: "Claude exploded",
+      },
+    });
+    expect(artifact.warnings).toEqual(["Reviewer claude failed: Claude exploded"]);
+    expect(artifact.result.overall_explanation).toContain("pi: Mock pi review passed.");
+  });
+
+  it("fails partial multi-reviewer runs in strict mode", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewers: ["pi", "claude"],
+        strict: true,
+        adapters: {
+          pi: createMockAdapter("pi"),
+          claude: createFailingRunAdapter("claude", "Claude exploded"),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      exitCode: 3,
+      message: expect.stringContaining("strict mode"),
+    });
+  });
+
+  it("fails fallback reviewer output in strict mode", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewer: "pi",
+        strict: true,
+        adapters: {
+          pi: createTextAdapter("pi", "not json"),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "parse_failed",
+      exitCode: 4,
+    });
+  });
+
+  it("fails invalid reviewer finding locations in strict mode", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewer: "pi",
+        strict: true,
+        adapters: {
+          pi: createMockAdapter("pi", undefined, {
+            findingFilePath: "/repo/not-changed.ts",
+          }),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "validation_failed",
+      exitCode: 4,
+    });
+  });
+
+  it("preserves single-reviewer failure codes in strict mode", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewer: "pi",
+        strict: true,
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_auth",
+      exitCode: 3,
+    });
+  });
+
+  it("fails multi-reviewer runs when every reviewer fails", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewers: ["pi", "claude"],
+        adapters: {
+          pi: createFailingRunAdapter("pi", "Pi exploded"),
+          claude: createFailingRunAdapter("claude", "Claude exploded"),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      exitCode: 3,
+      message: expect.stringContaining("All reviewers failed"),
+    });
+  });
+
   it("expands reviewer sets from config", async () => {
     repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
@@ -337,6 +475,7 @@ describe("runReview", () => {
     vi.spyOn(Date, "now")
       .mockReturnValueOnce(0)
       .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
       .mockReturnValueOnce(1_250)
       .mockReturnValue(1_250);
 
@@ -401,6 +540,7 @@ function createMockAdapter(
   resultOverrides?: {
     overall_correctness?: "patch is correct" | "patch is incorrect" | "unknown";
     overall_explanation?: string;
+    findingFilePath?: string;
   },
 ): ReviewAdapter & {
   calls: Array<{ phase: "preflight" | "run"; reviewer: unknown }>;
@@ -425,7 +565,24 @@ function createMockAdapter(
       calls.push({ phase: "run", reviewer: input.reviewer });
       return {
         structured: {
-          findings: [],
+          findings:
+            resultOverrides?.findingFilePath === undefined
+              ? []
+              : [
+                  {
+                    title: "[P2] Invalid location",
+                    body: "Finding body.",
+                    confidence_score: 0.8,
+                    priority: 2,
+                    code_location: {
+                      absolute_file_path: resultOverrides.findingFilePath,
+                      line_range: {
+                        start: 1,
+                        end: 1,
+                      },
+                    },
+                  },
+                ],
           overall_correctness: resultOverrides?.overall_correctness ?? "patch is correct",
           overall_explanation:
             resultOverrides?.overall_explanation ?? `Mock ${name} review passed.`,
@@ -497,6 +654,34 @@ function createAbortRejectingRunAdapter(name: ReviewAdapter["name"]): ReviewAdap
           once: true,
         });
       });
+    },
+  };
+}
+
+function createFailingRunAdapter(name: ReviewAdapter["name"], message: string): ReviewAdapter {
+  return {
+    name,
+    async preflight() {
+      return {
+        checks: [{ name: "mock", status: "passed" }],
+      };
+    },
+    async run() {
+      throw new Error(message);
+    },
+  };
+}
+
+function createTextAdapter(name: ReviewAdapter["name"], text: string): ReviewAdapter {
+  return {
+    name,
+    async preflight() {
+      return {
+        checks: [{ name: "mock", status: "passed" }],
+      };
+    },
+    async run() {
+      return { text };
     },
   };
 }

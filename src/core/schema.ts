@@ -168,28 +168,65 @@ export const adapterPreflightResultSchema = z.object({
     .optional(),
 });
 
-export const reviewReviewerArtifactSchema = z.object({
-  id: z.string(),
-  sdk: reviewerSdkSchema,
-  profile: z.string().optional(),
-  provider: z.string().optional(),
-  model: z.string().optional(),
-  effort: z.string().optional(),
-  result: reviewArtifactResultSchema,
-  raw_text: z.string().optional(),
-  preflight: adapterPreflightResultSchema.optional(),
-  adapter_metadata: z
-    .record(z.string(), z.unknown())
-    .and(
-      z.object({
-        captureMode: z.enum(["native-structured", "tool-call", "text"]).optional(),
-        readonlyCapability: z.enum(["enforced", "tool-restricted", "prompt-only"]).optional(),
-      }),
-    )
-    .optional(),
-  validation: reviewValidationSchema,
-  timing_ms: z.number().nonnegative().optional(),
+export const reviewerErrorSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  exit_code: z.number().int().optional(),
 });
+
+export const reviewReviewerArtifactSchema = z
+  .object({
+    id: z.string(),
+    sdk: reviewerSdkSchema,
+    status: z.enum(["success", "failed"]).optional(),
+    profile: z.string().optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    effort: z.string().optional(),
+    result: reviewArtifactResultSchema.optional(),
+    raw_text: z.string().optional(),
+    preflight: adapterPreflightResultSchema.optional(),
+    adapter_metadata: z
+      .record(z.string(), z.unknown())
+      .and(
+        z.object({
+          captureMode: z.enum(["native-structured", "tool-call", "text"]).optional(),
+          readonlyCapability: z.enum(["enforced", "tool-restricted", "prompt-only"]).optional(),
+        }),
+      )
+      .optional(),
+    validation: reviewValidationSchema.optional(),
+    error: reviewerErrorSchema.optional(),
+    timing_ms: z.number().nonnegative().optional(),
+  })
+  .superRefine((artifact, context) => {
+    if (artifact.status === "failed") {
+      if (artifact.error === undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "failed reviewer artifacts must include error",
+          path: ["error"],
+        });
+      }
+      return;
+    }
+
+    if (artifact.result === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "successful reviewer artifacts must include result",
+        path: ["result"],
+      });
+    }
+
+    if (artifact.validation === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "successful reviewer artifacts must include validation",
+        path: ["validation"],
+      });
+    }
+  });
 
 export const reviewArtifactSchema = z.object({
   schema_version: z.literal(1),
@@ -200,6 +237,7 @@ export const reviewArtifactSchema = z.object({
   result: reviewArtifactResultSchema,
   raw_text: z.string().optional(),
   validation: reviewValidationSchema,
+  warnings: z.array(z.string()).optional(),
   timing_ms: z.number().nonnegative().optional(),
 });
 
@@ -215,6 +253,7 @@ export type ReviewTargetResolved = z.infer<typeof reviewTargetResolvedSchema>;
 export type ReviewerSdk = z.infer<typeof reviewerSdkSchema>;
 export type AdapterPreflightCheck = z.infer<typeof adapterPreflightCheckSchema>;
 export type AdapterPreflightResult = z.infer<typeof adapterPreflightResultSchema>;
+export type ReviewerError = z.infer<typeof reviewerErrorSchema>;
 export type ReviewReviewerArtifact = z.infer<typeof reviewReviewerArtifactSchema>;
 export type ReviewArtifact = z.infer<typeof reviewArtifactSchema>;
 

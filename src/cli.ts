@@ -31,6 +31,7 @@ program
   .option("--model <id>", "model override for the selected reviewer")
   .option("--effort <level>", "effort override for the selected reviewer")
   .option("--timeout <seconds>", "reviewer timeout in seconds")
+  .option("--strict", "fail if any reviewer fails")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--format <format>", "output format: markdown or json", "markdown")
   .option("--out <path>", "write the full ReviewArtifact JSON to a file")
@@ -42,6 +43,7 @@ program
       model?: string;
       effort?: string;
       timeout?: string;
+      strict?: boolean;
       cwd: string;
       format: string;
       out?: string;
@@ -89,6 +91,7 @@ program
           : envOptions.timeoutSeconds !== undefined
             ? { timeoutSeconds: envOptions.timeoutSeconds }
             : {}),
+        ...(options.strict === true ? { strict: true } : {}),
         ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
       });
 

@@ -75,6 +75,16 @@ describe("renderMarkdown", () => {
     expect(markdown).toContain("Engine: pi, claude-deep");
   });
 
+  it("renders warnings for partial multi-reviewer results", () => {
+    const markdown = renderMarkdown({
+      ...artifact,
+      warnings: ["Reviewer claude failed: missing auth"],
+    });
+
+    expect(markdown).toContain("## Warnings");
+    expect(markdown).toContain("- Reviewer claude failed: missing auth");
+  });
+
   it("sorts findings by priority and location", () => {
     const p1Finding = finding("[P1] Earlier serious issue", 1, "/repo/src/a.ts", 8);
     const p2EarlierFinding = finding("[P2] Earlier normal issue", 2, "/repo/src/a.ts", 3);
