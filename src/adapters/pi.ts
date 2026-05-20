@@ -1,5 +1,6 @@
 import {
   DiffwardenError,
+  invalidConfig,
   missingAuth,
   missingRequirement,
   reviewerFailed,
@@ -33,12 +34,16 @@ export function createPiAdapter(
     name: "pi",
     async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
       const sdk = await dependencies.loadSdk();
-      const { availableModels } = createPiRuntimeContext(sdk, input.env);
+      const { availableModels } = createPiRuntimeContext(sdk, input.env, input.reviewer);
 
       if (!availableModels.length) {
         throw missingAuth("No authenticated Pi models are available for the Pi reviewer");
       }
-      const selectedModel = selectPiModel(availableModels, input.reviewer.model);
+      const selectedModel = selectPiModel(
+        availableModels,
+        input.reviewer.model,
+        input.reviewer.provider,
+      );
       const effort = resolvePiEffort(selectedModel, input.reviewer.effort);
 
       const metadata: ReviewAdapterPreflightResult["metadata"] = {
@@ -46,6 +51,7 @@ export function createPiAdapter(
         preferredCaptureMode: "tool-call",
         availableModelCount: availableModels.length,
         model: formatPiModel(selectedModel),
+        ...piProviderMetadata(input.reviewer),
         ...piEffortMetadata(effort),
       };
 
@@ -83,6 +89,7 @@ export function createPiAdapter(
       const { authStorage, modelRegistry, availableModels } = createPiRuntimeContext(
         sdk,
         input.env,
+        input.reviewer,
       );
 
       if (!availableModels.length) {
@@ -99,16 +106,21 @@ export function createPiAdapter(
           capturedReviewError = message;
         },
       );
-      const selectedModel = selectPiModel(availableModels, input.reviewer.model);
+      const selectedModel = selectPiModel(
+        availableModels,
+        input.reviewer.model,
+        input.reviewer.provider,
+      );
       const effort = resolvePiEffort(selectedModel, input.reviewer.effort);
 
       try {
         const sessionManager = sdk.SessionManager.inMemory(input.cwd);
+        const scopedModels = filterPiModelsByProvider(availableModels, input.reviewer.provider);
         const { session } = await sdk.createAgentSession({
           cwd: input.cwd,
           model: selectedModel,
           ...piSessionEffortOptions(effort),
-          scopedModels: availableModels.map((model) => ({
+          scopedModels: scopedModels.map((model) => ({
             model,
             ...piSessionEffortOptions(resolvePiEffort(model, input.reviewer.effort)),
           })),
@@ -154,6 +166,7 @@ export function createPiAdapter(
         captureMode: "tool-call",
         readonlyCapability: "tool-restricted",
         availableModelCount: availableModels.length,
+        ...piProviderMetadata(input.reviewer),
         ...piEffortMetadata(effort),
       };
 
@@ -189,6 +202,12 @@ type PiResourceLoader = unknown;
 type PiModelRegistry = {
   getAvailable(): PiModel[];
   getProviderAuthStatus?(provider: string): PiAuthStatus;
+  registerProvider?(providerName: string, config: PiProviderConfig): void;
+};
+
+type PiProviderConfig = {
+  baseUrl?: string;
+  apiKey?: string;
 };
 
 type PiModel = {
@@ -255,6 +274,7 @@ async function loadPiSdk(): Promise<PiSdk> {
 function createPiRuntimeContext(
   sdk: PiSdk,
   env: NodeJS.ProcessEnv | undefined,
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
 ): {
   authStorage: PiAuthStorage;
   modelRegistry: PiModelRegistry;
@@ -263,7 +283,21 @@ function createPiRuntimeContext(
   try {
     return withProcessEnvSync(env, () => {
       const authStorage = sdk.AuthStorage.inMemory();
+      const providerOptions = normalizePiProviderOptions(reviewer);
+      const providerApiKey = materializeConfiguredProviderAuth(
+        authStorage,
+        reviewer,
+        env,
+        providerOptions,
+      );
       const modelRegistry = sdk.ModelRegistry.inMemory(authStorage);
+      materializeConfiguredProviderRegistration(
+        modelRegistry,
+        reviewer,
+        env,
+        providerOptions,
+        providerApiKey,
+      );
       const availableModels = modelRegistry.getAvailable();
       materializeScopedEnvAuth(authStorage, modelRegistry, availableModels, env);
       return {
@@ -282,16 +316,138 @@ function createPiRuntimeContext(
   }
 }
 
-function selectPiModel(availableModels: PiModel[], requestedModel: string | undefined): PiModel {
+function materializeConfiguredProviderAuth(
+  authStorage: PiAuthStorage,
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+  env: NodeJS.ProcessEnv | undefined,
+  providerOptions: NormalizedPiProviderOptions,
+): string | undefined {
+  if (providerOptions.apiKeyEnv === undefined) {
+    return undefined;
+  }
+
+  if (authStorage.setRuntimeApiKey === undefined) {
+    throw missingRequirement(
+      `Pi AuthStorage cannot set runtime API keys for provider ${reviewer.provider}`,
+    );
+  }
+
+  const apiKey = env?.[providerOptions.apiKeyEnv]?.trim();
+  if (!apiKey) {
+    throw missingAuth(`Missing ${providerOptions.apiKeyEnv} for Pi provider ${reviewer.provider}`);
+  }
+
+  authStorage.setRuntimeApiKey(providerOptions.provider, apiKey);
+  return apiKey;
+}
+
+function materializeConfiguredProviderRegistration(
+  modelRegistry: PiModelRegistry,
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+  env: NodeJS.ProcessEnv | undefined,
+  providerOptions: NormalizedPiProviderOptions,
+  providerApiKey: string | undefined,
+): void {
+  if (providerOptions.baseUrlEnv === undefined) {
+    return;
+  }
+
+  if (modelRegistry.registerProvider === undefined) {
+    throw missingRequirement(
+      `Pi ModelRegistry cannot register provider ${reviewer.provider} from providerOptions.baseUrlEnv`,
+    );
+  }
+
+  const baseUrl = env?.[providerOptions.baseUrlEnv]?.trim();
+  if (!baseUrl) {
+    throw missingRequirement(
+      `Missing ${providerOptions.baseUrlEnv} for Pi provider ${reviewer.provider}`,
+    );
+  }
+
+  modelRegistry.registerProvider(providerOptions.provider, {
+    baseUrl,
+    ...(providerApiKey !== undefined ? { apiKey: providerApiKey } : {}),
+  });
+}
+
+type NormalizedPiProviderOptions = {
+  provider: string;
+  apiKeyEnv?: string;
+  baseUrlEnv?: string;
+  providerProfile?: string;
+};
+
+function normalizePiProviderOptions(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+): NormalizedPiProviderOptions {
+  const apiKeyEnv = optionalStringOption(reviewer.providerOptions, "apiKeyEnv");
+  const baseUrlEnv = optionalStringOption(reviewer.providerOptions, "baseUrlEnv");
+  const providerProfile = optionalStringOption(reviewer.sdkOptions, "providerProfile");
+
+  if (
+    (apiKeyEnv !== undefined || baseUrlEnv !== undefined || providerProfile !== undefined) &&
+    reviewer.provider === undefined
+  ) {
+    throw invalidConfig("Pi provider options require reviewer.provider");
+  }
+
+  if (
+    reviewer.provider !== undefined &&
+    providerProfile !== undefined &&
+    providerProfile !== reviewer.provider
+  ) {
+    throw invalidConfig(
+      `Pi providerProfile must match reviewer.provider for ${reviewer.id}: ${providerProfile}`,
+    );
+  }
+
+  return {
+    provider: reviewer.provider ?? "",
+    ...(apiKeyEnv !== undefined ? { apiKeyEnv } : {}),
+    ...(baseUrlEnv !== undefined ? { baseUrlEnv } : {}),
+    ...(providerProfile !== undefined ? { providerProfile } : {}),
+  };
+}
+
+function optionalStringOption(
+  options: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = options?.[key];
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string" || value.trim() === "") {
+    throw invalidConfig(`Pi option ${key} must be a non-empty string`);
+  }
+
+  return value.trim();
+}
+
+function selectPiModel(
+  availableModels: PiModel[],
+  requestedModel: string | undefined,
+  requestedProvider: string | undefined,
+): PiModel {
+  const candidateModels = filterPiModelsByProvider(availableModels, requestedProvider);
+
+  if (requestedProvider !== undefined && candidateModels.length === 0) {
+    throw missingAuth(
+      `No authenticated Pi models are available for provider: ${requestedProvider}`,
+    );
+  }
+
   if (requestedModel === undefined) {
-    const selectedModel = availableModels[0];
+    const selectedModel = candidateModels[0];
     if (selectedModel === undefined) {
       throw missingAuth("No authenticated Pi models are available for the Pi reviewer");
     }
     return selectedModel;
   }
 
-  const selectedModel = availableModels.find((model) => {
+  const selectedModel = candidateModels.find((model) => {
     if (model.id === requestedModel) {
       return true;
     }
@@ -314,6 +470,15 @@ function selectPiModel(availableModels: PiModel[], requestedModel: string | unde
   return selectedModel;
 }
 
+function filterPiModelsByProvider(
+  availableModels: PiModel[],
+  requestedProvider: string | undefined,
+): PiModel[] {
+  return requestedProvider === undefined
+    ? availableModels
+    : availableModels.filter((model) => model.provider === requestedProvider);
+}
+
 function formatPiModel(model: PiModel): string {
   if (typeof model.provider === "string" && typeof model.id === "string") {
     return `${model.provider}/${model.id}`;
@@ -324,6 +489,21 @@ function formatPiModel(model: PiModel): string {
   }
 
   return "unknown";
+}
+
+function piProviderMetadata(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+): Record<string, string> {
+  const providerOptions = normalizePiProviderOptions(reviewer);
+
+  return {
+    ...(reviewer.provider !== undefined ? { provider: reviewer.provider } : {}),
+    ...(providerOptions.providerProfile !== undefined
+      ? { providerProfile: providerOptions.providerProfile }
+      : {}),
+    ...(providerOptions.apiKeyEnv !== undefined ? { apiKeyEnv: providerOptions.apiKeyEnv } : {}),
+    ...(providerOptions.baseUrlEnv !== undefined ? { baseUrlEnv: providerOptions.baseUrlEnv } : {}),
+  };
 }
 
 function resolvePiEffort(

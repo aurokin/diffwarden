@@ -287,6 +287,188 @@ describe("piAdapter", () => {
     });
   });
 
+  it("materializes configured provider auth before Pi model discovery", async () => {
+    const openrouterModel = {
+      provider: "openrouter",
+      id: "anthropic/claude-test",
+    };
+    const fallbackModel = { provider: "anthropic", id: "claude-test" };
+    const { adapter, calls } = createMockPiAdapter((authStorage) =>
+      authStorage.getRuntimeApiKey("openrouter") === "openrouter-key"
+        ? [fallbackModel, openrouterModel]
+        : [fallbackModel],
+    );
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "pi-openrouter-high",
+        sdk: "pi",
+        profile: "openrouter-high",
+        provider: "openrouter",
+        model: "anthropic/claude-test",
+        providerOptions: {
+          apiKeyEnv: "OPENROUTER_API_KEY",
+          baseUrlEnv: "OPENROUTER_BASE_URL",
+        },
+        sdkOptions: {
+          providerProfile: "openrouter",
+        },
+        readonly: true,
+      },
+      readonly: true,
+      env: {
+        OPENROUTER_API_KEY: "openrouter-key",
+        OPENROUTER_BASE_URL: "https://openrouter.example/v1",
+      },
+    });
+
+    expect(calls.authStorage.getRuntimeApiKey("openrouter")).toBe("openrouter-key");
+    expect(calls.registerProvider).toEqual([
+      {
+        providerName: "openrouter",
+        config: {
+          apiKey: "openrouter-key",
+          baseUrl: "https://openrouter.example/v1",
+        },
+      },
+    ]);
+    expect(preflight?.metadata).toMatchObject({
+      model: "openrouter/anthropic/claude-test",
+      provider: "openrouter",
+      providerProfile: "openrouter",
+      apiKeyEnv: "OPENROUTER_API_KEY",
+      baseUrlEnv: "OPENROUTER_BASE_URL",
+    });
+  });
+
+  it("runs Pi profiles against the requested provider when multiple providers are available", async () => {
+    const openrouterModel = {
+      provider: "openrouter",
+      id: "anthropic/claude-test",
+    };
+    const fallbackModel = { provider: "anthropic", id: "claude-test" };
+    const { adapter, calls } = createMockPiAdapter([fallbackModel, openrouterModel], {
+      async prompt({ tool }) {
+        await tool.execute("tool-call-1", validReview());
+      },
+    });
+
+    const output = await adapter.run(
+      input({
+        reviewer: {
+          id: "pi-openrouter-high",
+          sdk: "pi",
+          profile: "openrouter-high",
+          provider: "openrouter",
+          model: "anthropic/claude-test",
+          readonly: true,
+        },
+      }),
+    );
+
+    expect(output.structured).toEqual(validReview());
+    expect(output.metadata).toMatchObject({
+      provider: "openrouter",
+    });
+    expect(calls.createAgentSession[0]).toMatchObject({
+      model: openrouterModel,
+      scopedModels: [{ model: openrouterModel }],
+    });
+  });
+
+  it("rejects incoherent Pi provider profile options", async () => {
+    const { adapter } = createMockPiAdapter([{ provider: "openrouter", id: "test-model" }]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "pi-openrouter-high",
+          sdk: "pi",
+          profile: "openrouter-high",
+          provider: "openrouter",
+          sdkOptions: { providerProfile: "anthropic" },
+          readonly: true,
+        },
+        readonly: true,
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+      message: "Pi providerProfile must match reviewer.provider for pi-openrouter-high: anthropic",
+    });
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "pi-openrouter-high",
+          sdk: "pi",
+          profile: "openrouter-high",
+          providerOptions: { apiKeyEnv: "OPENROUTER_API_KEY" },
+          readonly: true,
+        },
+        readonly: true,
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+      message: "Pi provider options require reviewer.provider",
+    });
+  });
+
+  it("reports missing configured provider auth env clearly", async () => {
+    const { adapter } = createMockPiAdapter([{ provider: "anthropic", id: "claude-test" }]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "pi-openrouter-high",
+          sdk: "pi",
+          profile: "openrouter-high",
+          provider: "openrouter",
+          providerOptions: {
+            apiKeyEnv: "OPENROUTER_API_KEY",
+          },
+          readonly: true,
+        },
+        readonly: true,
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_auth",
+      exitCode: 3,
+      message: "Missing OPENROUTER_API_KEY for Pi provider openrouter",
+    });
+  });
+
+  it("reports provider-scoped unavailable models as missing auth", async () => {
+    const { adapter } = createMockPiAdapter([{ provider: "anthropic", id: "claude-test" }]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "pi-openrouter-high",
+          sdk: "pi",
+          profile: "openrouter-high",
+          provider: "openrouter",
+          readonly: true,
+        },
+        readonly: true,
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_auth",
+      exitCode: 3,
+      message: "No authenticated Pi models are available for provider: openrouter",
+    });
+  });
+
   it("passes clamped Pi thinking levels for requested effort", async () => {
     const reasoningModel = {
       provider: "test",
@@ -456,6 +638,7 @@ type MockPiModel = {
 type MockPiModelRegistry = {
   getAvailable(): MockPiModel[];
   getProviderAuthStatus?(provider: string): { source?: string; label?: string };
+  registerProvider(providerName: string, config: { baseUrl?: string; apiKey?: string }): void;
 };
 
 type MockPiAuthStorage = {
@@ -464,7 +647,7 @@ type MockPiAuthStorage = {
 };
 
 function createMockPiAdapter(
-  availableModels: MockPiModel[],
+  availableModels: MockPiModel[] | ((authStorage: MockPiAuthStorage) => MockPiModel[]),
   options: { prompt?: MockPiPromptHandler } = {},
 ) {
   const calls: {
@@ -486,16 +669,26 @@ function createMockPiAdapter(
     }>;
     aborted: number;
     disposed: number;
+    registerProvider: Array<{
+      providerName: string;
+      config: { baseUrl?: string; apiKey?: string };
+    }>;
     authStorage: MockPiAuthStorage;
     modelRegistry: MockPiModelRegistry;
   } = {
     createAgentSession: [],
     aborted: 0,
     disposed: 0,
+    registerProvider: [],
     authStorage: createMockPiAuthStorage(),
     modelRegistry: {
       getAvailable() {
-        return availableModels;
+        return typeof availableModels === "function"
+          ? availableModels(calls.authStorage)
+          : availableModels;
+      },
+      registerProvider(providerName, config) {
+        calls.registerProvider.push({ providerName, config });
       },
     },
   };
