@@ -77,6 +77,8 @@ The opt-in live smoke test is:
 zsh -lic 'INTEGRATION_TEST_ON=1 pnpm vitest run test/cursor-adapter.test.ts'
 ```
 
+Set `INTEGRATION_DISABLE=cursor,claude,pi` with any SDK names that should remain disabled during broader live test runs.
+
 The adapter uses `@cursor/sdk`. That SDK currently depends on `sqlite3`, so `package.json` allows pnpm to run the `sqlite3` build script through `pnpm.onlyBuiltDependencies`.
 
 ## Claude reviewer
@@ -99,6 +101,8 @@ The opt-in live smoke test is:
 ```bash
 INTEGRATION_TEST_ON=1 pnpm vitest run test/claude-adapter.test.ts
 ```
+
+Set `INTEGRATION_DISABLE=claude` to skip this smoke test during broader live test runs.
 
 The adapter uses `@anthropic-ai/claude-agent-sdk` with built-in tools disabled, `permissionMode: "dontAsk"`, isolated setting sources, and native JSON Schema output. If no API key is present and `claude auth status --json` reports a logged-in account, the SDK is pointed at the local `claude` executable so Claude Code auth can be reused. If the SDK does not return structured output, the adapter falls back to text capture.
 
@@ -147,6 +151,8 @@ The opt-in live smoke test is:
 ```bash
 INTEGRATION_TEST_ON=1 pnpm vitest run test/pi-adapter.test.ts
 ```
+
+Set `INTEGRATION_DISABLE=pi` to skip this smoke test during broader live test runs.
 
 By default, the smoke test requests `anthropic/claude-sonnet-4-5` to avoid Pi's deprecated first available Anthropic model. A different authenticated model can be selected with `PI_SMOKE_MODEL`:
 

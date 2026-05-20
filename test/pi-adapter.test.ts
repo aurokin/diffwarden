@@ -4,6 +4,7 @@ import type { ReviewAdapterInput } from "../src/adapters/types.js";
 import { missingRequirement } from "../src/core/errors.js";
 import { parseReviewOutput } from "../src/core/parse.js";
 import { reviewResultJsonSchema } from "../src/core/schema.js";
+import { isIntegrationDisabled } from "./integration.js";
 
 const defaultPiSmokeModel = "anthropic/claude-sonnet-4-5";
 
@@ -573,7 +574,7 @@ describe("piAdapter", () => {
     expect(calls.disposed).toBe(1);
   });
 
-  it.skipIf(process.env.INTEGRATION_TEST_ON !== "1")(
+  it.skipIf(isIntegrationDisabled("pi"))(
     "runs a live Pi structured review smoke test",
     async () => {
       const smokeModel = process.env.PI_SMOKE_MODEL ?? defaultPiSmokeModel;

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { claudeAdapter, createClaudeAdapter } from "../src/adapters/claude.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
 import { parseReviewOutput } from "../src/core/parse.js";
+import { isIntegrationDisabled } from "./integration.js";
 
 let tempDir: string | undefined;
 
@@ -361,7 +362,7 @@ describe("claudeAdapter", () => {
     });
   });
 
-  it.skipIf(process.env.INTEGRATION_TEST_ON !== "1")(
+  it.skipIf(isIntegrationDisabled("claude"))(
     "runs a live Claude local review smoke test",
     async () => {
       const preflight = await claudeAdapter.preflight?.({

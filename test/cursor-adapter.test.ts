@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createCursorAdapter, cursorAdapter } from "../src/adapters/cursor.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
+import { isIntegrationDisabled } from "./integration.js";
 
 describe("cursorAdapter", () => {
   it("preflights auth before loading the SDK", async () => {
@@ -229,7 +230,7 @@ describe("cursorAdapter", () => {
     });
   });
 
-  it.skipIf(process.env.INTEGRATION_TEST_ON !== "1" || !process.env.CURSOR_API_KEY)(
+  it.skipIf(isIntegrationDisabled("cursor") || !process.env.CURSOR_API_KEY)(
     "runs a live Cursor local review smoke test",
     async () => {
       const preflight = await cursorAdapter.preflight?.({
