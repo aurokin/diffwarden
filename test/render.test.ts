@@ -52,6 +52,29 @@ describe("renderMarkdown", () => {
     expect(markdown).toContain("Verdict: unknown");
   });
 
+  it("renders multi-reviewer engine labels", () => {
+    const markdown = renderMarkdown({
+      ...artifact,
+      sdk: undefined,
+      reviewers: [
+        {
+          id: "pi",
+          sdk: "pi",
+          result: artifact.result,
+          validation: artifact.validation,
+        },
+        {
+          id: "claude-deep",
+          sdk: "claude",
+          result: artifact.result,
+          validation: artifact.validation,
+        },
+      ],
+    });
+
+    expect(markdown).toContain("Engine: pi, claude-deep");
+  });
+
   it("sorts findings by priority and location", () => {
     const p1Finding = finding("[P1] Earlier serious issue", 1, "/repo/src/a.ts", 8);
     const p2EarlierFinding = finding("[P2] Earlier normal issue", 2, "/repo/src/a.ts", 3);

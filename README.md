@@ -12,15 +12,10 @@ diffwarden --target uncommitted --reviewer cursor
 diffwarden --target base:main --reviewer claude
 diffwarden --target base:main --reviewer claude --model sonnet --effort high
 diffwarden --target base:main --reviewer pi --model anthropic/claude-sonnet-4-5
-diffwarden --target commit:abc123
-diffwarden --target base:main --format json
-```
-
-Future reviewer-set and Pi profile examples:
-
-```bash
 diffwarden --target base:main --reviewer-set 2
 diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
+diffwarden --target commit:abc123
+diffwarden --target base:main --format json
 ```
 
 ## Read order
@@ -30,7 +25,7 @@ diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 
 ## Current status
 
-Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, `diffwarden.config.json` discovery, a shared `sdk[:profile]` reviewer-spec parser, and Cursor, Claude, and Pi Agent SDK adapters. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
+Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, `diffwarden.config.json` discovery, reviewer sets, a shared `sdk[:profile]` reviewer-spec parser, and Cursor, Claude, and Pi Agent SDK adapters. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
 
 The project requires Node `>=22.19.0`, matching the Pi SDK package family.
 
@@ -40,7 +35,9 @@ The intended v1 target surface is:
 - `base:<branch>`
 - `commit:<sha>`
 
-`--format json` prints the full `ReviewArtifact`, including reviewers, target, result, validation, and timing metadata.
+`--format json` prints the full `ReviewArtifact`, including reviewers, target, result, validation, and timing metadata. Multi-reviewer runs preserve each reviewer result in `reviewers` and aggregate findings into the top-level `result`.
+
+When a config file is present and no `--reviewer` or `--reviewer-set` is provided, the config must define `defaultReviewerSet`. Without config, the development fallback reviewer remains `fake`.
 
 ## Cursor reviewer
 

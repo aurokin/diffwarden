@@ -4,7 +4,7 @@ export function renderMarkdown(artifact: ReviewArtifact): string {
   const sections = [
     "# Code Review",
     "",
-    `Engine: ${artifact.sdk ?? "unknown"}`,
+    `Engine: ${renderEngine(artifact)}`,
     `Target: ${renderTarget(artifact.target.kind, artifact.target)}`,
     `Verdict: ${artifact.result.overall_correctness || "unknown"}`,
     `Confidence: ${formatConfidence(artifact.result.overall_confidence_score)}`,
@@ -17,6 +17,18 @@ export function renderMarkdown(artifact: ReviewArtifact): string {
   ];
 
   return `${sections.join("\n").trimEnd()}\n`;
+}
+
+function renderEngine(artifact: ReviewArtifact): string {
+  if (artifact.sdk !== undefined) {
+    return artifact.sdk;
+  }
+
+  if (artifact.reviewers !== undefined && artifact.reviewers.length > 1) {
+    return artifact.reviewers.map((reviewer) => reviewer.id).join(", ");
+  }
+
+  return "unknown";
 }
 
 export function renderJson(artifact: ReviewArtifact): string {

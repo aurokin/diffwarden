@@ -3,6 +3,7 @@ import {
   parseReviewEffort,
   parseReviewerSpec,
   resolveReviewerConfig,
+  resolveReviewerConfigs,
 } from "../src/core/reviewer.js";
 
 describe("parseReviewerSpec", () => {
@@ -180,5 +181,67 @@ describe("resolveReviewerConfig", () => {
       model: "claude-sonnet-4-6",
     });
     expect(resolveReviewerConfig({ spec: "pi" })).not.toHaveProperty("model");
+  });
+});
+
+describe("resolveReviewerConfigs", () => {
+  it("uses default reviewer sets from config when no reviewers are explicit", () => {
+    expect(
+      resolveReviewerConfigs({
+        config: {
+          defaultReviewerSet: "2",
+          reviewerSets: {
+            "2": ["pi", "claude"],
+          },
+        },
+      }).map((reviewer) => reviewer.sdk),
+    ).toEqual(["pi", "claude"]);
+  });
+
+  it("requires defaultReviewerSet for implicit configured runs", () => {
+    expect(() =>
+      resolveReviewerConfigs({
+        config: {
+          reviewerSets: {
+            "1": ["pi"],
+          },
+        },
+      }),
+    ).toThrow("Config must define defaultReviewerSet for implicit reviewer selection");
+  });
+
+  it("falls back to fake when no reviewers or config defaults exist", () => {
+    expect(resolveReviewerConfigs({}).map((reviewer) => reviewer.sdk)).toEqual(["fake"]);
+  });
+
+  it("rejects ambiguous reviewer selection", () => {
+    expect(() =>
+      resolveReviewerConfigs({
+        reviewers: ["pi"],
+        reviewerSet: "2",
+        config: {
+          reviewerSets: { "2": ["pi", "claude"] },
+        },
+      }),
+    ).toThrow("Use either --reviewer or --reviewer-set, not both");
+
+    expect(() =>
+      resolveReviewerConfigs({
+        reviewers: ["pi", "claude"],
+        model: "sonnet",
+      }),
+    ).toThrow("--model can only be used with a single reviewer");
+  });
+
+  it("rejects empty explicit reviewer specs", () => {
+    expect(() => resolveReviewerConfigs({ reviewers: [""] })).toThrow(
+      "Reviewer spec cannot be empty",
+    );
+  });
+
+  it("rejects unknown reviewer sets", () => {
+    expect(() => resolveReviewerConfigs({ reviewerSet: "missing", config: {} })).toThrow(
+      "Unknown reviewer set: missing",
+    );
   });
 });

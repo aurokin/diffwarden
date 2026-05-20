@@ -149,6 +149,125 @@ describe("runReview", () => {
     });
   });
 
+  it("runs multiple reviewers and aggregates their artifacts", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const piAdapter = createMockAdapter("pi");
+    const claudeAdapter = createMockAdapter("claude");
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewers: ["pi", "claude"],
+      adapters: {
+        pi: piAdapter,
+        claude: claudeAdapter,
+      },
+    });
+
+    expect(artifact.sdk).toBeUndefined();
+    expect(artifact.reviewers).toHaveLength(2);
+    expect(artifact.reviewers?.map((reviewer) => reviewer.sdk)).toEqual(["pi", "claude"]);
+    expect(artifact.result.overall_correctness).toBe("patch is correct");
+    expect(artifact.result.overall_explanation).toContain("pi: Mock pi review passed.");
+    expect(artifact.result.overall_explanation).toContain("claude: Mock claude review passed.");
+    expect(piAdapter.calls).toHaveLength(2);
+    expect(claudeAdapter.calls).toHaveLength(2);
+  });
+
+  it("preflights every selected reviewer before running any reviewer", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const events: string[] = [];
+    const piAdapter = createMockAdapter("pi", events);
+    const claudeAdapter = createMockAdapter("claude", events);
+
+    await runReview({
+      cwd: repo,
+      resolved,
+      reviewers: ["pi", "claude"],
+      adapters: {
+        pi: piAdapter,
+        claude: claudeAdapter,
+      },
+    });
+
+    expect(events).toEqual(["pi:preflight", "claude:preflight", "pi:run", "claude:run"]);
+  });
+
+  it("preserves unknown verdicts when aggregating reviewers", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewers: ["pi", "claude"],
+      adapters: {
+        pi: createMockAdapter("pi"),
+        claude: createMockAdapter("claude", undefined, {
+          overall_correctness: "unknown",
+          overall_explanation: "Claude returned unstructured text.",
+        }),
+      },
+    });
+
+    expect(artifact.result.overall_correctness).toBe("unknown");
+  });
+
+  it("expands reviewer sets from config", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const piAdapter = createMockAdapter("pi");
+    const claudeAdapter = createMockAdapter("claude");
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewerSet: "2",
+      config: {
+        reviewerSets: {
+          "2": ["pi:openrouter-high", "claude-deep"],
+        },
+        reviewers: [
+          { id: "pi-openrouter-high", sdk: "pi", profile: "openrouter-high" },
+          { id: "claude-deep", sdk: "claude", model: "sonnet" },
+        ],
+      },
+      adapters: {
+        pi: piAdapter,
+        claude: claudeAdapter,
+      },
+    });
+
+    expect(artifact.reviewers?.map((reviewer) => reviewer.id)).toEqual([
+      "pi-openrouter-high",
+      "claude-deep",
+    ]);
+  });
+
+  it("rejects model overrides for multiple reviewers", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewers: ["pi", "claude"],
+        model: "sonnet",
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_cli",
+      exitCode: 2,
+    });
+  });
+
   it("rejects effort before adapter execution", async () => {
     repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
@@ -191,7 +310,14 @@ describe("runReview", () => {
   });
 });
 
-function createMockAdapter(name: "pi"): ReviewAdapter & {
+function createMockAdapter(
+  name: ReviewAdapter["name"],
+  events?: string[],
+  resultOverrides?: {
+    overall_correctness?: "patch is correct" | "patch is incorrect" | "unknown";
+    overall_explanation?: string;
+  },
+): ReviewAdapter & {
   calls: Array<{ phase: "preflight" | "run"; reviewer: unknown }>;
 } {
   const calls: Array<{ phase: "preflight" | "run"; reviewer: unknown }> = [];
@@ -200,6 +326,7 @@ function createMockAdapter(name: "pi"): ReviewAdapter & {
     name,
     calls,
     async preflight(input) {
+      events?.push(`${name}:preflight`);
       calls.push({ phase: "preflight", reviewer: input.reviewer });
       return {
         checks: [{ name: "mock", status: "passed" }],
@@ -209,12 +336,14 @@ function createMockAdapter(name: "pi"): ReviewAdapter & {
       };
     },
     async run(input) {
+      events?.push(`${name}:run`);
       calls.push({ phase: "run", reviewer: input.reviewer });
       return {
         structured: {
           findings: [],
-          overall_correctness: "patch is correct",
-          overall_explanation: "Mock Pi review passed.",
+          overall_correctness: resultOverrides?.overall_correctness ?? "patch is correct",
+          overall_explanation:
+            resultOverrides?.overall_explanation ?? `Mock ${name} review passed.`,
           overall_confidence_score: 0.9,
         },
         metadata: {

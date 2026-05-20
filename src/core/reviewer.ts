@@ -21,6 +21,35 @@ export type ResolveReviewerOptions = {
   config?: DiffwardenConfig;
 };
 
+export type ResolveReviewersOptions = {
+  reviewers?: string[];
+  reviewerSet?: string;
+  model?: string;
+  effort?: string;
+  config?: DiffwardenConfig;
+};
+
+export function resolveReviewerConfigs(options: ResolveReviewersOptions): ReviewReviewerConfig[] {
+  const specs = resolveReviewerSpecs(options);
+
+  if (specs.length > 1 && options.model !== undefined) {
+    throw invalidCli("--model can only be used with a single reviewer");
+  }
+
+  if (specs.length > 1 && options.effort !== undefined) {
+    throw invalidCli("--effort can only be used with a single reviewer");
+  }
+
+  return specs.map((spec) =>
+    resolveReviewerConfig({
+      spec,
+      ...(options.model !== undefined ? { model: options.model } : {}),
+      ...(options.effort !== undefined ? { effort: options.effort } : {}),
+      ...(options.config !== undefined ? { config: options.config } : {}),
+    }),
+  );
+}
+
 export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewReviewerConfig {
   const parsed = parseReviewerSpecIfBuiltIn(options.spec);
 
@@ -62,6 +91,49 @@ export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewRe
     ...defaultReviewerModel(parsed.sdk, options.model),
     readonly: true,
   };
+}
+
+function resolveReviewerSpecs(options: ResolveReviewersOptions): string[] {
+  const explicitReviewers = options.reviewers ?? [];
+
+  if (explicitReviewers.length > 0 && options.reviewerSet !== undefined) {
+    throw invalidCli("Use either --reviewer or --reviewer-set, not both");
+  }
+
+  if (options.reviewerSet !== undefined) {
+    return resolveConfiguredReviewerSet(options.config, options.reviewerSet);
+  }
+
+  if (explicitReviewers.length > 0) {
+    return explicitReviewers;
+  }
+
+  const defaultReviewerSet = options.config?.defaultReviewerSet;
+  if (defaultReviewerSet !== undefined) {
+    return resolveConfiguredReviewerSet(options.config, defaultReviewerSet);
+  }
+
+  if (options.config !== undefined) {
+    throw invalidConfig("Config must define defaultReviewerSet for implicit reviewer selection");
+  }
+
+  return ["fake"];
+}
+
+function resolveConfiguredReviewerSet(
+  config: DiffwardenConfig | undefined,
+  name: string,
+): string[] {
+  const specs = config?.reviewerSets?.[name];
+  if (specs === undefined) {
+    throw invalidConfig(`Unknown reviewer set: ${name}`);
+  }
+
+  if (specs.length === 0) {
+    throw invalidConfig(`Reviewer set is empty: ${name}`);
+  }
+
+  return specs;
 }
 
 export function parseReviewerSpec(spec: string): ParsedReviewerSpec {

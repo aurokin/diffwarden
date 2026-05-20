@@ -9,6 +9,7 @@ import { runReview } from "./core/runner.js";
 import { parseTargetSpec } from "./core/target.js";
 
 const program = new Command();
+const collectReviewers = (value: string, previous: string[]): string[] => [...previous, value];
 
 program
   .name("diffwarden")
@@ -18,8 +19,10 @@ program
   .option(
     "--reviewer <spec>",
     "reviewer spec, such as fake, cursor, claude, pi, or pi:profile",
-    "fake",
+    collectReviewers,
+    [],
   )
+  .option("--reviewer-set <name>", "reviewer set name from config")
   .option("--model <id>", "model override for the selected reviewer")
   .option("--effort <level>", "effort override for the selected reviewer")
   .option("--cwd <path>", "working directory", process.cwd())
@@ -28,7 +31,8 @@ program
   .action(
     async (options: {
       target?: string;
-      reviewer: string;
+      reviewer: string[];
+      reviewerSet?: string;
       model?: string;
       effort?: string;
       cwd: string;
@@ -53,7 +57,8 @@ program
       const artifact = await runReview({
         cwd: options.cwd,
         resolved,
-        reviewer: options.reviewer,
+        ...(options.reviewer.length > 0 ? { reviewers: options.reviewer } : {}),
+        ...(options.reviewerSet !== undefined ? { reviewerSet: options.reviewerSet } : {}),
         ...(options.model !== undefined ? { model: options.model } : {}),
         ...(options.effort !== undefined ? { effort: options.effort } : {}),
         ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
