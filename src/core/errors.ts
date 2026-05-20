@@ -41,3 +41,7 @@ export function missingRequirement(message: string): DiffwardenError {
 export function reviewerFailed(message: string): DiffwardenError {
   return new DiffwardenError("reviewer_failed", message, 3);
 }
+
+export function timeoutError(message: string): DiffwardenError {
+  return new DiffwardenError("timeout", message, 3);
+}

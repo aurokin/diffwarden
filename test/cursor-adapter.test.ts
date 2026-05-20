@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cursorAdapter } from "../src/adapters/cursor.js";
+import { createCursorAdapter, cursorAdapter } from "../src/adapters/cursor.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
 
 describe("cursorAdapter", () => {
@@ -29,6 +29,62 @@ describe("cursorAdapter", () => {
     });
   });
 
+  it("cancels a Cursor run that appears after the signal aborts during send", async () => {
+    const controller = new AbortController();
+    const sendStarted = deferred<void>();
+    const sendResult = deferred<MockCursorRun>();
+    const calls = {
+      cancel: 0,
+      dispose: 0,
+      wait: 0,
+    };
+    const run: MockCursorRun = {
+      id: "run-1",
+      async cancel() {
+        calls.cancel += 1;
+      },
+      async wait() {
+        calls.wait += 1;
+        return {
+          status: "finished",
+          result: "",
+        };
+      },
+    };
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return {
+          Agent: {
+            async create() {
+              return {
+                agentId: "agent-1",
+                async send() {
+                  sendStarted.resolve();
+                  return sendResult.promise;
+                },
+                async [Symbol.asyncDispose]() {
+                  calls.dispose += 1;
+                },
+              };
+            },
+          },
+        };
+      },
+    });
+
+    const review = adapter.run(
+      input({ env: { CURSOR_API_KEY: "key" }, signal: controller.signal }),
+    );
+    await sendStarted.promise;
+    controller.abort(new Error("timed out"));
+    sendResult.resolve(run);
+
+    await expect(review).rejects.toThrow("timed out");
+    expect(calls.cancel).toBe(1);
+    expect(calls.dispose).toBeGreaterThanOrEqual(1);
+    expect(calls.wait).toBe(0);
+  });
+
   it.skipIf(process.env.INTEGRATION_TEST_ON !== "1" || !process.env.CURSOR_API_KEY)(
     "runs a live Cursor local review smoke test",
     async () => {
@@ -53,7 +109,16 @@ describe("cursorAdapter", () => {
   );
 });
 
-function input(overrides: { env?: NodeJS.ProcessEnv } = {}): ReviewAdapterInput {
+type MockCursorRun = {
+  id: string;
+  cancel(): Promise<void>;
+  wait(): Promise<{
+    status: string;
+    result: string;
+  }>;
+};
+
+function input(overrides: Partial<ReviewAdapterInput> = {}): ReviewAdapterInput {
   return {
     cwd: process.cwd(),
     reviewer: {
@@ -72,6 +137,21 @@ function input(overrides: { env?: NodeJS.ProcessEnv } = {}): ReviewAdapterInput 
     changedFiles: [],
     prompt: "Return a minimal review result.",
     readonly: true,
-    env: overrides.env ?? process.env,
+    env: process.env,
+    ...overrides,
   };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  let reject: (error: unknown) => void = () => {};
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, resolve, reject };
 }

@@ -169,6 +169,7 @@ type ClaudeQueryOptions = {
   persistSession?: boolean;
   maxTurns?: number;
   pathToClaudeCodeExecutable?: string;
+  abortController?: AbortController;
   outputFormat?: {
     type: "json_schema";
     schema: Record<string, unknown>;
@@ -209,19 +210,24 @@ type ClaudeResultMessage = {
 
 async function runClaudeQuery(options: RunClaudeQueryInput): Promise<ClaudeResultMessage> {
   let result: ClaudeResultMessage | undefined;
-  const queryOptions = buildClaudeQueryOptions(options);
+  const abortBridge = createAbortBridge(options.input.signal);
+  const queryOptions = buildClaudeQueryOptions(options, abortBridge.controller);
 
-  for await (const message of options.query({
-    prompt: options.input.prompt,
-    options: queryOptions,
-  })) {
-    if (message.type === "assistant" && message.error === "authentication_failed") {
-      throw missingAuth("Claude reviewer authentication failed");
-    }
+  try {
+    for await (const message of options.query({
+      prompt: options.input.prompt,
+      options: queryOptions,
+    })) {
+      if (message.type === "assistant" && message.error === "authentication_failed") {
+        throw missingAuth("Claude reviewer authentication failed");
+      }
 
-    if (isClaudeResultMessage(message)) {
-      result = message;
+      if (isClaudeResultMessage(message)) {
+        result = message;
+      }
     }
+  } finally {
+    abortBridge.dispose();
   }
 
   if (!result) {
@@ -231,7 +237,10 @@ async function runClaudeQuery(options: RunClaudeQueryInput): Promise<ClaudeResul
   return result;
 }
 
-function buildClaudeQueryOptions(options: RunClaudeQueryInput): ClaudeQueryOptions {
+function buildClaudeQueryOptions(
+  options: RunClaudeQueryInput,
+  abortController: AbortController | undefined,
+): ClaudeQueryOptions {
   const queryOptions: ClaudeQueryOptions = {
     cwd: options.input.cwd,
     model: options.input.reviewer.model ?? defaultClaudeModel,
@@ -241,6 +250,10 @@ function buildClaudeQueryOptions(options: RunClaudeQueryInput): ClaudeQueryOptio
     persistSession: false,
     maxTurns: maxClaudeTurns,
   };
+
+  if (abortController !== undefined) {
+    queryOptions.abortController = abortController;
+  }
 
   if (options.outputFormat) {
     queryOptions.outputFormat = {
@@ -258,6 +271,29 @@ function buildClaudeQueryOptions(options: RunClaudeQueryInput): ClaudeQueryOptio
   }
 
   return queryOptions;
+}
+
+function createAbortBridge(signal: AbortSignal | undefined): {
+  controller: AbortController | undefined;
+  dispose: () => void;
+} {
+  if (signal === undefined) {
+    return { controller: undefined, dispose: () => {} };
+  }
+
+  const controller = new AbortController();
+  const abort = (): void => controller.abort(signal.reason);
+
+  if (signal.aborted) {
+    abort();
+    return { controller, dispose: () => {} };
+  }
+
+  signal.addEventListener("abort", abort, { once: true });
+  return {
+    controller,
+    dispose: () => signal.removeEventListener("abort", abort),
+  };
 }
 
 function buildClaudeTextOutput(options: {

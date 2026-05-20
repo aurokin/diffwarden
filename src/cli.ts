@@ -2,7 +2,11 @@
 import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
 import { initDiffwardenConfig, loadDiffwardenConfig } from "./core/config.js";
-import { resolveReviewEnvOptions, resolveReviewerSelectionWithEnv } from "./core/env.js";
+import {
+  parseTimeoutSeconds,
+  resolveReviewEnvOptionsWithSettings,
+  resolveReviewerSelectionWithEnv,
+} from "./core/env.js";
 import { invalidCli } from "./core/errors.js";
 import { resolveGitTarget } from "./core/git.js";
 import { renderJson, renderMarkdown } from "./core/render.js";
@@ -26,6 +30,7 @@ program
   .option("--reviewer-set <name>", "reviewer set name from config")
   .option("--model <id>", "model override for the selected reviewer")
   .option("--effort <level>", "effort override for the selected reviewer")
+  .option("--timeout <seconds>", "reviewer timeout in seconds")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--format <format>", "output format: markdown or json", "markdown")
   .option("--out <path>", "write the full ReviewArtifact JSON to a file")
@@ -36,6 +41,7 @@ program
       reviewerSet?: string;
       model?: string;
       effort?: string;
+      timeout?: string;
       cwd: string;
       format: string;
       out?: string;
@@ -55,7 +61,10 @@ program
         cwd: options.cwd,
         repoRoot: resolved.target.repo_root,
       });
-      const envOptions = resolveReviewEnvOptions(process.env);
+      const cliTimeoutSeconds = parseTimeoutSeconds("--timeout", options.timeout);
+      const envOptions = resolveReviewEnvOptionsWithSettings(process.env, {
+        includeTimeout: cliTimeoutSeconds === undefined,
+      });
       const reviewerOptions = resolveReviewerSelectionWithEnv({
         reviewers: options.reviewer,
         reviewerSet: options.reviewerSet,
@@ -74,6 +83,11 @@ program
           ? { effort: options.effort }
           : envOptions.effort !== undefined
             ? { effort: envOptions.effort }
+            : {}),
+        ...(cliTimeoutSeconds !== undefined
+          ? { timeoutSeconds: cliTimeoutSeconds }
+          : envOptions.timeoutSeconds !== undefined
+            ? { timeoutSeconds: envOptions.timeoutSeconds }
             : {}),
         ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
       });

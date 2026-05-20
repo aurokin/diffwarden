@@ -110,9 +110,12 @@ export function createPiAdapter(
           modelRegistry,
         });
 
+        const removeAbortListener = bindAbortSignal(input.signal, () => session.abort());
         try {
+          throwIfAborted(input.signal, "Pi reviewer aborted before prompting");
           await session.prompt(input.prompt);
         } finally {
+          removeAbortListener();
           session.dispose();
         }
       } catch (error) {
@@ -205,6 +208,7 @@ type PiCreateAgentSessionResult = {
 
 type PiSession = {
   prompt(text: string): Promise<void>;
+  abort(): Promise<void>;
   dispose(): void;
 };
 
@@ -306,6 +310,43 @@ function formatPiModel(model: PiModel): string {
   }
 
   return "unknown";
+}
+
+function bindAbortSignal(
+  signal: AbortSignal | undefined,
+  onAbort: () => Promise<void> | void,
+): () => void {
+  if (signal === undefined) {
+    return () => {};
+  }
+
+  const abort = (): void => {
+    try {
+      void Promise.resolve(onAbort()).catch(() => undefined);
+    } catch {
+      // Cancellation is best-effort; the core timeout error remains authoritative.
+    }
+  };
+
+  if (signal.aborted) {
+    abort();
+    return () => {};
+  }
+
+  signal.addEventListener("abort", abort, { once: true });
+  return () => signal.removeEventListener("abort", abort);
+}
+
+function throwIfAborted(signal: AbortSignal | undefined, message: string): void {
+  if (signal === undefined || !signal.aborted) {
+    return;
+  }
+
+  if (signal.reason instanceof Error) {
+    throw signal.reason;
+  }
+
+  throw reviewerFailed(message);
 }
 
 function materializeScopedEnvAuth(

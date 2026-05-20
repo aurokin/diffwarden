@@ -18,6 +18,7 @@ export type ResolveReviewerOptions = {
   spec: string;
   model?: string;
   effort?: string;
+  timeoutSeconds?: number;
   config?: DiffwardenConfig;
 };
 
@@ -26,6 +27,7 @@ export type ResolveReviewersOptions = {
   reviewerSet?: string;
   model?: string;
   effort?: string;
+  timeoutSeconds?: number;
   config?: DiffwardenConfig;
 };
 
@@ -45,6 +47,7 @@ export function resolveReviewerConfigs(options: ResolveReviewersOptions): Review
       spec,
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.effort !== undefined ? { effort: options.effort } : {}),
+      ...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
       ...(options.config !== undefined ? { config: options.config } : {}),
     }),
   );
@@ -85,10 +88,13 @@ export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewRe
     throw invalidCli("Reviewer effort is not implemented yet");
   }
 
+  const timeoutSeconds = options.timeoutSeconds ?? options.config?.timeoutSeconds;
+
   return {
     id: parsed.sdk,
     sdk: parsed.sdk,
     ...defaultReviewerModel(parsed.sdk, options.model),
+    ...reviewerTimeout(timeoutSeconds),
     readonly: true,
   };
 }
@@ -209,11 +215,13 @@ function materializeConfiguredReviewer(
   }
 
   const timeoutMs =
-    configured.timeoutSeconds !== undefined
-      ? Math.round(configured.timeoutSeconds * 1000)
-      : config.timeoutSeconds !== undefined
-        ? Math.round(config.timeoutSeconds * 1000)
-        : undefined;
+    options.timeoutSeconds !== undefined
+      ? secondsToMilliseconds(options.timeoutSeconds)
+      : configured.timeoutSeconds !== undefined
+        ? Math.round(configured.timeoutSeconds * 1000)
+        : config.timeoutSeconds !== undefined
+          ? Math.round(config.timeoutSeconds * 1000)
+          : undefined;
 
   return {
     id: configured.id,
@@ -282,6 +290,16 @@ function validateConfiguredEffort(
   ) {
     throw invalidConfig(`Effort is not allowed for reviewer ${reviewer.id}: ${effort}`);
   }
+}
+
+function reviewerTimeout(
+  timeoutSeconds: number | undefined,
+): Pick<ReviewReviewerConfig, "timeoutMs"> {
+  return timeoutSeconds === undefined ? {} : { timeoutMs: secondsToMilliseconds(timeoutSeconds) };
+}
+
+function secondsToMilliseconds(timeoutSeconds: number): number {
+  return Math.round(timeoutSeconds * 1000);
 }
 
 function isReviewerSdk(value: string | undefined): value is ReviewerSdk {

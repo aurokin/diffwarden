@@ -223,6 +223,23 @@ describe("piAdapter", () => {
     expect(calls.disposed).toBe(1);
   });
 
+  it("does not prompt after setup completes if the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("timed out"));
+    let prompted = false;
+    const { adapter, calls } = createMockPiAdapter([{ provider: "test", id: "test-model" }], {
+      async prompt() {
+        prompted = true;
+      },
+    });
+
+    await expect(adapter.run(input({ signal: controller.signal }))).rejects.toThrow("timed out");
+
+    expect(prompted).toBe(false);
+    expect(calls.aborted).toBe(1);
+    expect(calls.disposed).toBe(1);
+  });
+
   it("materializes scoped environment auth for Pi prompt execution", async () => {
     const adapter = createEnvSensitiveMockPiAdapter({
       async prompt({ tool, apiKey, model }) {
@@ -420,11 +437,13 @@ function createMockPiAdapter(
       authStorage: unknown;
       modelRegistry: unknown;
     }>;
+    aborted: number;
     disposed: number;
     authStorage: MockPiAuthStorage;
     modelRegistry: MockPiModelRegistry;
   } = {
     createAgentSession: [],
+    aborted: 0,
     disposed: 0,
     authStorage: createMockPiAuthStorage(),
     modelRegistry: {
@@ -470,6 +489,9 @@ function createMockPiAdapter(
                     return calls.authStorage.getRuntimeApiKey(provider);
                   },
                 });
+              },
+              async abort() {
+                calls.aborted += 1;
               },
               dispose() {
                 calls.disposed += 1;
@@ -536,6 +558,7 @@ function createEnvSensitiveMockPiAdapter(options: { prompt?: MockPiPromptHandler
                   },
                 });
               },
+              async abort() {},
               dispose() {},
             },
           };

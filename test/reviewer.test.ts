@@ -104,6 +104,36 @@ describe("resolveReviewerConfig", () => {
     });
   });
 
+  it("lets timeout overrides take precedence over config timeouts", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "claude-deep",
+        timeoutSeconds: 5,
+        config: {
+          timeoutSeconds: 30,
+          reviewers: [{ id: "claude-deep", sdk: "claude", model: "sonnet", timeoutSeconds: 20 }],
+        },
+      }),
+    ).toMatchObject({
+      id: "claude-deep",
+      timeoutMs: 5000,
+    });
+  });
+
+  it("applies top-level config timeouts to built-in reviewer specs", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "claude",
+        config: {
+          timeoutSeconds: 30,
+        },
+      }),
+    ).toMatchObject({
+      id: "claude",
+      timeoutMs: 30000,
+    });
+  });
+
   it("does not let configured ids shadow built-in reviewer specs", () => {
     expect(
       resolveReviewerConfig({

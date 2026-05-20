@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewAdapter } from "../src/adapters/types.js";
 import { resolveGitTarget } from "../src/core/git.js";
 import { runReview } from "../src/core/runner.js";
@@ -12,6 +12,7 @@ import { parseTargetSpec } from "../src/core/target.js";
 let repo: string | undefined;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (repo) {
     rmSync(repo, { force: true, recursive: true });
     repo = undefined;
@@ -268,6 +269,90 @@ describe("runReview", () => {
     });
   });
 
+  it("times out slow reviewer runs", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const piAdapter = createHangingRunAdapter("pi");
+    vi.spyOn(Date, "now").mockReturnValue(0);
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewer: "pi",
+        timeoutSeconds: 0.001,
+        adapters: {
+          pi: piAdapter,
+        },
+      }),
+    ).rejects.toMatchObject(timeoutMatch());
+    expect(piAdapter.runSignals[0]?.aborted).toBe(true);
+  });
+
+  it("times out slow reviewer preflights before running adapters", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const piAdapter = createHangingPreflightAdapter("pi");
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewer: "pi",
+        timeoutSeconds: 0.001,
+        adapters: {
+          pi: piAdapter,
+        },
+      }),
+    ).rejects.toMatchObject(timeoutMatch());
+    expect(piAdapter.calls).toEqual([{ phase: "preflight", reviewer: expect.anything() }]);
+    expect(piAdapter.preflightSignals[0]?.aborted).toBe(true);
+  });
+
+  it("reports timeout errors even when adapters reject synchronously on abort", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewer: "pi",
+        timeoutSeconds: 0.001,
+        adapters: {
+          pi: createAbortRejectingRunAdapter("pi"),
+        },
+      }),
+    ).rejects.toMatchObject(timeoutMatch());
+  });
+
+  it("passes only the remaining timeout budget to reviewer runs after preflight", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const piAdapter = createTimeoutCaptureAdapter("pi");
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_250)
+      .mockReturnValue(1_250);
+
+    await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      timeoutSeconds: 1,
+      adapters: {
+        pi: piAdapter,
+      },
+    });
+
+    expect(piAdapter.runTimeouts).toEqual([750]);
+  });
+
   it("rejects effort before adapter execution", async () => {
     repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
@@ -351,6 +436,112 @@ function createMockAdapter(
         },
       };
     },
+  };
+}
+
+function createHangingRunAdapter(name: ReviewAdapter["name"]): ReviewAdapter & {
+  runSignals: AbortSignal[];
+} {
+  const runSignals: AbortSignal[] = [];
+  return {
+    name,
+    runSignals,
+    async preflight() {
+      return {
+        checks: [{ name: "mock", status: "passed" }],
+      };
+    },
+    async run(input) {
+      if (input.signal !== undefined) {
+        runSignals.push(input.signal);
+      }
+      return waitForAbort(input.signal);
+    },
+  };
+}
+
+function createHangingPreflightAdapter(name: ReviewAdapter["name"]): ReviewAdapter & {
+  calls: Array<{ phase: "preflight"; reviewer: unknown }>;
+  preflightSignals: AbortSignal[];
+} {
+  const calls: Array<{ phase: "preflight"; reviewer: unknown }> = [];
+  const preflightSignals: AbortSignal[] = [];
+  return {
+    name,
+    calls,
+    preflightSignals,
+    async preflight(input) {
+      calls.push({ phase: "preflight", reviewer: input.reviewer });
+      if (input.signal !== undefined) {
+        preflightSignals.push(input.signal);
+      }
+      return waitForAbort(input.signal);
+    },
+    async run() {
+      throw new Error("run should not be called");
+    },
+  };
+}
+
+function createAbortRejectingRunAdapter(name: ReviewAdapter["name"]): ReviewAdapter {
+  return {
+    name,
+    async preflight() {
+      return {
+        checks: [{ name: "mock", status: "passed" }],
+      };
+    },
+    async run(input) {
+      return new Promise((_, reject) => {
+        input.signal?.addEventListener("abort", () => reject(new Error("adapter aborted")), {
+          once: true,
+        });
+      });
+    },
+  };
+}
+
+function createTimeoutCaptureAdapter(name: ReviewAdapter["name"]): ReviewAdapter & {
+  runTimeouts: Array<number | undefined>;
+} {
+  const runTimeouts: Array<number | undefined> = [];
+  return {
+    name,
+    runTimeouts,
+    async preflight() {
+      return {
+        checks: [{ name: "mock", status: "passed" }],
+      };
+    },
+    async run(input) {
+      runTimeouts.push(input.timeoutMs);
+      return {
+        structured: {
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation: `Mock ${name} review passed.`,
+          overall_confidence_score: 0.9,
+        },
+      };
+    },
+  };
+}
+
+function waitForAbort<T>(signal: AbortSignal | undefined): Promise<T> {
+  return new Promise((_, reject) => {
+    const rejectWithAbortReason = (): void => reject(signal?.reason ?? new Error("aborted"));
+    if (signal?.aborted) {
+      rejectWithAbortReason();
+      return;
+    }
+    signal?.addEventListener("abort", rejectWithAbortReason, { once: true });
+  });
+}
+
+function timeoutMatch(): { code: "timeout"; exitCode: 3 } {
+  return {
+    code: "timeout",
+    exitCode: 3,
   };
 }
 

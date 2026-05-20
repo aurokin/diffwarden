@@ -5,6 +5,7 @@ export type ReviewEnvOptions = {
   reviewerSet?: string;
   model?: string;
   effort?: string;
+  timeoutSeconds?: number;
 };
 
 export function resolveReviewerSelectionWithEnv(options: {
@@ -31,13 +32,51 @@ export function resolveReviewerSelectionWithEnv(options: {
 }
 
 export function resolveReviewEnvOptions(env: NodeJS.ProcessEnv): ReviewEnvOptions {
+  return resolveReviewEnvOptionsWithSettings(env, { includeTimeout: true });
+}
+
+export function resolveReviewEnvOptionsWithSettings(
+  env: NodeJS.ProcessEnv,
+  settings: { includeTimeout: boolean },
+): ReviewEnvOptions {
   const options: ReviewEnvOptions = {
     ...parseEnvReviewers(env.DIFFWARDEN_REVIEWERS),
   };
-  setStringEnvOption(options, "reviewerSet", env.DIFFWARDEN_REVIEWER_SET);
-  setStringEnvOption(options, "model", env.DIFFWARDEN_MODEL);
-  setStringEnvOption(options, "effort", env.DIFFWARDEN_EFFORT);
+  const reviewerSet = stringEnvOption(env.DIFFWARDEN_REVIEWER_SET);
+  if (reviewerSet !== undefined) {
+    options.reviewerSet = reviewerSet;
+  }
+  const model = stringEnvOption(env.DIFFWARDEN_MODEL);
+  if (model !== undefined) {
+    options.model = model;
+  }
+  const effort = stringEnvOption(env.DIFFWARDEN_EFFORT);
+  if (effort !== undefined) {
+    options.effort = effort;
+  }
+  if (settings.includeTimeout) {
+    const timeoutSeconds = parseTimeoutSeconds(
+      "DIFFWARDEN_TIMEOUT_SECONDS",
+      env.DIFFWARDEN_TIMEOUT_SECONDS,
+    );
+    if (timeoutSeconds !== undefined) {
+      options.timeoutSeconds = timeoutSeconds;
+    }
+  }
   return options;
+}
+
+export function parseTimeoutSeconds(label: string, value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw invalidCli(`Invalid ${label} value: ${value}`);
+  }
+
+  return parsed;
 }
 
 function parseEnvReviewers(value: string | undefined): Pick<ReviewEnvOptions, "reviewers"> {
@@ -55,14 +94,10 @@ function parseEnvReviewers(value: string | undefined): Pick<ReviewEnvOptions, "r
   };
 }
 
-function setStringEnvOption<Key extends keyof Omit<ReviewEnvOptions, "reviewers">>(
-  options: ReviewEnvOptions,
-  key: Key,
-  value: string | undefined,
-): void {
+function stringEnvOption(value: string | undefined): string | undefined {
   if (value === undefined || value.trim() === "") {
-    return;
+    return undefined;
   }
 
-  options[key] = value.trim();
+  return value.trim();
 }

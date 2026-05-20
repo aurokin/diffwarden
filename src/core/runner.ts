@@ -5,7 +5,7 @@ import { piAdapter } from "../adapters/pi.js";
 import type { ReviewAdapter, ReviewReviewerConfig } from "../adapters/types.js";
 import type { DiffwardenConfig } from "./config.js";
 import { parseChangedLineRanges } from "./diff.js";
-import { invalidCli } from "./errors.js";
+import { invalidCli, timeoutError } from "./errors.js";
 import type { ResolvedDiff } from "./git.js";
 import { parseReviewOutput } from "./parse.js";
 import { buildReviewPrompt } from "./prompt.js";
@@ -27,6 +27,7 @@ export type RunReviewOptions = {
   reviewerSet?: string;
   model?: string;
   effort?: string;
+  timeoutSeconds?: number;
   config?: DiffwardenConfig;
   env?: NodeJS.ProcessEnv;
   adapters?: Partial<Record<ReviewReviewerConfig["sdk"], ReviewAdapter>>;
@@ -42,6 +43,7 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
     ...(options.reviewerSet !== undefined ? { reviewerSet: options.reviewerSet } : {}),
     ...(options.model !== undefined ? { model: options.model } : {}),
     ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    ...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
     ...(options.config !== undefined ? { config: options.config } : {}),
   });
   const start = Date.now();
@@ -67,6 +69,9 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
         reviewer: context.reviewer,
         adapter: context.adapter,
         ...(context.preflight !== undefined ? { preflight: context.preflight } : {}),
+        ...(context.remainingTimeoutMs !== undefined
+          ? { remainingTimeoutMs: context.remainingTimeoutMs }
+          : {}),
         prompt,
         changedLineRanges,
         env: options.env ?? process.env,
@@ -119,6 +124,7 @@ type SingleReviewerOptions = {
   reviewer: ReviewReviewerConfig;
   adapter: ReviewAdapter;
   preflight?: Awaited<ReturnType<NonNullable<ReviewAdapter["preflight"]>>>;
+  remainingTimeoutMs?: number;
   prompt: string;
   changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
   env: NodeJS.ProcessEnv;
@@ -126,6 +132,7 @@ type SingleReviewerOptions = {
 
 async function runSingleReviewer(options: SingleReviewerOptions): Promise<ReviewReviewerArtifact> {
   const start = Date.now();
+  const abortController = new AbortController();
   const adapterInput = {
     cwd: options.cwd,
     reviewer: options.reviewer,
@@ -133,11 +140,18 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
     diff: options.resolved.diff,
     changedFiles: options.resolved.target.changed_files,
     prompt: options.prompt,
-    ...(options.reviewer.timeoutMs !== undefined ? { timeoutMs: options.reviewer.timeoutMs } : {}),
+    ...(options.remainingTimeoutMs !== undefined ? { timeoutMs: options.remainingTimeoutMs } : {}),
+    signal: abortController.signal,
     readonly: true,
     env: options.env,
   };
-  const output = await options.adapter.run(adapterInput);
+  const output = await withTimeout(
+    () => options.adapter.run(adapterInput),
+    options.remainingTimeoutMs,
+    abortController,
+    options.reviewer.id,
+    "run",
+  );
   const parsed =
     output.structured !== undefined
       ? parseReviewOutput({ structured: output.structured })
@@ -180,6 +194,7 @@ type ReviewerContext = {
   reviewer: ReviewReviewerConfig;
   adapter: ReviewAdapter;
   preflight?: Awaited<ReturnType<NonNullable<ReviewAdapter["preflight"]>>>;
+  remainingTimeoutMs?: number;
 };
 
 async function preflightReviewer(options: {
@@ -189,17 +204,36 @@ async function preflightReviewer(options: {
   adapters?: Partial<Record<ReviewReviewerConfig["sdk"], ReviewAdapter>>;
 }): Promise<ReviewerContext> {
   const adapter = getAdapter(options.reviewer.sdk, options.adapters);
-  const preflight = await adapter.preflight?.({
-    cwd: options.cwd,
-    reviewer: options.reviewer,
-    readonly: true,
-    env: options.env,
-  });
+  const abortController = new AbortController();
+  const start = Date.now();
+  const preflightAdapter = adapter.preflight;
+  const preflight =
+    preflightAdapter === undefined
+      ? undefined
+      : await withTimeout(
+          () =>
+            preflightAdapter({
+              cwd: options.cwd,
+              reviewer: options.reviewer,
+              signal: abortController.signal,
+              readonly: true,
+              env: options.env,
+            }),
+          options.reviewer.timeoutMs,
+          abortController,
+          options.reviewer.id,
+          "preflight",
+        );
+  const remainingTimeoutMs =
+    options.reviewer.timeoutMs === undefined
+      ? undefined
+      : Math.max(0, options.reviewer.timeoutMs - (Date.now() - start));
 
   return {
     reviewer: options.reviewer,
     adapter,
     ...(preflight !== undefined ? { preflight } : {}),
+    ...(remainingTimeoutMs !== undefined ? { remainingTimeoutMs } : {}),
   };
 }
 
@@ -254,6 +288,42 @@ function aggregateParseMode(reviewers: ReviewReviewerArtifact[]): ParseMode {
   }
 
   return "tool-output";
+}
+
+async function withTimeout<T>(
+  operation: () => Promise<T>,
+  timeoutMs: number | undefined,
+  abortController: AbortController,
+  reviewerId: string,
+  phase: "preflight" | "run",
+): Promise<T> {
+  if (timeoutMs === undefined) {
+    return operation();
+  }
+
+  if (timeoutMs <= 0) {
+    const error = timeoutError(`Reviewer timed out during ${phase}: ${reviewerId}`);
+    queueMicrotask(() => abortController.abort(error));
+    throw error;
+  }
+
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          const error = timeoutError(`Reviewer timed out during ${phase}: ${reviewerId}`);
+          reject(error);
+          queueMicrotask(() => abortController.abort(error));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 function getAdapter(

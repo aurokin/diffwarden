@@ -52,6 +52,7 @@ DIFFWARDEN_REVIEWERS=cursor,claude,pi:openrouter-high
 DIFFWARDEN_REVIEWER_SET=2
 DIFFWARDEN_MODEL=anthropic/claude-sonnet-4-5
 DIFFWARDEN_EFFORT=high
+DIFFWARDEN_TIMEOUT_SECONDS=300
 ```
 
 ## Cursor reviewer

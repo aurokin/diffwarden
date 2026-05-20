@@ -8,6 +8,7 @@ export type ReviewAdapterInput = {
   changedFiles: string[];
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   readonly: boolean;
   env?: NodeJS.ProcessEnv;
 };
@@ -43,6 +44,7 @@ export type ReviewAdapterOutput = {
 export type ReviewAdapterPreflightInput = {
   cwd: string;
   reviewer: ReviewReviewerConfig;
+  signal?: AbortSignal;
   readonly: boolean;
   env?: NodeJS.ProcessEnv;
 };
