@@ -45,6 +45,15 @@ Create a starter user config with:
 diffwarden init
 ```
 
+CLI flags take precedence over environment defaults. Supported defaults are:
+
+```bash
+DIFFWARDEN_REVIEWERS=cursor,claude,pi:openrouter-high
+DIFFWARDEN_REVIEWER_SET=2
+DIFFWARDEN_MODEL=anthropic/claude-sonnet-4-5
+DIFFWARDEN_EFFORT=high
+```
+
 ## Cursor reviewer
 
 The Cursor adapter is available with:

@@ -2,6 +2,7 @@
 import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
 import { initDiffwardenConfig, loadDiffwardenConfig } from "./core/config.js";
+import { resolveReviewEnvOptions, resolveReviewerSelectionWithEnv } from "./core/env.js";
 import { invalidCli } from "./core/errors.js";
 import { resolveGitTarget } from "./core/git.js";
 import { renderJson, renderMarkdown } from "./core/render.js";
@@ -54,13 +55,26 @@ program
         cwd: options.cwd,
         repoRoot: resolved.target.repo_root,
       });
+      const envOptions = resolveReviewEnvOptions(process.env);
+      const reviewerOptions = resolveReviewerSelectionWithEnv({
+        reviewers: options.reviewer,
+        reviewerSet: options.reviewerSet,
+        envOptions,
+      });
       const artifact = await runReview({
         cwd: options.cwd,
         resolved,
-        ...(options.reviewer.length > 0 ? { reviewers: options.reviewer } : {}),
-        ...(options.reviewerSet !== undefined ? { reviewerSet: options.reviewerSet } : {}),
-        ...(options.model !== undefined ? { model: options.model } : {}),
-        ...(options.effort !== undefined ? { effort: options.effort } : {}),
+        ...reviewerOptions,
+        ...(options.model !== undefined
+          ? { model: options.model }
+          : envOptions.model !== undefined
+            ? { model: envOptions.model }
+            : {}),
+        ...(options.effort !== undefined
+          ? { effort: options.effort }
+          : envOptions.effort !== undefined
+            ? { effort: envOptions.effort }
+            : {}),
         ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
       });
 
