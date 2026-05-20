@@ -287,6 +287,43 @@ describe("piAdapter", () => {
     });
   });
 
+  it("passes clamped Pi thinking levels for requested effort", async () => {
+    const reasoningModel = {
+      provider: "test",
+      id: "reasoning-model",
+      reasoning: true,
+      thinkingLevelMap: { minimal: null, xhigh: "max" },
+    };
+    const { adapter, calls } = createMockPiAdapter([reasoningModel], {
+      async prompt({ tool }) {
+        await tool.execute("tool-call-1", validReview());
+      },
+    });
+
+    const output = await adapter.run(
+      input({
+        reviewer: {
+          id: "pi",
+          sdk: "pi",
+          readonly: true,
+          effort: "minimal",
+        },
+      }),
+    );
+
+    expect(calls.createAgentSession[0]).toMatchObject({
+      model: reasoningModel,
+      thinkingLevel: "low",
+      scopedModels: [{ model: reasoningModel, thinkingLevel: "low" }],
+    });
+    expect(output.metadata).toMatchObject({
+      requestedEffort: "minimal",
+      effectiveEffort: "low",
+      effort: "low",
+      supportedEfforts: ["off", "low", "medium", "high", "xhigh"],
+    });
+  });
+
   it("rejects unavailable requested Pi models", async () => {
     const { adapter } = createMockPiAdapter([{ provider: "openai", id: "gpt-test" }]);
 
@@ -407,8 +444,17 @@ type MockPiPromptHandler = (input: {
   apiKey(provider: string): string | undefined;
 }) => Promise<void>;
 
+type MockPiModel = {
+  provider?: unknown;
+  id?: unknown;
+  reasoning?: unknown;
+  thinkingLevelMap?: Partial<
+    Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh", string | null>
+  >;
+};
+
 type MockPiModelRegistry = {
-  getAvailable(): Array<{ provider?: unknown; id?: unknown }>;
+  getAvailable(): MockPiModel[];
   getProviderAuthStatus?(provider: string): { source?: string; label?: string };
 };
 
@@ -418,14 +464,15 @@ type MockPiAuthStorage = {
 };
 
 function createMockPiAdapter(
-  availableModels: Array<{ provider?: unknown; id?: unknown }>,
+  availableModels: MockPiModel[],
   options: { prompt?: MockPiPromptHandler } = {},
 ) {
   const calls: {
     createAgentSession: Array<{
       cwd: string;
       model: unknown;
-      scopedModels: Array<{ model: unknown }>;
+      scopedModels: Array<{ model: unknown; thinkingLevel?: string }>;
+      thinkingLevel?: string;
       tools: string[];
       customTools: Array<{
         name: string;

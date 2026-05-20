@@ -68,6 +68,7 @@ export function createClaudeAdapter(
         metadata: {
           readonlyCapability: "enforced",
           model: input.reviewer.model ?? defaultClaudeModel,
+          ...claudeEffortMetadata(input.reviewer.effort),
           preferredCaptureMode: "native-structured",
           authMode: runtime.authMode,
           executable: runtime.executable,
@@ -168,6 +169,8 @@ type ClaudeQueryOptions = {
   settingSources?: Array<"user" | "project" | "local">;
   persistSession?: boolean;
   maxTurns?: number;
+  thinking?: { type: "disabled" | "adaptive" } | { type: "enabled"; budgetTokens: number };
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
   pathToClaudeCodeExecutable?: string;
   abortController?: AbortController;
   outputFormat?: {
@@ -249,6 +252,7 @@ function buildClaudeQueryOptions(
     settingSources: [],
     persistSession: false,
     maxTurns: maxClaudeTurns,
+    ...claudeQueryEffortOptions(options.input.reviewer.effort),
   };
 
   if (abortController !== undefined) {
@@ -339,6 +343,7 @@ function buildClaudeOutput(options: {
       sessionId: options.result.session_id,
       readonlyCapability: "enforced",
       model: options.input.reviewer.model ?? defaultClaudeModel,
+      ...claudeEffortMetadata(options.input.reviewer.effort),
       durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
       totalCostUsd: sumKnownNumbers(
         options.previousResult?.total_cost_usd,
@@ -363,6 +368,49 @@ function buildClaudeOutput(options: {
   }
 
   return output;
+}
+
+function claudeQueryEffortOptions(effort: string | undefined): Partial<ClaudeQueryOptions> {
+  if (effort === undefined) {
+    return {};
+  }
+
+  if (effort === "off") {
+    return {
+      thinking: { type: "disabled" },
+    };
+  }
+
+  return {
+    effort: claudeNativeEffort(effort),
+  };
+}
+
+function claudeEffortMetadata(effort: string | undefined): Record<string, string> {
+  if (effort === undefined) {
+    return {};
+  }
+
+  return {
+    effort: effort === "off" ? "off" : claudeNativeEffort(effort),
+    requestedEffort: effort,
+  };
+}
+
+function claudeNativeEffort(effort: string): "low" | "medium" | "high" | "max" {
+  if (effort === "minimal" || effort === "low") {
+    return "low";
+  }
+
+  if (effort === "medium") {
+    return "medium";
+  }
+
+  if (effort === "xhigh") {
+    return "max";
+  }
+
+  return "high";
 }
 
 async function loadClaudeSdk(): Promise<ClaudeSdk> {

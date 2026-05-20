@@ -192,6 +192,40 @@ describe("claudeAdapter", () => {
     expect(output.metadata?.totalCostUsd).toBeCloseTo(0.4);
   });
 
+  it("maps public effort to Claude query options and metadata", async () => {
+    const { adapter, calls } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "success",
+        structured_output: validReview(),
+        duration_ms: 12,
+        total_cost_usd: 0.1,
+        session_id: "structured-session",
+      },
+    ]);
+
+    const output = await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "claude-sonnet-4-6",
+          effort: "xhigh",
+          readonly: true,
+        },
+      }),
+    );
+
+    expect(calls[0]?.options).toMatchObject({
+      effort: "max",
+    });
+    expect(output.metadata).toMatchObject({
+      effort: "max",
+      requestedEffort: "xhigh",
+    });
+  });
+
   it.skipIf(process.env.INTEGRATION_TEST_ON !== "1")(
     "runs a live Claude local review smoke test",
     async () => {
@@ -279,7 +313,16 @@ function validReviewText(): string {
   });
 }
 
-function input(overrides: { env?: NodeJS.ProcessEnv } = {}): ReviewAdapterInput {
+function validReview() {
+  return {
+    findings: [],
+    overall_correctness: "patch is correct",
+    overall_explanation: "No findings.",
+    overall_confidence_score: 0.91,
+  };
+}
+
+function input(overrides: Partial<ReviewAdapterInput> = {}): ReviewAdapterInput {
   return {
     cwd: process.cwd(),
     reviewer: {
@@ -299,6 +342,7 @@ function input(overrides: { env?: NodeJS.ProcessEnv } = {}): ReviewAdapterInput 
     prompt: "Return a minimal review result.",
     readonly: true,
     env: overrides.env ?? process.env,
+    ...overrides,
   };
 }
 

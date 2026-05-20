@@ -181,10 +181,12 @@ describe("resolveReviewerConfig", () => {
     ).toThrow("Model is not allowed for reviewer claude-deep: opus");
   });
 
-  it("rejects effort until adapters apply it", () => {
-    expect(() => resolveReviewerConfig({ spec: "pi", effort: "high" })).toThrow(
-      "Reviewer effort is not implemented yet",
-    );
+  it("preserves validated effort in reviewer config", () => {
+    expect(resolveReviewerConfig({ spec: "pi", effort: "high" })).toMatchObject({
+      id: "pi",
+      sdk: "pi",
+      effort: "high",
+    });
   });
 
   it("preserves model in reviewer config", () => {

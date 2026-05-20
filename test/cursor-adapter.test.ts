@@ -85,6 +85,61 @@ describe("cursorAdapter", () => {
     expect(calls.wait).toBe(0);
   });
 
+  it("reports requested effort as ignored when Cursor SDK has no effort control", async () => {
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return {
+          Agent: {
+            async create() {
+              return {
+                agentId: "agent-1",
+                async send() {
+                  return {
+                    id: "run-1",
+                    async cancel() {},
+                    async wait() {
+                      return {
+                        status: "finished",
+                        result: "",
+                        model: "composer-2",
+                        durationMs: 12,
+                      };
+                    },
+                  };
+                },
+                async [Symbol.asyncDispose]() {},
+              };
+            },
+          },
+        };
+      },
+    });
+    const reviewer = {
+      id: "cursor",
+      sdk: "cursor" as const,
+      model: "composer-2",
+      effort: "high",
+      readonly: true,
+    };
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer,
+      readonly: true,
+      env: { CURSOR_API_KEY: "key" },
+    });
+    const output = await adapter.run(input({ reviewer, env: { CURSOR_API_KEY: "key" } }));
+
+    expect(preflight?.metadata).toMatchObject({
+      requestedEffort: "high",
+      effort: "ignored",
+    });
+    expect(output.metadata).toMatchObject({
+      requestedEffort: "high",
+      effort: "ignored",
+    });
+  });
+
   it.skipIf(process.env.INTEGRATION_TEST_ON !== "1" || !process.env.CURSOR_API_KEY)(
     "runs a live Cursor local review smoke test",
     async () => {

@@ -610,27 +610,25 @@ describe("runReview", () => {
     expect(piAdapter.runTimeouts).toEqual([750]);
   });
 
-  it("rejects effort before adapter execution", async () => {
+  it("passes validated effort to single reviewers", async () => {
     repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
     const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
     const piAdapter = createMockAdapter("pi");
 
-    await expect(
-      runReview({
-        cwd: repo,
-        resolved,
-        reviewer: "pi",
-        effort: "high",
-        adapters: {
-          pi: piAdapter,
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "invalid_cli",
-      exitCode: 2,
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      effort: "high",
+      adapters: {
+        pi: piAdapter,
+      },
     });
-    expect(piAdapter.calls).toEqual([]);
+
+    expect(artifact.reviewers?.[0]?.effort).toBe("high");
+    expect(piAdapter.calls[0]?.reviewer).toMatchObject({ effort: "high" });
+    expect(piAdapter.calls[1]?.reviewer).toMatchObject({ effort: "high" });
   });
 
   it("fails Pi reviews clearly when no auth is available", async () => {

@@ -85,7 +85,6 @@ export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewRe
 
   if (options.effort !== undefined) {
     parseReviewEffort(options.effort);
-    throw invalidCli("Reviewer effort is not implemented yet");
   }
 
   const timeoutSeconds = options.timeoutSeconds ?? options.config?.timeoutSeconds;
@@ -94,6 +93,7 @@ export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewRe
     id: parsed.sdk,
     sdk: parsed.sdk,
     ...defaultReviewerModel(parsed.sdk, options.model),
+    ...(options.effort !== undefined ? { effort: options.effort } : {}),
     ...reviewerTimeout(timeoutSeconds),
     readonly: true,
   };
@@ -213,7 +213,6 @@ function materializeConfiguredReviewer(
 
   if (effort !== undefined) {
     parseReviewEffort(effort);
-    throw invalidCli("Reviewer effort is not implemented yet");
   }
 
   const timeoutMs =
@@ -231,6 +230,7 @@ function materializeConfiguredReviewer(
     ...(configured.profile !== undefined ? { profile: configured.profile } : {}),
     ...(configured.provider !== undefined ? { provider: configured.provider } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(effort !== undefined ? { effort } : {}),
     ...(configured.modelCatalog !== undefined ? { modelCatalog: configured.modelCatalog } : {}),
     ...(configured.effortCatalog !== undefined ? { effortCatalog: configured.effortCatalog } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),

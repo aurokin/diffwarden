@@ -54,6 +54,12 @@ export function createCursorAdapter(
         metadata: {
           readonlyCapability: "prompt-only",
           model: input.reviewer.model ?? defaultCursorModel,
+          ...(input.reviewer.effort !== undefined
+            ? {
+                effort: "ignored",
+                requestedEffort: input.reviewer.effort,
+              }
+            : {}),
         },
       };
     },
@@ -108,6 +114,12 @@ export function createCursorAdapter(
             readonlyCapability: "prompt-only",
             model: result.model,
             durationMs: result.durationMs,
+            ...(input.reviewer.effort !== undefined
+              ? {
+                  effort: "ignored",
+                  requestedEffort: input.reviewer.effort,
+                }
+              : {}),
           },
         };
       } catch (error) {

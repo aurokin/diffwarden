@@ -112,7 +112,7 @@ diffwarden --target uncommitted --reviewer pi --model anthropic/claude-sonnet-4-
 
 The adapter loads `@earendil-works/pi-coding-agent`, checks environment-backed authenticated models through Pi `AuthStorage` and `ModelRegistry`, runs with a scoped model list, and captures structured output through a terminating `review_output` tool.
 
-Reviewer profile suffixes such as `pi:openrouter-high` resolve through `diffwarden.config.json` when a matching reviewer profile exists. `--effort` is rejected until adapters apply and report an effective effort. Use `--model` for the current single-reviewer override path.
+Reviewer profile suffixes such as `pi:openrouter-high` resolve through `diffwarden.config.json` when a matching reviewer profile exists. `--model` and `--effort` are available for the single-reviewer override path; multi-reviewer runs should put those choices in named reviewer profiles.
 
 Project config is discovered as `diffwarden.config.json` from the current directory upward to the git repo root. User config is discovered at `$XDG_CONFIG_HOME/diffwarden/diffwarden.config.json`, or `~/.config/diffwarden/diffwarden.config.json` when `XDG_CONFIG_HOME` is unset.
 

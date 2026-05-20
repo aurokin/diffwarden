@@ -14,6 +14,9 @@ import type {
 } from "./types.js";
 
 const piPackageName = "@earendil-works/pi-coding-agent";
+const piThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+
+type PiThinkingLevel = (typeof piThinkingLevels)[number];
 
 type PiAdapterDependencies = {
   loadSdk: () => Promise<PiSdk>;
@@ -36,12 +39,14 @@ export function createPiAdapter(
         throw missingAuth("No authenticated Pi models are available for the Pi reviewer");
       }
       const selectedModel = selectPiModel(availableModels, input.reviewer.model);
+      const effort = resolvePiEffort(selectedModel, input.reviewer.effort);
 
       const metadata: ReviewAdapterPreflightResult["metadata"] = {
         readonlyCapability: "tool-restricted",
         preferredCaptureMode: "tool-call",
         availableModelCount: availableModels.length,
         model: formatPiModel(selectedModel),
+        ...piEffortMetadata(effort),
       };
 
       return {
@@ -95,13 +100,18 @@ export function createPiAdapter(
         },
       );
       const selectedModel = selectPiModel(availableModels, input.reviewer.model);
+      const effort = resolvePiEffort(selectedModel, input.reviewer.effort);
 
       try {
         const sessionManager = sdk.SessionManager.inMemory(input.cwd);
         const { session } = await sdk.createAgentSession({
           cwd: input.cwd,
           model: selectedModel,
-          scopedModels: availableModels.map((model) => ({ model })),
+          ...piSessionEffortOptions(effort),
+          scopedModels: availableModels.map((model) => ({
+            model,
+            ...piSessionEffortOptions(resolvePiEffort(model, input.reviewer.effort)),
+          })),
           tools: ["read", "grep", "find", "ls", "review_output"],
           customTools: [reviewOutputTool],
           resourceLoader: createExtensionFreeResourceLoader(),
@@ -144,6 +154,7 @@ export function createPiAdapter(
         captureMode: "tool-call",
         readonlyCapability: "tool-restricted",
         availableModelCount: availableModels.length,
+        ...piEffortMetadata(effort),
       };
 
       return {
@@ -183,6 +194,8 @@ type PiModelRegistry = {
 type PiModel = {
   provider?: unknown;
   id?: unknown;
+  reasoning?: unknown;
+  thinkingLevelMap?: Partial<Record<PiThinkingLevel, string | null>>;
 };
 
 type PiAuthStatus = {
@@ -193,7 +206,8 @@ type PiAuthStatus = {
 type PiCreateAgentSessionOptions = {
   cwd: string;
   model: PiModel;
-  scopedModels: Array<{ model: PiModel }>;
+  thinkingLevel?: PiThinkingLevel;
+  scopedModels: Array<{ model: PiModel; thinkingLevel?: PiThinkingLevel }>;
   tools: string[];
   customTools: PiToolDefinition[];
   resourceLoader: PiResourceLoader;
@@ -310,6 +324,91 @@ function formatPiModel(model: PiModel): string {
   }
 
   return "unknown";
+}
+
+function resolvePiEffort(
+  model: PiModel,
+  requestedEffort: string | undefined,
+): { requested?: PiThinkingLevel; effective?: PiThinkingLevel; supported?: PiThinkingLevel[] } {
+  if (!isPiThinkingLevel(requestedEffort)) {
+    return {};
+  }
+
+  const supported = supportedPiThinkingLevels(model);
+  return {
+    requested: requestedEffort,
+    effective: clampPiThinkingLevel(supported, requestedEffort),
+    supported,
+  };
+}
+
+function piSessionEffortOptions(effort: {
+  effective?: PiThinkingLevel;
+}): Pick<PiCreateAgentSessionOptions, "thinkingLevel"> {
+  return effort.effective === undefined ? {} : { thinkingLevel: effort.effective };
+}
+
+function piEffortMetadata(effort: {
+  requested?: PiThinkingLevel;
+  effective?: PiThinkingLevel;
+  supported?: PiThinkingLevel[];
+}): Record<string, string | string[]> {
+  if (effort.requested === undefined) {
+    return {};
+  }
+
+  return {
+    effort: effort.effective ?? effort.requested,
+    requestedEffort: effort.requested,
+    ...(effort.effective !== undefined ? { effectiveEffort: effort.effective } : {}),
+    ...(effort.supported !== undefined ? { supportedEfforts: effort.supported } : {}),
+  };
+}
+
+function supportedPiThinkingLevels(model: PiModel): PiThinkingLevel[] {
+  if (!model.reasoning) {
+    return ["off"];
+  }
+
+  return piThinkingLevels.filter((level) => {
+    const mapped = model.thinkingLevelMap?.[level];
+    if (mapped === null) {
+      return false;
+    }
+    if (level === "xhigh") {
+      return mapped !== undefined;
+    }
+    return true;
+  });
+}
+
+function clampPiThinkingLevel(
+  supportedLevels: PiThinkingLevel[],
+  requestedLevel: PiThinkingLevel,
+): PiThinkingLevel {
+  if (supportedLevels.includes(requestedLevel)) {
+    return requestedLevel;
+  }
+
+  const requestedIndex = piThinkingLevels.indexOf(requestedLevel);
+  for (let index = requestedIndex; index < piThinkingLevels.length; index += 1) {
+    const candidate = piThinkingLevels[index];
+    if (candidate !== undefined && supportedLevels.includes(candidate)) {
+      return candidate;
+    }
+  }
+  for (let index = requestedIndex - 1; index >= 0; index -= 1) {
+    const candidate = piThinkingLevels[index];
+    if (candidate !== undefined && supportedLevels.includes(candidate)) {
+      return candidate;
+    }
+  }
+
+  return supportedLevels[0] ?? "off";
+}
+
+function isPiThinkingLevel(value: string | undefined): value is PiThinkingLevel {
+  return value !== undefined && piThinkingLevels.some((level) => level === value);
 }
 
 function bindAbortSignal(
