@@ -114,6 +114,30 @@ The adapter loads `@earendil-works/pi-coding-agent`, checks environment-backed a
 
 Reviewer profile suffixes such as `pi:openrouter-high` resolve through `diffwarden.config.json` when a matching reviewer profile exists. `--model` and `--effort` are available for the single-reviewer override path; multi-reviewer runs should put those choices in named reviewer profiles.
 
+Provider-backed Pi profiles can keep provider-specific auth and base URL wiring in config while leaving the public CLI surface unchanged:
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "pi-openrouter-high",
+      "sdk": "pi",
+      "profile": "openrouter-high",
+      "provider": "openrouter",
+      "model": "anthropic/claude-sonnet",
+      "effort": "high",
+      "providerOptions": {
+        "baseUrlEnv": "OPENROUTER_BASE_URL",
+        "apiKeyEnv": "OPENROUTER_API_KEY"
+      },
+      "sdkOptions": {
+        "providerProfile": "openrouter"
+      }
+    }
+  ]
+}
+```
+
 Project config is discovered as `diffwarden.config.json` from the current directory upward to the git repo root. User config is discovered at `$XDG_CONFIG_HOME/diffwarden/diffwarden.config.json`, or `~/.config/diffwarden/diffwarden.config.json` when `XDG_CONFIG_HOME` is unset.
 
 The Pi path reports a tool-restricted read-only capability. It passes only `read`, `grep`, `find`, `ls`, and `review_output` as active tools, uses an extension-free resource loader, and keeps tests credential-free by default.
@@ -137,6 +161,8 @@ The intended v1 reviewer surface is the Cursor Agent SDK, Claude Agent SDK, and 
 Configuration is required for real SDK runs. The default reviewer should be a configured Pi profile because Pi supports the broadest provider surface. Claude subscription users should configure the Claude Agent SDK, Cursor subscription users should configure the Cursor Agent SDK, and other providers should generally route through Pi profiles.
 
 Model selection is a base CLI option via `--model`. Effort, provider, and SDK-specific settings are represented as reviewer config. Simple single-reviewer runs can use flags like `--model` and `--effort`; multi-reviewer/provider-heavy runs should use named profiles like `pi:openrouter-high`.
+
+The public effort values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. Pi clamps requested effort through model metadata and records requested/effective/supported values; Claude maps those values to native effort/thinking controls; Cursor records requested effort as ignored until the SDK exposes an effort control.
 
 Invalid model and effort selections should fail clearly. Missing SDK/runtime requirements, missing SDK-required executables, missing auth, provider setup failures, timeouts, and SDK execution failures should also fail gracefully with specific error messages.
 

@@ -194,14 +194,14 @@ Rules:
 - Invalid model values fail gracefully with a specific error. Prefer local validation against the selected reviewer/profile model catalog; if the SDK/provider rejects the model during preflight or execution, surface that as a reviewer setup/execution failure with exit `3`.
 - Effort is best understood as requested reasoning intensity. Adapters may record a different effective effort when the SDK or model maps/clamps the requested value.
 
-Pi effort handling should be the reference implementation:
+Pi effort handling is the reference implementation:
 
 - Pi exposes `ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh"` in `/Users/auro/code/upstream/pi-mono/packages/agent/src/types.ts`.
 - Pi model metadata includes `reasoning` and optional `thinkingLevelMap` values.
 - Pi's `getSupportedThinkingLevels()` and `clampThinkingLevel()` in `/Users/auro/code/upstream/pi-mono/packages/ai/src/models.ts` compute model-supported levels and map unsupported requests to a nearby supported value.
-- `diffwarden` should pass Pi profiles a requested thinking level and record both requested and effective values when available. Do not hardcode provider-specific effort tables outside the adapter.
-- Claude should map `xhigh` to its highest supported native level such as `max` when available.
-- Cursor should report effort as best-effort/ignored unless the SDK exposes a concrete control.
+- `diffwarden` passes Pi profiles a requested thinking level, clamps it through model metadata, sends the effective `thinkingLevel`, and records requested/effective/supported effort metadata. Provider-specific effort tables must stay inside the adapter/SDK metadata path.
+- Claude maps `off` to disabled thinking, `minimal` and `low` to native `low`, `medium` to native `medium`, `high` to native `high`, and `xhigh` to native `max`. Adapter metadata records both requested and effective values.
+- Cursor reports effort as `ignored` with the requested value because the current Cursor SDK path does not expose a concrete reasoning-control option.
 
 Adapters should implement a preflight step before running review:
 
@@ -707,7 +707,7 @@ Findings:
 - The SDK validates schema output and retries on mismatch; if validation still fails, the result is an error rather than structured data.
 - TypeScript options include `model`, `fallbackModel`, `cwd`, `env`, `executable`, `pathToClaudeCodeExecutable`, `tools`, `mcpServers`, `settingSources`, `stderr`, and related execution controls.
 - The SDK may spawn a native Claude Code binary through optional per-platform dependencies. Preflight must check runtime/package/binary availability.
-- The local changelog exports an `EffortLevel` type with `low`, `medium`, `high`, and `max`; it also exposes model capability metadata such as supported effort levels. The CLI's public `xhigh` should map to Claude `max` if supported.
+- The local changelog exports an `EffortLevel` type with `low`, `medium`, `high`, and `max`; it also exposes model capability metadata such as supported effort levels. The CLI's public `xhigh` maps to Claude `max`.
 
 #### Pi Agent SDK
 
@@ -725,7 +725,7 @@ Findings:
 - Auth resolution flows through `AuthStorage`: runtime overrides, stored `auth.json`, environment variables, then custom provider fallback.
 - Pi supports `thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`.
 - Pi computes supported thinking levels from model metadata. Non-reasoning models support only `off`; models with `thinkingLevelMap` can disable levels with `null` or map `xhigh` to provider-specific values such as `max`.
-- Pi exposes `clampThinkingLevel(model, level)`, which maps unsupported requested levels to the nearest supported level. `diffwarden` should use that behavior through the Pi adapter and record requested/effective effort values.
+- Pi exposes `clampThinkingLevel(model, level)`, which maps unsupported requested levels to the nearest supported level. `diffwarden` mirrors that behavior through the Pi adapter and records requested/effective effort values.
 - The lower-level agent package supports TypeBox-schema tools, validated tool arguments, `beforeToolCall`, `afterToolCall`, and tool results with `terminate: true`.
 - A typed terminating `review_output` tool is the preferred structured-output path for Pi.
 - Pi includes read-only tool factory exports, including `createReadOnlyTools`, plus individual read/search/list tool factories. The adapter should construct an explicitly read-only tool set rather than relying on defaults.
@@ -973,7 +973,11 @@ Rules:
 - Secrets in config must be env var references only. Do not support literal API keys in committed or user config.
 - Pi is the recommended default reviewer profile because it supports the broadest provider surface. Claude subscription users should configure a Claude profile, Cursor subscription users should configure a Cursor profile, and other provider routes should generally use Pi profiles.
 
-The public `effort` vocabulary follows Pi thinking levels: `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. Adapters are responsible for mapping those values to SDK-specific controls, clamping through model metadata where available, or reporting best-effort/ignored behavior when unsupported.
+The public `effort` vocabulary follows Pi thinking levels: `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. Adapter mappings are:
+
+- Pi: clamp the requested level through model metadata, send the effective `thinkingLevel`, and record requested/effective/supported effort metadata.
+- Claude: `off` disables thinking; `minimal` and `low` map to `low`; `medium` maps to `medium`; `high` maps to `high`; `xhigh` maps to `max`.
+- Cursor: record the requested value as ignored until the SDK exposes an effort control.
 
 ## 16. Security and side effects
 
@@ -1158,12 +1162,12 @@ Deliverables:
 
 ## 20. Open decisions
 
-1. Exact public `effort` adapter mappings after SDK spikes.
-2. Whether to add a separate direct executable adapter for Claude Code subscription auth later.
+1. Whether to add a separate direct executable adapter for Claude Code subscription auth later.
 
 Resolved design decisions:
 
 - Reviewer spec grammar: use `sdk[:profile]` for v1. Inline model/provider expressions are deferred.
+- Public effort mappings: Pi clamps through model metadata, Claude maps to native effort/thinking controls, and Cursor records effort as ignored until the SDK exposes a concrete control.
 - Multi-reviewer deduplication: exact file, exact line range, exact priority, and normalized-title match only. Do not fuzzy-merge findings in v1.
 - Adapter shape: adapters run SDKs and capture output; core code owns prompt assembly, parsing, validation, rendering, and aggregation.
 - Cursor sequencing: prove local SDK execution and terminal text capture first; then add a local MCP `review_output` tool with streamed `tool_call` capture as the preferred structured-output upgrade, based on `@cursor/sdk@1.0.13` exposing MCP config and tool-call events but no native JSON-schema output option.
