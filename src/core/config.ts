@@ -9,11 +9,13 @@ import { reviewerSdkSchema } from "./schema.js";
 const configFileName = "diffwarden.config.json";
 const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 const effortSchema = z.enum(effortValues);
+const transportSchema = z.enum(["sdk", "cli"]);
 
 const reviewerConfigSchema = z
   .object({
     id: z.string().min(1),
     sdk: reviewerSdkSchema.exclude(["fake"]),
+    transport: transportSchema.optional(),
     profile: z.string().min(1).optional(),
     provider: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
@@ -22,6 +24,7 @@ const reviewerConfigSchema = z
     effortCatalog: z.array(effortSchema).optional(),
     timeoutSeconds: z.number().positive().optional(),
     readonly: z.literal(true).optional(),
+    cliOptions: z.record(z.string(), z.unknown()).optional(),
     providerOptions: z.record(z.string(), z.unknown()).optional(),
     sdkOptions: z.record(z.string(), z.unknown()).optional(),
   })
@@ -48,6 +51,14 @@ export const diffwardenConfigSchema = z
         });
       }
       ids.add(reviewer.id);
+
+      if (reviewer.transport === "sdk" && isCliOnlyReviewerSdk(reviewer.sdk)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `Reviewer ${reviewer.id} must use CLI transport for sdk: ${reviewer.sdk}`,
+          path: ["reviewers", index, "transport"],
+        });
+      }
 
       if (reviewer.profile !== undefined) {
         const profileKey = `${reviewer.sdk}:${reviewer.profile}`;
@@ -219,5 +230,15 @@ function isNodeErrorWithCode(error: unknown, code: string): boolean {
     "code" in error &&
     typeof error.code === "string" &&
     error.code === code
+  );
+}
+
+function isCliOnlyReviewerSdk(sdk: string): boolean {
+  return (
+    sdk === "codex" ||
+    sdk === "gemini" ||
+    sdk === "opencode" ||
+    sdk === "grok" ||
+    sdk === "antigravity"
   );
 }

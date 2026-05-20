@@ -23,7 +23,7 @@ program
   .option("--target <target>", "review target, such as uncommitted, base:main, or commit:abc123")
   .option(
     "--reviewer <spec>",
-    "reviewer spec, such as fake, cursor, claude, pi, or pi:profile",
+    "reviewer spec, such as fake, cursor, claude, pi, codex, gemini, opencode, grok, antigravity, or pi:profile",
     collectReviewers,
     [],
   )

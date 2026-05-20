@@ -107,6 +107,48 @@ describe("runReview", () => {
     ]);
   });
 
+  it("runs CLI-only reviewers through the cli adapter registry key", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const codexAdapter = createMockAdapter("codex:cli");
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "codex",
+      adapters: {
+        "codex:cli": codexAdapter,
+      },
+    });
+
+    expect(artifact.sdk).toBe("codex");
+    expect(artifact.reviewers?.[0]).toMatchObject({
+      id: "codex",
+      sdk: "codex",
+    });
+    expect(codexAdapter.calls).toEqual([
+      {
+        phase: "preflight",
+        reviewer: {
+          id: "codex",
+          sdk: "codex",
+          transport: "cli",
+          readonly: true,
+        },
+      },
+      {
+        phase: "run",
+        reviewer: {
+          id: "codex",
+          sdk: "codex",
+          transport: "cli",
+          readonly: true,
+        },
+      },
+    ]);
+  });
+
   it("rejects reviewer profiles before adapter execution", async () => {
     repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");

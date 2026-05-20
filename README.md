@@ -25,7 +25,7 @@ diffwarden --target base:main --format json
 
 ## Current status
 
-Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, `diffwarden.config.json` discovery, reviewer sets, a shared `sdk[:profile]` reviewer-spec parser, and Cursor, Claude, and Pi Agent SDK adapters. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
+Initial TypeScript scaffold is implemented with target resolution, fake reviewer plumbing, review parsing/rendering/validation, `diffwarden.config.json` discovery, reviewer sets, a shared `sdk[:profile]` reviewer-spec parser, Cursor, Claude, and Pi Agent SDK adapters, and thin CLI transport adapters for Codex, Gemini, OpenCode, Grok, Antigravity, plus CLI variants of Cursor, Claude, and Pi. The planned public GitHub repository is `aurokin/diffwarden`, and the CLI binary name is `diffwarden`; npm publishing is not part of the current plan.
 
 The project requires Node `>=22.19.0`, matching the Pi SDK package family.
 
@@ -162,7 +162,40 @@ INTEGRATION_TEST_ON=1 PI_SMOKE_MODEL=anthropic/claude-opus-4-5 pnpm vitest run t
 
 The smoke test requires real Pi-compatible provider auth in the environment, such as `ANTHROPIC_API_KEY`, and may make a real model request.
 
-The intended v1 reviewer surface is the Cursor Agent SDK, Claude Agent SDK, and Pi Agent SDK. Adapters should use SDKs directly, not shell out to agent executables as the primary integration path.
+## CLI transport reviewers
+
+SDK adapters remain the default for `cursor`, `claude`, and `pi`. CLI-only reviewers use `transport: "cli"` automatically:
+
+```bash
+diffwarden --target uncommitted --reviewer codex
+diffwarden --target uncommitted --reviewer gemini
+diffwarden --target uncommitted --reviewer opencode
+diffwarden --target uncommitted --reviewer grok
+diffwarden --target uncommitted --reviewer antigravity
+```
+
+Configured reviewers can also opt an SDK-backed family into the CLI transport:
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "claude-cli",
+      "sdk": "claude",
+      "transport": "cli",
+      "model": "sonnet",
+      "effort": "high",
+      "cliOptions": {
+        "executable": "/Users/auro/.local/bin/claude"
+      }
+    }
+  ]
+}
+```
+
+The shared CLI adapter performs executable preflight, runs the selected CLI in its most restrictive documented review mode, and returns either native structured output or text for the core parser. `cliOptions.executable` can point at non-standard installs, such as local `pi` or `agy` binaries. CLI auth is delegated to the underlying executable, so live runs require each tool to be logged in or configured through its own environment variables. Capability metadata is conservative; OpenCode and Antigravity currently report `prompt-only` read-only behavior.
+
+The intended primary reviewer surface is still the Cursor Agent SDK, Claude Agent SDK, and Pi Agent SDK when those SDKs are available. CLI transports exist for engines without a usable SDK path and for subscription-auth workflows where the executable is the stable integration point.
 
 Configuration is required for real SDK runs. The default reviewer should be a configured Pi profile because Pi supports the broadest provider surface. Claude subscription users should configure the Claude Agent SDK, Cursor subscription users should configure the Cursor Agent SDK, and other providers should generally route through Pi profiles.
 

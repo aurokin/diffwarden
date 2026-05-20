@@ -19,7 +19,7 @@ diffwarden --target base:main --reviewer-set 2
 diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 ```
 
-Agents call the CLI. The CLI resolves the target diff, runs one or more reviewer agents through SDK adapters, validates the structured result, and prints readable Markdown or JSON.
+Agents call the CLI. The CLI resolves the target diff, runs one or more reviewer agents through SDK or CLI transport adapters, validates the structured result, and prints readable Markdown or JSON.
 
 ## 2. Goals
 
@@ -27,11 +27,12 @@ Agents call the CLI. The CLI resolves the target diff, runs one or more reviewer
 2. Recreate the useful parts of Codex `/review` outside Codex.
 3. Use Codex's review rubric and review output shape as the normalized contract.
 4. Support Cursor Agent SDK, Claude Agent SDK, and Pi Agent SDK in v1.
-5. Keep SDK differences behind reviewer profiles and adapters without changing the CLI contract.
-6. Keep code review read-only by default.
-7. Produce output that is useful to both humans and automation.
-8. Support one, two, or many reviewer agents in one command, including multiple instances of the same SDK with different provider/model configuration.
-9. Ship as a public GitHub repository named `aurokin/diffwarden`; npm distribution is deferred.
+5. Support thin CLI transports for Codex, Gemini, OpenCode, Pi, Cursor, Antigravity, Grok, and Claude where the executable is the practical integration path.
+6. Keep engine differences behind reviewer profiles and adapters without changing the CLI contract.
+7. Keep code review read-only by default.
+8. Produce output that is useful to both humans and automation.
+9. Support one, two, or many reviewer agents in one command, including multiple instances of the same SDK with different provider/model configuration.
+10. Ship as a public GitHub repository named `aurokin/diffwarden`; npm distribution is deferred.
 
 ## 3. Scope boundaries
 
@@ -45,9 +46,8 @@ Permanent non-goals for this CLI:
 
 Deferred, but potentially useful later:
 
-1. Direct executable adapters. The v1 integration path is SDK-first; SDKs may invoke their own executables internally if that is how the SDK operates.
-2. Custom reviewer instructions.
-3. Read-only PR target resolution, if it can preserve the same output contract without adding posting behavior.
+1. Custom reviewer instructions.
+2. Read-only PR target resolution, if it can preserve the same output contract without adding posting behavior.
 
 ## 4. Primary user stories
 
@@ -152,6 +152,11 @@ Reviewer specs should stay compact and SDK-agnostic at the public boundary:
 cursor                            Cursor SDK with default config.
 claude                            Claude SDK with default config.
 pi                                Pi SDK with default config.
+codex                             Codex CLI transport.
+gemini                            Gemini CLI transport.
+opencode                          OpenCode CLI transport.
+grok                              Grok CLI transport.
+antigravity                       Antigravity CLI transport.
 pi:openrouter-high                Named Pi reviewer profile or provider config.
 claude:sonnet                     Named Claude reviewer profile or model config.
 cursor:fast                       Named Cursor reviewer profile or model config.
@@ -172,7 +177,9 @@ Model, effort, provider, and SDK-specific options should be handled in two layer
 1. Simple one-off flags for the single-reviewer path, such as `--reviewer claude --model sonnet --effort high`.
 2. Named reviewer profiles for multi-reviewer or provider-heavy setups, such as `--reviewer pi:openrouter-high`.
 
-Avoid turning the main CLI into a generic SDK option transport. Provider API keys, base URLs, OpenRouter/OpenCode-style provider selection, effort mappings, and SDK-specific options should live in config profiles and be passed to adapters as structured reviewer config.
+Avoid turning the main CLI into a generic SDK option transport. Provider API keys, base URLs, OpenRouter/OpenCode-style provider selection, effort mappings, executable paths, and SDK-specific options should live in config profiles and be passed to adapters as structured reviewer config.
+
+Configured reviewers may set `transport: "cli"` to opt an SDK-backed family into the direct executable adapter. CLI-only families default to `transport: "cli"`. `cliOptions.executable` can point at non-standard installs without changing the public reviewer spec.
 
 ### 5.3 Model and effort selection
 
@@ -273,7 +280,7 @@ export type ReviewError = {
       | "validation_failed";
     message: string;
     reviewer_id?: string;
-    sdk?: "cursor" | "claude" | "pi";
+    sdk?: "cursor" | "claude" | "pi" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
     hint?: string;
   };
 };
@@ -327,7 +334,7 @@ The CLI should wrap model output with local metadata.
 ```ts
 export type ReviewArtifact = {
   schema_version: 1;
-  sdk?: "cursor" | "claude" | "pi";
+  sdk?: "cursor" | "claude" | "pi" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
   reviewers?: ReviewReviewerArtifact[];
   cwd: string;
   target: ReviewTargetResolved;
@@ -343,7 +350,7 @@ For single-reviewer runs, `sdk` and `result` are enough for simple consumers. Fo
 ```ts
 export type ReviewReviewerArtifact = {
   id: string;
-  sdk: "cursor" | "claude" | "pi";
+  sdk: "cursor" | "claude" | "pi" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
   profile?: string;
   provider?: string;
   model?: string;
@@ -363,7 +370,8 @@ Reviewer config is the internal representation produced from CLI flags, environm
 ```ts
 export type ReviewReviewerConfig = {
   id: string;
-  sdk: "cursor" | "claude" | "pi";
+  sdk: "cursor" | "claude" | "pi" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
+  transport?: "sdk" | "cli";
   profile?: string;
   provider?: string;
   model?: string;
@@ -372,6 +380,7 @@ export type ReviewReviewerConfig = {
   effortCatalog?: Array<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | string>;
   timeoutMs?: number;
   readonly: boolean;
+  cliOptions?: Record<string, unknown>;
   sdkOptions?: Record<string, unknown>;
   providerOptions?: Record<string, unknown>;
 };
@@ -485,7 +494,7 @@ diffwarden/
       cursor.ts
       claude.ts
       pi.ts
-      codex.ts                  optional later
+      cli.ts
   test/
     target.test.ts
     parse.test.ts
@@ -516,7 +525,7 @@ parse CLI args
 
 ```ts
 export interface ReviewAdapter {
-  name: "cursor" | "claude" | "pi";
+  name: string;
   run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput>;
 }
 
@@ -646,7 +655,7 @@ Initial behavior:
 
 Important caveat:
 
-- Claude Agent SDK auth may differ from Claude Code subscription or Max auth. If preserving existing Claude Code CLI auth matters, implement a separate `claude-cli` adapter later.
+- Claude Agent SDK auth may differ from Claude Code subscription or Max auth. Configured Claude reviewers can use `transport: "cli"` when preserving Claude Code executable auth is more important than the SDK path.
 
 ### 11.3 Pi adapter, v1
 
@@ -659,9 +668,22 @@ Use Pi Agent SDK directly.
 - Return `{ structured }`.
 - Support named provider/profile configuration so callers can run multiple Pi reviewers with different providers.
 
-### 11.4 Codex adapter, optional
+### 11.4 CLI transport adapters
 
-Codex remains the semantic reference. A Codex adapter can be added later if the local Codex CLI exposes review behavior in a stable way.
+Direct executable adapters are thin transports. They must not own target resolution, prompt construction, parsing, validation, rendering, or aggregation.
+
+Implemented CLI families:
+
+- Codex CLI uses `codex exec` with a read-only sandbox, JSON schema, and `--output-last-message`.
+- Claude CLI uses `claude -p` with JSON output, JSON schema, no session persistence, and read-oriented tools.
+- Cursor CLI uses `cursor-agent -p` with JSON output, plan mode, sandbox enabled, and workspace scoping.
+- Gemini CLI uses JSON output and plan approval mode.
+- OpenCode CLI uses JSONL output and `--pure`; its read-only capability is prompt-only until a supported per-run permission-deny path is proven.
+- Pi CLI uses JSON mode, no session, explicit read/list/search tools, and extension/skill/template/theme disabling.
+- Grok CLI uses JSON output, plan mode, disabled web search/subagents/memory, and bounded turns.
+- Antigravity CLI uses print mode and sandbox mode; its read-only capability is prompt-only until stronger executable-level controls are documented.
+
+Each CLI adapter must run executable preflight, report `readonlyCapability`, pass `model` and `effort` only where the executable supports them, and return either `{ structured }` or `{ text }` to the common parser.
 
 ### 11.5 Point-in-time SDK research
 
@@ -1096,7 +1118,7 @@ Deliverables:
 - `src/adapters/cursor.ts`
 - `src/adapters/claude.ts`
 - `src/adapters/pi.ts`
-- SDK-backed execution only; no direct executable adapter as the primary path.
+- SDK-backed execution remains the primary path for Cursor, Claude, and Pi.
 - shared adapter output handling for `{ structured }`, `{ text }`, capture metadata, timeout, and execution errors.
 - structured output support where each SDK has a reliable schema/tool mechanism.
 - Cursor text-output proof through local SDK execution first; then structured-output proof through a local MCP `review_output` tool and captured SDK `tool_call` event args.

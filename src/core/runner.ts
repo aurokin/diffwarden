@@ -1,4 +1,5 @@
 import { claudeAdapter } from "../adapters/claude.js";
+import { createCliAdapter } from "../adapters/cli.js";
 import { cursorAdapter } from "../adapters/cursor.js";
 import { fakeAdapter } from "../adapters/fake.js";
 import { piAdapter } from "../adapters/pi.js";
@@ -39,7 +40,7 @@ export type RunReviewOptions = {
   strict?: boolean;
   config?: DiffwardenConfig;
   env?: NodeJS.ProcessEnv;
-  adapters?: Partial<Record<ReviewReviewerConfig["sdk"], ReviewAdapter>>;
+  adapters?: Partial<Record<string, ReviewAdapter>>;
 };
 
 export async function runReview(options: RunReviewOptions): Promise<ReviewArtifact> {
@@ -294,9 +295,9 @@ async function preflightReviewer(options: {
   cwd: string;
   reviewer: ReviewReviewerConfig;
   env: NodeJS.ProcessEnv;
-  adapters?: Partial<Record<ReviewReviewerConfig["sdk"], ReviewAdapter>>;
+  adapters?: Partial<Record<string, ReviewAdapter>>;
 }): Promise<ReviewerContext> {
-  const adapter = getAdapter(options.reviewer.sdk, options.adapters);
+  const adapter = getAdapter(options.reviewer, options.adapters);
   const abortController = new AbortController();
   const start = Date.now();
   const preflightAdapter = adapter.preflight;
@@ -569,29 +570,41 @@ async function withTimeout<T>(
 }
 
 function getAdapter(
-  sdk: ReviewReviewerConfig["sdk"],
-  overrides: Partial<Record<ReviewReviewerConfig["sdk"], ReviewAdapter>> | undefined,
+  reviewer: ReviewReviewerConfig,
+  overrides: Partial<Record<string, ReviewAdapter>> | undefined,
 ): ReviewAdapter {
-  const override = overrides?.[sdk];
+  const adapterKey = reviewerAdapterKey(reviewer);
+  const override = overrides?.[adapterKey] ?? overrides?.[reviewer.sdk];
   if (override !== undefined) {
     return override;
   }
 
-  if (sdk === "fake") {
+  if (reviewer.transport === "cli") {
+    if (reviewer.sdk === "fake") {
+      throw invalidCli("Fake reviewer does not support CLI transport");
+    }
+    return createCliAdapter(reviewer.sdk);
+  }
+
+  if (reviewer.sdk === "fake") {
     return fakeAdapter;
   }
 
-  if (sdk === "cursor") {
+  if (reviewer.sdk === "cursor") {
     return cursorAdapter;
   }
 
-  if (sdk === "claude") {
+  if (reviewer.sdk === "claude") {
     return claudeAdapter;
   }
 
-  if (sdk === "pi") {
+  if (reviewer.sdk === "pi") {
     return piAdapter;
   }
 
-  throw invalidCli(`Reviewer is not implemented yet: ${sdk}`);
+  return createCliAdapter(reviewer.sdk);
+}
+
+function reviewerAdapterKey(reviewer: ReviewReviewerConfig): string {
+  return `${reviewer.sdk}:${reviewer.transport ?? "sdk"}`;
 }

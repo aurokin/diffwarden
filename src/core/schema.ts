@@ -164,7 +164,17 @@ export const reviewTargetResolvedSchema = z.object({
   changed_files: z.array(z.string()),
 });
 
-export const reviewerSdkSchema = z.enum(["cursor", "claude", "pi", "fake"]);
+export const reviewerSdkSchema = z.enum([
+  "cursor",
+  "claude",
+  "pi",
+  "codex",
+  "gemini",
+  "opencode",
+  "grok",
+  "antigravity",
+  "fake",
+]);
 export const adapterPreflightCheckSchema = z.object({
   name: z.string().min(1),
   status: z.enum(["passed", "skipped", "warning"]),

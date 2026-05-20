@@ -88,6 +88,44 @@ describe("loadDiffwardenConfig", () => {
       exitCode: 2,
     });
   });
+
+  it("loads CLI transport configuration for executable-backed reviewers", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [
+        {
+          id: "codex-cli",
+          sdk: "codex",
+          transport: "cli",
+          cliOptions: {
+            executable: "/opt/homebrew/bin/codex",
+          },
+        },
+      ],
+    });
+
+    const loaded = await loadDiffwardenConfig({ cwd: root, repoRoot: root });
+
+    expect(loaded?.config.reviewers?.[0]).toMatchObject({
+      id: "codex-cli",
+      sdk: "codex",
+      transport: "cli",
+      cliOptions: {
+        executable: "/opt/homebrew/bin/codex",
+      },
+    });
+  });
+
+  it("rejects SDK transport for CLI-only reviewers", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [{ id: "codex-sdk", sdk: "codex", transport: "sdk" }],
+    });
+
+    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toThrow(
+      "must use CLI transport",
+    );
+  });
 });
 
 describe("initDiffwardenConfig", () => {

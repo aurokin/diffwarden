@@ -41,8 +41,18 @@ Use the upstream repository for the current SDK docs, JSON mode docs, extension 
 
 - OpenAI Codex repository: https://github.com/openai/codex
 - Local reference inspected on 2026-05-14: `/Users/auro/code/upstream/codex` at commit `02a7205250`.
+- Local CLI/source refreshed on 2026-05-20: `/Users/auro/code/upstream/codex` at commit `c5bd131567b3`; `codex exec` is the CLI transport path because `codex review` is a specialized wrapper and does not expose the same JSON-schema contract.
 
 Use Codex as the semantic reference for review behavior, especially its review rubric and review output model. Do not duplicate large Codex prompt or protocol excerpts here; link to the upstream source and copy only what the implementation needs into source-controlled constants with attribution.
+
+## CLI transport references
+
+- Gemini CLI repository: https://github.com/google-gemini/gemini-cli
+- OpenCode repository: https://github.com/sst/opencode
+- Grok CLI docs: https://docs.x.ai/docs/grok-cli/overview
+- Antigravity CLI docs: https://www.google.com/antigravity
+
+Point-in-time local research on 2026-05-20 inspected installed executables for Codex, Claude, Cursor Agent, Gemini, OpenCode, Pi, Grok, and Antigravity. The direct CLI adapter keeps those details in `src/adapters/cli.ts`; this file remains a route map rather than a copy of volatile CLI help output.
 
 ## Local upstream clones, if present
 
@@ -50,6 +60,8 @@ These are convenience working copies on Auro's machine, not portable repo depend
 
 ```text
 /Users/auro/code/upstream/codex
+/Users/auro/code/upstream/gemini-cli
+/Users/auro/code/upstream/opencode
 /Users/auro/code/upstream/cursor-cookbook
 /Users/auro/code/upstream/claude-agent-sdk-typescript
 /Users/auro/code/upstream/pi-mono

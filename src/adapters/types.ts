@@ -15,7 +15,17 @@ export type ReviewAdapterInput = {
 
 export type ReviewReviewerConfig = {
   id: string;
-  sdk: "fake" | "cursor" | "claude" | "pi";
+  sdk:
+    | "fake"
+    | "cursor"
+    | "claude"
+    | "pi"
+    | "codex"
+    | "gemini"
+    | "opencode"
+    | "grok"
+    | "antigravity";
+  transport?: "sdk" | "cli";
   profile?: string;
   provider?: string;
   model?: string;
@@ -24,6 +34,7 @@ export type ReviewReviewerConfig = {
   effortCatalog?: string[];
   timeoutMs?: number;
   readonly: boolean;
+  cliOptions?: Record<string, unknown>;
   sdkOptions?: Record<string, unknown>;
   providerOptions?: Record<string, unknown>;
 };
@@ -66,7 +77,7 @@ export type ReviewAdapterPreflightResult = {
 };
 
 export interface ReviewAdapter {
-  name: ReviewReviewerConfig["sdk"];
+  name: string;
   preflight?(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult>;
   run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput>;
 }

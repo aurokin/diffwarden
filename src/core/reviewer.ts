@@ -2,7 +2,17 @@ import type { ReviewReviewerConfig } from "../adapters/types.js";
 import type { DiffwardenConfig } from "./config.js";
 import { invalidCli, invalidConfig } from "./errors.js";
 
-const reviewerSdkValues = ["fake", "cursor", "claude", "pi"] as const;
+const reviewerSdkValues = [
+  "fake",
+  "cursor",
+  "claude",
+  "pi",
+  "codex",
+  "gemini",
+  "opencode",
+  "grok",
+  "antigravity",
+] as const;
 const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
 type ReviewerSdk = (typeof reviewerSdkValues)[number];
@@ -89,14 +99,15 @@ export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewRe
 
   const timeoutSeconds = options.timeoutSeconds ?? options.config?.timeoutSeconds;
 
-  return {
+  return validateCliTransportOverrides({
     id: parsed.sdk,
     sdk: parsed.sdk,
+    ...defaultReviewerTransport(parsed.sdk),
     ...defaultReviewerModel(parsed.sdk, options.model),
     ...(options.effort !== undefined ? { effort: options.effort } : {}),
     ...reviewerTimeout(timeoutSeconds),
     readonly: true,
-  };
+  });
 }
 
 function resolveReviewerSpecs(options: ResolveReviewersOptions): string[] {
@@ -200,6 +211,14 @@ function defaultReviewerModel(
   return {};
 }
 
+function defaultReviewerTransport(sdk: ReviewerSdk): Pick<ReviewReviewerConfig, "transport"> {
+  if (isCliOnlyReviewerSdk(sdk)) {
+    return { transport: "cli" };
+  }
+
+  return {};
+}
+
 function materializeConfiguredReviewer(
   config: DiffwardenConfig,
   configured: NonNullable<DiffwardenConfig["reviewers"]>[number],
@@ -224,9 +243,12 @@ function materializeConfiguredReviewer(
           ? Math.round(config.timeoutSeconds * 1000)
           : undefined;
 
-  return {
+  return validateCliTransportOverrides({
     id: configured.id,
     sdk: configured.sdk,
+    ...(configured.transport !== undefined
+      ? { transport: configured.transport }
+      : defaultReviewerTransport(configured.sdk)),
     ...(configured.profile !== undefined ? { profile: configured.profile } : {}),
     ...(configured.provider !== undefined ? { provider: configured.provider } : {}),
     ...(model !== undefined ? { model } : {}),
@@ -238,8 +260,9 @@ function materializeConfiguredReviewer(
     ...(configured.providerOptions !== undefined
       ? { providerOptions: configured.providerOptions }
       : {}),
+    ...(configured.cliOptions !== undefined ? { cliOptions: configured.cliOptions } : {}),
     ...(configured.sdkOptions !== undefined ? { sdkOptions: configured.sdkOptions } : {}),
-  };
+  });
 }
 
 function findConfiguredReviewerById(
@@ -310,6 +333,43 @@ function isReviewerSdk(value: string | undefined): value is ReviewerSdk {
 
 function isReviewEffort(value: string): value is ReviewEffort {
   return effortValues.some((effort) => effort === value);
+}
+
+function isCliOnlyReviewerSdk(sdk: ReviewerSdk): boolean {
+  return (
+    sdk === "codex" ||
+    sdk === "gemini" ||
+    sdk === "opencode" ||
+    sdk === "grok" ||
+    sdk === "antigravity"
+  );
+}
+
+function validateCliTransportOverrides(reviewer: ReviewReviewerConfig): ReviewReviewerConfig {
+  const transport = reviewer.transport ?? "sdk";
+  if (transport !== "cli") {
+    return reviewer;
+  }
+
+  if (!cliTransportSupportsModel(reviewer.sdk) && reviewer.model !== undefined) {
+    throw invalidCli(`${reviewer.sdk} CLI transport does not support per-run model overrides`);
+  }
+
+  if (!cliTransportSupportsEffort(reviewer.sdk) && reviewer.effort !== undefined) {
+    throw invalidCli(`${reviewer.sdk} CLI transport does not support per-run effort overrides`);
+  }
+
+  return reviewer;
+}
+
+function cliTransportSupportsModel(sdk: ReviewerSdk): boolean {
+  return sdk !== "fake" && sdk !== "antigravity";
+}
+
+function cliTransportSupportsEffort(sdk: ReviewerSdk): boolean {
+  return (
+    sdk === "codex" || sdk === "claude" || sdk === "pi" || sdk === "opencode" || sdk === "grok"
+  );
 }
 
 function isValidProfileName(profile: string): boolean {

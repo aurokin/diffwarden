@@ -11,6 +11,11 @@ describe("parseReviewerSpec", () => {
     expect(parseReviewerSpec("pi")).toEqual({ sdk: "pi" });
     expect(parseReviewerSpec("claude")).toEqual({ sdk: "claude" });
     expect(parseReviewerSpec("cursor")).toEqual({ sdk: "cursor" });
+    expect(parseReviewerSpec("codex")).toEqual({ sdk: "codex" });
+    expect(parseReviewerSpec("gemini")).toEqual({ sdk: "gemini" });
+    expect(parseReviewerSpec("opencode")).toEqual({ sdk: "opencode" });
+    expect(parseReviewerSpec("grok")).toEqual({ sdk: "grok" });
+    expect(parseReviewerSpec("antigravity")).toEqual({ sdk: "antigravity" });
   });
 
   it("parses sdk:profile reviewer specs", () => {
@@ -213,6 +218,70 @@ describe("resolveReviewerConfig", () => {
       model: "sonnet",
     });
     expect(resolveReviewerConfig({ spec: "pi" })).not.toHaveProperty("model");
+  });
+
+  it("defaults CLI-only reviewers to CLI transport", () => {
+    expect(resolveReviewerConfig({ spec: "codex" })).toMatchObject({
+      sdk: "codex",
+      transport: "cli",
+    });
+    expect(resolveReviewerConfig({ spec: "gemini" })).toMatchObject({
+      sdk: "gemini",
+      transport: "cli",
+    });
+    expect(resolveReviewerConfig({ spec: "opencode" })).toMatchObject({
+      sdk: "opencode",
+      transport: "cli",
+    });
+    expect(resolveReviewerConfig({ spec: "grok" })).toMatchObject({
+      sdk: "grok",
+      transport: "cli",
+    });
+    expect(resolveReviewerConfig({ spec: "antigravity" })).toMatchObject({
+      sdk: "antigravity",
+      transport: "cli",
+    });
+  });
+
+  it("preserves explicit CLI transport and options for SDK-backed reviewer families", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "claude-cli",
+        config: {
+          reviewers: [
+            {
+              id: "claude-cli",
+              sdk: "claude",
+              transport: "cli",
+              cliOptions: { executable: "/usr/local/bin/claude" },
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      id: "claude-cli",
+      sdk: "claude",
+      transport: "cli",
+      cliOptions: { executable: "/usr/local/bin/claude" },
+    });
+  });
+
+  it("rejects unsupported CLI transport overrides during reviewer resolution", () => {
+    expect(() =>
+      resolveReviewerConfig({
+        spec: "antigravity",
+        model: "gemini-pro",
+      }),
+    ).toThrow("antigravity CLI transport does not support per-run model overrides");
+
+    expect(() =>
+      resolveReviewerConfigs({
+        reviewers: ["pi", "gemini-effort"],
+        config: {
+          reviewers: [{ id: "gemini-effort", sdk: "gemini", effort: "high" }],
+        },
+      }),
+    ).toThrow("gemini CLI transport does not support per-run effort overrides");
   });
 });
 
