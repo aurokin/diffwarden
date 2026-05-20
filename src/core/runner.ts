@@ -88,10 +88,7 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
   }
 
   const timingMs = Date.now() - start;
-  const result =
-    reviewerArtifacts.length === 1 && successfulReviewerArtifacts.length === 1
-      ? successfulReviewerArtifacts[0]?.result
-      : mergeReviewerResults(successfulReviewerArtifacts);
+  const result = buildTopLevelResult(successfulReviewerArtifacts, reviewerArtifacts.length);
 
   if (result === undefined) {
     throw invalidCli("No reviewers were selected");
@@ -420,8 +417,26 @@ function enforceStrictValidation(validation: ReviewValidation): void {
   }
 }
 
+function buildTopLevelResult(
+  reviewers: SuccessfulReviewerArtifact[],
+  reviewerCount: number,
+): ReviewArtifactResult | undefined {
+  const [onlyReviewer] = reviewers;
+  if (reviewerCount === 1 && onlyReviewer !== undefined) {
+    return {
+      ...onlyReviewer.result,
+      findings: onlyReviewer.result.findings.map((finding) => ({
+        ...finding,
+        reviewer_ids: [onlyReviewer.id],
+      })),
+    };
+  }
+
+  return mergeReviewerResults(reviewers);
+}
+
 function mergeReviewerResults(reviewers: SuccessfulReviewerArtifact[]): ReviewArtifactResult {
-  const findings = reviewers.flatMap((reviewer) => reviewer.result.findings);
+  const findings = mergeReviewerFindings(reviewers);
   const incorrect = reviewers.some(
     (reviewer) =>
       reviewer.result.overall_correctness === "patch is incorrect" ||
@@ -447,6 +462,50 @@ function mergeReviewerResults(reviewers: SuccessfulReviewerArtifact[]): ReviewAr
     overall_explanation: explanations.join("\n\n"),
     overall_confidence_score: confidence,
   };
+}
+
+function mergeReviewerFindings(
+  reviewers: SuccessfulReviewerArtifact[],
+): ReviewArtifactResult["findings"] {
+  const findingsByKey = new Map<string, ReviewArtifactResult["findings"][number]>();
+
+  for (const reviewer of reviewers) {
+    for (const finding of reviewer.result.findings) {
+      const key = findingDeduplicationKey(finding);
+      const existing = findingsByKey.get(key);
+      if (existing === undefined) {
+        findingsByKey.set(key, {
+          ...finding,
+          reviewer_ids: [reviewer.id],
+        });
+        continue;
+      }
+
+      existing.reviewer_ids = [...new Set([...(existing.reviewer_ids ?? []), reviewer.id])];
+    }
+  }
+
+  return [...findingsByKey.values()];
+}
+
+function findingDeduplicationKey(finding: ReviewArtifactResult["findings"][number]): string {
+  const range = finding.code_location.line_range;
+  return [
+    normalizeTitle(finding.title),
+    normalizeBody(finding.body),
+    finding.priority ?? "none",
+    finding.code_location.absolute_file_path,
+    range.start,
+    range.end,
+  ].join("\0");
+}
+
+function normalizeTitle(title: string): string {
+  return title.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function normalizeBody(body: string): string {
+  return body.trim().replace(/\s+/g, " ");
 }
 
 function aggregateValidationSeed(reviewers: SuccessfulReviewerArtifact[]): ReviewValidation {

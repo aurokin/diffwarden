@@ -70,6 +70,48 @@ describe("parseReviewOutput", () => {
     expect(parsed.result.findings[0]?.priority).toBeUndefined();
   });
 
+  it("rejects reviewer-supplied attribution fields", () => {
+    const parsed = parseReviewOutput({
+      structured: {
+        ...validReviewResult,
+        findings: [
+          {
+            ...validReviewResult.findings[0],
+            reviewer_ids: ["other-reviewer"],
+          },
+        ],
+      },
+    });
+
+    expect(parsed.validation.parse_mode).toBe("fallback-text");
+    expect(parsed.validation.valid_schema).toBe(false);
+  });
+
+  it("rejects extra properties at every reviewer output schema level", () => {
+    const parsed = parseReviewOutput({
+      structured: {
+        ...validReviewResult,
+        extra: true,
+        findings: [
+          {
+            ...validReviewResult.findings[0],
+            code_location: {
+              ...validReviewResult.findings[0]?.code_location,
+              extra: true,
+              line_range: {
+                ...validReviewResult.findings[0]?.code_location.line_range,
+                extra: true,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(parsed.validation.parse_mode).toBe("fallback-text");
+    expect(parsed.validation.valid_schema).toBe(false);
+  });
+
   it("rejects unsupported overall correctness verdicts", () => {
     const parsed = parseReviewOutput({
       structured: {

@@ -13,40 +13,53 @@ export const artifactOverallCorrectnessSchema = z.union([
   z.literal("unknown"),
 ]);
 
-export const reviewFindingSchema = z.object({
-  title: z.string().min(1),
-  body: z.string(),
-  confidence_score: z.number().min(0).max(1),
-  priority: reviewPrioritySchema.optional(),
-  code_location: z.object({
-    absolute_file_path: z.string().min(1),
-    line_range: z
+export const reviewFindingSchema = z
+  .object({
+    title: z.string().min(1),
+    body: z.string(),
+    confidence_score: z.number().min(0).max(1),
+    priority: reviewPrioritySchema.optional(),
+    code_location: z
       .object({
-        start: z.number().int().positive(),
-        end: z.number().int().positive(),
+        absolute_file_path: z.string().min(1),
+        line_range: z
+          .object({
+            start: z.number().int().positive(),
+            end: z.number().int().positive(),
+          })
+          .strict()
+          .refine((range) => range.start <= range.end, {
+            message: "line_range.start must be less than or equal to line_range.end",
+            path: ["end"],
+          }),
       })
-      .refine((range) => range.start <= range.end, {
-        message: "line_range.start must be less than or equal to line_range.end",
-        path: ["end"],
-      }),
-  }),
+      .strict(),
+  })
+  .strict();
+
+export const reviewArtifactFindingSchema = reviewFindingSchema.extend({
+  reviewer_ids: z.array(z.string().min(1)).optional(),
 });
 
-export const reviewResultSchema = z.object({
-  findings: z.array(reviewFindingSchema),
-  overall_correctness: overallCorrectnessSchema,
-  overall_explanation: z.string(),
-  overall_confidence_score: z.number().min(0).max(1),
-});
+export const reviewResultSchema = z
+  .object({
+    findings: z.array(reviewFindingSchema),
+    overall_correctness: overallCorrectnessSchema,
+    overall_explanation: z.string(),
+    overall_confidence_score: z.number().min(0).max(1),
+  })
+  .strict();
 
 export const reviewResultJsonSchema = {
   type: "object",
+  additionalProperties: false,
   required: ["findings", "overall_correctness", "overall_explanation", "overall_confidence_score"],
   properties: {
     findings: {
       type: "array",
       items: {
         type: "object",
+        additionalProperties: false,
         required: ["title", "body", "confidence_score", "code_location"],
         properties: {
           title: {
@@ -67,6 +80,7 @@ export const reviewResultJsonSchema = {
           },
           code_location: {
             type: "object",
+            additionalProperties: false,
             required: ["absolute_file_path", "line_range"],
             properties: {
               absolute_file_path: {
@@ -75,6 +89,7 @@ export const reviewResultJsonSchema = {
               },
               line_range: {
                 type: "object",
+                additionalProperties: false,
                 required: ["start", "end"],
                 properties: {
                   start: {
@@ -108,6 +123,7 @@ export const reviewResultJsonSchema = {
 } as const;
 
 export const reviewArtifactResultSchema = reviewResultSchema.extend({
+  findings: z.array(reviewArtifactFindingSchema),
   overall_correctness: artifactOverallCorrectnessSchema,
 });
 
@@ -245,6 +261,7 @@ export type ReviewPriority = z.infer<typeof reviewPrioritySchema>;
 export type OverallCorrectness = z.infer<typeof overallCorrectnessSchema>;
 export type ArtifactOverallCorrectness = z.infer<typeof artifactOverallCorrectnessSchema>;
 export type ReviewFinding = z.infer<typeof reviewFindingSchema>;
+export type ReviewArtifactFinding = z.infer<typeof reviewArtifactFindingSchema>;
 export type ReviewResult = z.infer<typeof reviewResultSchema>;
 export type ReviewArtifactResult = z.infer<typeof reviewArtifactResultSchema>;
 export type ParseMode = z.infer<typeof parseModeSchema>;

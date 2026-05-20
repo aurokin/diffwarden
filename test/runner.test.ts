@@ -177,6 +177,102 @@ describe("runReview", () => {
     expect(claudeAdapter.calls).toHaveLength(2);
   });
 
+  it("deduplicates aggregate findings and records reviewer attribution", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const findingPath = path.join(repo, "tracked.txt");
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewers: ["pi", "claude"],
+      adapters: {
+        pi: createMockAdapter("pi", undefined, { findingFilePath: findingPath }),
+        claude: createMockAdapter("claude", undefined, { findingFilePath: findingPath }),
+      },
+    });
+
+    expect(artifact.result.findings).toHaveLength(1);
+    expect(artifact.result.findings[0]?.reviewer_ids).toEqual(["pi", "claude"]);
+  });
+
+  it("records reviewer attribution for single-reviewer top-level findings", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      adapters: {
+        pi: createMockAdapter("pi", undefined, {
+          findingFilePath: path.join(repo, "tracked.txt"),
+        }),
+      },
+    });
+
+    expect(artifact.result.findings).toHaveLength(1);
+    expect(artifact.result.findings[0]?.reviewer_ids).toEqual(["pi"]);
+    expect(artifact.reviewers?.[0]?.result?.findings[0]).not.toHaveProperty("reviewer_ids");
+  });
+
+  it("keeps non-identical same-location findings separate", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const findingPath = path.join(repo, "tracked.txt");
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewers: ["pi", "claude"],
+      adapters: {
+        pi: createMockAdapter("pi", undefined, {
+          findingFilePath: findingPath,
+          findingBody: "Pi body.",
+        }),
+        claude: createMockAdapter("claude", undefined, {
+          findingFilePath: findingPath,
+          findingBody: "Claude body.",
+        }),
+      },
+    });
+
+    expect(artifact.result.findings).toHaveLength(2);
+    expect(artifact.result.findings.map((finding) => finding.body).sort()).toEqual([
+      "Claude body.",
+      "Pi body.",
+    ]);
+  });
+
+  it("deduplicates matching findings with different confidence scores", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const findingPath = path.join(repo, "tracked.txt");
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewers: ["pi", "claude"],
+      adapters: {
+        pi: createMockAdapter("pi", undefined, {
+          findingFilePath: findingPath,
+          findingConfidence: 0.7,
+        }),
+        claude: createMockAdapter("claude", undefined, {
+          findingFilePath: findingPath,
+          findingConfidence: 0.9,
+        }),
+      },
+    });
+
+    expect(artifact.result.findings).toHaveLength(1);
+    expect(artifact.result.findings[0]?.reviewer_ids).toEqual(["pi", "claude"]);
+  });
+
   it("preflights every selected reviewer before running any reviewer", async () => {
     repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
@@ -541,6 +637,8 @@ function createMockAdapter(
     overall_correctness?: "patch is correct" | "patch is incorrect" | "unknown";
     overall_explanation?: string;
     findingFilePath?: string;
+    findingBody?: string;
+    findingConfidence?: number;
   },
 ): ReviewAdapter & {
   calls: Array<{ phase: "preflight" | "run"; reviewer: unknown }>;
@@ -571,8 +669,8 @@ function createMockAdapter(
               : [
                   {
                     title: "[P2] Invalid location",
-                    body: "Finding body.",
-                    confidence_score: 0.8,
+                    body: resultOverrides.findingBody ?? "Finding body.",
+                    confidence_score: resultOverrides.findingConfidence ?? 0.8,
                     priority: 2,
                     code_location: {
                       absolute_file_path: resultOverrides.findingFilePath,

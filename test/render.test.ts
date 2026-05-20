@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderMarkdown } from "../src/core/render.js";
-import type { ReviewArtifact, ReviewFinding } from "../src/core/schema.js";
+import type { ReviewArtifact, ReviewArtifactFinding } from "../src/core/schema.js";
 
 const artifact: ReviewArtifact = {
   schema_version: 1,
@@ -85,6 +85,57 @@ describe("renderMarkdown", () => {
     expect(markdown).toContain("- Reviewer claude failed: missing auth");
   });
 
+  it("renders finding reviewer attribution", () => {
+    const attributedFinding = finding("[P2] Attributed issue", 2, "/repo/src/client.ts", 4);
+    attributedFinding.reviewer_ids = ["pi", "claude"];
+
+    const markdown = renderMarkdown({
+      ...artifact,
+      result: {
+        ...artifact.result,
+        findings: [attributedFinding],
+      },
+    });
+
+    expect(markdown).toContain("Reported by: pi, claude");
+  });
+
+  it("renders verbose reviewer details", () => {
+    const markdown = renderMarkdown(
+      {
+        ...artifact,
+        sdk: undefined,
+        reviewers: [
+          {
+            id: "pi",
+            sdk: "pi",
+            status: "success",
+            result: artifact.result,
+            validation: artifact.validation,
+          },
+          {
+            id: "claude",
+            sdk: "claude",
+            status: "failed",
+            error: {
+              code: "missing_auth",
+              message: "missing auth",
+              exit_code: 3,
+            },
+          },
+        ],
+      },
+      { verbose: true },
+    );
+
+    expect(markdown).toContain("## Reviewer details");
+    expect(markdown).toContain("### pi");
+    expect(markdown).toContain("Parse mode: tool-output");
+    expect(markdown).toContain("### claude");
+    expect(markdown).toContain("Status: failed");
+    expect(markdown).toContain("Error: missing auth");
+  });
+
   it("sorts findings by priority and location", () => {
     const p1Finding = finding("[P1] Earlier serious issue", 1, "/repo/src/a.ts", 8);
     const p2EarlierFinding = finding("[P2] Earlier normal issue", 2, "/repo/src/a.ts", 3);
@@ -112,11 +163,11 @@ describe("renderMarkdown", () => {
 
 function finding(
   title: string,
-  priority: ReviewFinding["priority"] | undefined,
+  priority: ReviewArtifactFinding["priority"] | undefined,
   absoluteFilePath: string,
   line: number,
-): ReviewFinding {
-  const reviewFinding: ReviewFinding = {
+): ReviewArtifactFinding {
+  const reviewFinding: ReviewArtifactFinding = {
     title,
     body: "Finding body.",
     confidence_score: 0.8,

@@ -32,6 +32,7 @@ program
   .option("--effort <level>", "effort override for the selected reviewer")
   .option("--timeout <seconds>", "reviewer timeout in seconds")
   .option("--strict", "fail if any reviewer fails")
+  .option("--verbose", "include per-reviewer details in Markdown output")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--format <format>", "output format: markdown or json", "markdown")
   .option("--out <path>", "write the full ReviewArtifact JSON to a file")
@@ -44,6 +45,7 @@ program
       effort?: string;
       timeout?: string;
       strict?: boolean;
+      verbose?: boolean;
       cwd: string;
       format: string;
       out?: string;
@@ -100,7 +102,9 @@ program
       }
 
       process.stdout.write(
-        options.format === "json" ? renderJson(artifact) : renderMarkdown(artifact),
+        options.format === "json"
+          ? renderJson(artifact)
+          : renderMarkdown(artifact, { verbose: options.verbose === true }),
       );
     },
   );

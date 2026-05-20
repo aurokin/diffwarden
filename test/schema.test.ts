@@ -31,4 +31,15 @@ describe("reviewResultJsonSchema", () => {
       enum: [0, 1, 2, 3],
     });
   });
+
+  it("rejects additional properties in reviewer output", () => {
+    const findingSchema = reviewResultJsonSchema.properties.findings.items;
+
+    expect(reviewResultJsonSchema.additionalProperties).toBe(false);
+    expect(findingSchema.additionalProperties).toBe(false);
+    expect(findingSchema.properties.code_location.additionalProperties).toBe(false);
+    expect(findingSchema.properties.code_location.properties.line_range.additionalProperties).toBe(
+      false,
+    );
+  });
 });
