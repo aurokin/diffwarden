@@ -37,7 +37,7 @@ The intended v1 target surface is:
 
 `--format json` prints the full `ReviewArtifact`, including reviewers, target, result, validation, and timing metadata. Multi-reviewer runs preserve each reviewer result in `reviewers` and aggregate findings into the top-level `result`.
 
-When a config file is present and no `--reviewer` or `--reviewer-set` is provided, the config must define `defaultReviewerSet`. Without config, the development fallback reviewer remains `fake`.
+When no `--reviewer` or `--reviewer-set` is provided, config must define `defaultReviewerSet`; otherwise the CLI exits with a config-required error. For local development and credential-free tests, pass `--reviewer fake` explicitly.
 
 Create a starter user config with:
 
@@ -54,6 +54,8 @@ DIFFWARDEN_MODEL=anthropic/claude-sonnet-4-5
 DIFFWARDEN_EFFORT=high
 DIFFWARDEN_TIMEOUT_SECONDS=300
 ```
+
+Reviewer selector environment defaults are only applied after a config file is discovered. Without config, pass `--reviewer` or `--reviewer-set` explicitly.
 
 ## Cursor reviewer
 

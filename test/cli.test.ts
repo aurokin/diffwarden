@@ -28,7 +28,19 @@ describe("resolveReviewerSelectionWithEnv", () => {
         reviewers: [],
         reviewerSet: undefined,
         envOptions: { reviewers: ["pi", "claude"] },
+        allowEnvReviewerSelection: true,
       }),
     ).toEqual({ reviewers: ["pi", "claude"] });
+  });
+
+  it("ignores env reviewer defaults when config is unavailable", () => {
+    expect(
+      resolveReviewerSelectionWithEnv({
+        reviewers: [],
+        reviewerSet: undefined,
+        envOptions: { reviewers: ["pi"], reviewerSet: "2" },
+        allowEnvReviewerSelection: false,
+      }),
+    ).toEqual({});
   });
 });

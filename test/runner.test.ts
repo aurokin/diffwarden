@@ -40,6 +40,28 @@ describe("runReview", () => {
     expect(artifact.result.overall_correctness).toBe("patch is correct");
   });
 
+  it("rejects implicit reviewer selection without config", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const piAdapter = createMockAdapter("pi");
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        adapters: {
+          pi: piAdapter,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+      message: expect.stringContaining("No reviewer selected"),
+    });
+    expect(piAdapter.calls).toEqual([]);
+  });
+
   it("runs the Pi reviewer through the adapter registry", async () => {
     repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");

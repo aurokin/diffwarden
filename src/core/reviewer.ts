@@ -123,7 +123,9 @@ function resolveReviewerSpecs(options: ResolveReviewersOptions): string[] {
     throw invalidConfig("Config must define defaultReviewerSet for implicit reviewer selection");
   }
 
-  return ["fake"];
+  throw invalidConfig(
+    "No reviewer selected and no diffwarden config defaultReviewerSet is available; pass --reviewer or run diffwarden init to create a config",
+  );
 }
 
 function resolveConfiguredReviewerSet(

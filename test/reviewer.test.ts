@@ -240,8 +240,16 @@ describe("resolveReviewerConfigs", () => {
     ).toThrow("Config must define defaultReviewerSet for implicit reviewer selection");
   });
 
-  it("falls back to fake when no reviewers or config defaults exist", () => {
-    expect(resolveReviewerConfigs({}).map((reviewer) => reviewer.sdk)).toEqual(["fake"]);
+  it("requires an explicit reviewer or config default for implicit runs", () => {
+    expect(() => resolveReviewerConfigs({})).toThrow(
+      "No reviewer selected and no diffwarden config defaultReviewerSet is available",
+    );
+  });
+
+  it("still allows fake when explicitly selected", () => {
+    expect(resolveReviewerConfigs({ reviewers: ["fake"] }).map((reviewer) => reviewer.sdk)).toEqual(
+      ["fake"],
+    );
   });
 
   it("rejects ambiguous reviewer selection", () => {

@@ -73,6 +73,7 @@ program
         reviewers: options.reviewer,
         reviewerSet: options.reviewerSet,
         envOptions,
+        allowEnvReviewerSelection: loadedConfig !== undefined,
       });
       const artifact = await runReview({
         cwd: options.cwd,

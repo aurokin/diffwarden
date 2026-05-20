@@ -12,6 +12,7 @@ export function resolveReviewerSelectionWithEnv(options: {
   reviewers: string[];
   reviewerSet: string | undefined;
   envOptions: ReviewEnvOptions;
+  allowEnvReviewerSelection?: boolean;
 }): { reviewers?: string[]; reviewerSet?: string } {
   const hasCliReviewerSelection = options.reviewers.length > 0 || options.reviewerSet !== undefined;
   if (hasCliReviewerSelection) {
@@ -19,6 +20,10 @@ export function resolveReviewerSelectionWithEnv(options: {
       ...(options.reviewers.length > 0 ? { reviewers: options.reviewers } : {}),
       ...(options.reviewerSet !== undefined ? { reviewerSet: options.reviewerSet } : {}),
     };
+  }
+
+  if (options.allowEnvReviewerSelection === false) {
+    return {};
   }
 
   return {
