@@ -26,6 +26,10 @@ export function invalidCli(message: string): DiffwardenError {
   return new DiffwardenError("invalid_cli", message, 2);
 }
 
+export function invalidConfig(message: string): DiffwardenError {
+  return new DiffwardenError("invalid_config", message, 2);
+}
+
 export function missingAuth(message: string): DiffwardenError {
   return new DiffwardenError("missing_auth", message, 3);
 }

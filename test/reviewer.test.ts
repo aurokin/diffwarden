@@ -54,6 +54,102 @@ describe("resolveReviewerConfig", () => {
     ).toThrow("Reviewer profiles are not implemented yet: pi:openrouter-high");
   });
 
+  it("resolves sdk:profile specs from config", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "pi:openrouter-high",
+        config: {
+          reviewers: [
+            {
+              id: "pi-openrouter-high",
+              sdk: "pi",
+              profile: "openrouter-high",
+              provider: "openrouter",
+              model: "anthropic/claude-sonnet",
+              modelCatalog: ["anthropic/claude-sonnet"],
+              providerOptions: { baseUrlEnv: "OPENROUTER_BASE_URL" },
+              sdkOptions: { providerProfile: "openrouter" },
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      id: "pi-openrouter-high",
+      sdk: "pi",
+      profile: "openrouter-high",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet",
+      modelCatalog: ["anthropic/claude-sonnet"],
+      readonly: true,
+      providerOptions: { baseUrlEnv: "OPENROUTER_BASE_URL" },
+      sdkOptions: { providerProfile: "openrouter" },
+    });
+  });
+
+  it("resolves named reviewer ids from config", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "claude-deep",
+        config: {
+          timeoutSeconds: 30,
+          reviewers: [{ id: "claude-deep", sdk: "claude", model: "sonnet" }],
+        },
+      }),
+    ).toMatchObject({
+      id: "claude-deep",
+      sdk: "claude",
+      model: "sonnet",
+      timeoutMs: 30000,
+    });
+  });
+
+  it("does not let configured ids shadow built-in reviewer specs", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "claude",
+        config: {
+          reviewers: [{ id: "claude", sdk: "pi", model: "anthropic/claude-sonnet" }],
+        },
+      }),
+    ).toMatchObject({
+      id: "claude",
+      sdk: "claude",
+      model: "claude-sonnet-4-6",
+    });
+  });
+
+  it("rejects unknown and locally invalid configured profile selections", () => {
+    expect(() =>
+      resolveReviewerConfig({
+        spec: "pi:missing",
+        config: {
+          reviewers: [{ id: "pi-openrouter-high", sdk: "pi", profile: "openrouter-high" }],
+        },
+      }),
+    ).toThrow("Unknown reviewer profile: pi:missing");
+
+    expect(() =>
+      resolveReviewerConfig({
+        spec: "claude-missing",
+        config: {
+          reviewers: [{ id: "claude-deep", sdk: "claude", model: "sonnet" }],
+        },
+      }),
+    ).toThrow("Unknown configured reviewer: claude-missing");
+
+    expect(() =>
+      resolveReviewerConfig({
+        spec: "claude-deep",
+        model: "opus",
+        config: {
+          reviewers: [
+            { id: "claude-deep", sdk: "claude", model: "sonnet", modelCatalog: ["sonnet"] },
+          ],
+        },
+      }),
+    ).toThrow("Model is not allowed for reviewer claude-deep: opus");
+  });
+
   it("rejects effort until adapters apply it", () => {
     expect(() => resolveReviewerConfig({ spec: "pi", effort: "high" })).toThrow(
       "Reviewer effort is not implemented yet",

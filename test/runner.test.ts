@@ -106,6 +106,49 @@ describe("runReview", () => {
     expect(piAdapter.calls).toEqual([]);
   });
 
+  it("runs configured reviewer profiles through the matching adapter", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const piAdapter = createMockAdapter("pi");
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi:openrouter-high",
+      config: {
+        reviewers: [
+          {
+            id: "pi-openrouter-high",
+            sdk: "pi",
+            profile: "openrouter-high",
+            provider: "openrouter",
+            model: "anthropic/claude-sonnet",
+          },
+        ],
+      },
+      adapters: {
+        pi: piAdapter,
+      },
+    });
+
+    expect(artifact.reviewers?.[0]).toMatchObject({
+      id: "pi-openrouter-high",
+      sdk: "pi",
+      profile: "openrouter-high",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet",
+    });
+    expect(piAdapter.calls[0]?.reviewer).toMatchObject({
+      id: "pi-openrouter-high",
+      sdk: "pi",
+      profile: "openrouter-high",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet",
+      readonly: true,
+    });
+  });
+
   it("rejects effort before adapter execution", async () => {
     repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");

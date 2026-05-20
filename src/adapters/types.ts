@@ -19,7 +19,12 @@ export type ReviewReviewerConfig = {
   provider?: string;
   model?: string;
   effort?: string;
+  modelCatalog?: string[];
+  effortCatalog?: string[];
+  timeoutMs?: number;
   readonly: boolean;
+  sdkOptions?: Record<string, unknown>;
+  providerOptions?: Record<string, unknown>;
 };
 
 export type ReviewAdapterOutput = {

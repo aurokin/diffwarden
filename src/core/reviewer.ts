@@ -1,5 +1,6 @@
 import type { ReviewReviewerConfig } from "../adapters/types.js";
-import { invalidCli } from "./errors.js";
+import type { DiffwardenConfig } from "./config.js";
+import { invalidCli, invalidConfig } from "./errors.js";
 
 const reviewerSdkValues = ["fake", "cursor", "claude", "pi"] as const;
 const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -17,12 +18,36 @@ export type ResolveReviewerOptions = {
   spec: string;
   model?: string;
   effort?: string;
+  config?: DiffwardenConfig;
 };
 
 export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewReviewerConfig {
-  const parsed = parseReviewerSpec(options.spec);
+  const parsed = parseReviewerSpecIfBuiltIn(options.spec);
 
-  if (parsed.profile !== undefined) {
+  if (parsed === undefined) {
+    const configured =
+      options.config === undefined
+        ? undefined
+        : findConfiguredReviewerById(options.config, options.spec);
+    if (configured !== undefined && options.config !== undefined) {
+      return materializeConfiguredReviewer(options.config, configured, options);
+    }
+    if (options.config !== undefined) {
+      throw invalidConfig(`Unknown configured reviewer: ${options.spec}`);
+    }
+    throw invalidCli(`Reviewer is not implemented yet: ${options.spec}`);
+  }
+
+  const profile = parsed.profile;
+  if (profile !== undefined) {
+    if (options.config !== undefined) {
+      const configured = findConfiguredReviewerByProfile(
+        options.config,
+        { ...parsed, profile },
+        options.spec,
+      );
+      return materializeConfiguredReviewer(options.config, configured, options);
+    }
     throw invalidCli(`Reviewer profiles are not implemented yet: ${options.spec}`);
   }
 
@@ -95,6 +120,98 @@ function defaultReviewerModel(
   return {};
 }
 
+function materializeConfiguredReviewer(
+  config: DiffwardenConfig,
+  configured: NonNullable<DiffwardenConfig["reviewers"]>[number],
+  options: ResolveReviewerOptions,
+): ReviewReviewerConfig {
+  const model = options.model ?? configured.model;
+  const effort = options.effort ?? configured.effort;
+
+  validateConfiguredModel(configured, model);
+  validateConfiguredEffort(configured, effort);
+
+  if (effort !== undefined) {
+    parseReviewEffort(effort);
+    throw invalidCli("Reviewer effort is not implemented yet");
+  }
+
+  const timeoutMs =
+    configured.timeoutSeconds !== undefined
+      ? Math.round(configured.timeoutSeconds * 1000)
+      : config.timeoutSeconds !== undefined
+        ? Math.round(config.timeoutSeconds * 1000)
+        : undefined;
+
+  return {
+    id: configured.id,
+    sdk: configured.sdk,
+    ...(configured.profile !== undefined ? { profile: configured.profile } : {}),
+    ...(configured.provider !== undefined ? { provider: configured.provider } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(configured.modelCatalog !== undefined ? { modelCatalog: configured.modelCatalog } : {}),
+    ...(configured.effortCatalog !== undefined ? { effortCatalog: configured.effortCatalog } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    readonly: true,
+    ...(configured.providerOptions !== undefined
+      ? { providerOptions: configured.providerOptions }
+      : {}),
+    ...(configured.sdkOptions !== undefined ? { sdkOptions: configured.sdkOptions } : {}),
+  };
+}
+
+function findConfiguredReviewerById(
+  config: DiffwardenConfig,
+  spec: string,
+): NonNullable<DiffwardenConfig["reviewers"]>[number] | undefined {
+  return config.reviewers?.find((reviewer) => reviewer.id === spec);
+}
+
+function findConfiguredReviewerByProfile(
+  config: DiffwardenConfig,
+  parsed: ParsedReviewerSpec & { profile: string },
+  spec: string,
+): NonNullable<DiffwardenConfig["reviewers"]>[number] {
+  const reviewer = config.reviewers?.find(
+    (candidate) => candidate.sdk === parsed.sdk && candidate.profile === parsed.profile,
+  );
+
+  if (reviewer === undefined) {
+    throw invalidConfig(`Unknown reviewer profile: ${spec}`);
+  }
+
+  return reviewer;
+}
+
+function validateConfiguredModel(
+  reviewer: NonNullable<DiffwardenConfig["reviewers"]>[number],
+  model: string | undefined,
+): void {
+  if (model === undefined || reviewer.modelCatalog === undefined) {
+    return;
+  }
+
+  if (!reviewer.modelCatalog.includes(model)) {
+    throw invalidConfig(`Model is not allowed for reviewer ${reviewer.id}: ${model}`);
+  }
+}
+
+function validateConfiguredEffort(
+  reviewer: NonNullable<DiffwardenConfig["reviewers"]>[number],
+  effort: string | undefined,
+): void {
+  if (effort === undefined) {
+    return;
+  }
+
+  if (
+    reviewer.effortCatalog !== undefined &&
+    !reviewer.effortCatalog.some((allowedEffort) => allowedEffort === effort)
+  ) {
+    throw invalidConfig(`Effort is not allowed for reviewer ${reviewer.id}: ${effort}`);
+  }
+}
+
 function isReviewerSdk(value: string | undefined): value is ReviewerSdk {
   return reviewerSdkValues.some((sdk) => sdk === value);
 }
@@ -105,4 +222,33 @@ function isReviewEffort(value: string): value is ReviewEffort {
 
 function isValidProfileName(profile: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(profile);
+}
+
+function parseReviewerSpecIfBuiltIn(spec: string): ParsedReviewerSpec | undefined {
+  if (spec.length === 0) {
+    throw invalidCli("Reviewer spec cannot be empty");
+  }
+
+  const parts = spec.split(":");
+  if (parts.length > 2) {
+    throw invalidCli(`Invalid reviewer spec: ${spec}`);
+  }
+
+  const [sdkValue, profile] = parts;
+  if (!isReviewerSdk(sdkValue)) {
+    return undefined;
+  }
+
+  if (profile === undefined) {
+    return { sdk: sdkValue };
+  }
+
+  if (!isValidProfileName(profile)) {
+    throw invalidCli(`Invalid reviewer profile in spec: ${spec}`);
+  }
+
+  return {
+    sdk: sdkValue,
+    profile,
+  };
 }

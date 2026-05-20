@@ -3,6 +3,7 @@ import { cursorAdapter } from "../adapters/cursor.js";
 import { fakeAdapter } from "../adapters/fake.js";
 import { piAdapter } from "../adapters/pi.js";
 import type { ReviewAdapter, ReviewReviewerConfig } from "../adapters/types.js";
+import type { DiffwardenConfig } from "./config.js";
 import { parseChangedLineRanges } from "./diff.js";
 import { invalidCli } from "./errors.js";
 import type { ResolvedDiff } from "./git.js";
@@ -18,6 +19,7 @@ export type RunReviewOptions = {
   reviewer: string;
   model?: string;
   effort?: string;
+  config?: DiffwardenConfig;
   env?: NodeJS.ProcessEnv;
   adapters?: Partial<Record<ReviewReviewerConfig["sdk"], ReviewAdapter>>;
 };
@@ -27,6 +29,7 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
     spec: options.reviewer,
     ...(options.model !== undefined ? { model: options.model } : {}),
     ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    ...(options.config !== undefined ? { config: options.config } : {}),
   });
   const adapter = getAdapter(reviewer.sdk, options.adapters);
   const start = Date.now();
@@ -38,6 +41,7 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
     diff: options.resolved.diff,
     changedFiles: options.resolved.target.changed_files,
     prompt,
+    ...(reviewer.timeoutMs !== undefined ? { timeoutMs: reviewer.timeoutMs } : {}),
     readonly: true,
     env: options.env ?? process.env,
   };

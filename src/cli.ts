@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
+import { loadDiffwardenConfig } from "./core/config.js";
 import { invalidCli } from "./core/errors.js";
 import { resolveGitTarget } from "./core/git.js";
 import { renderJson, renderMarkdown } from "./core/render.js";
@@ -45,12 +46,17 @@ program
 
       const targetSpec = parseTargetSpec(options.target);
       const resolved = await resolveGitTarget(options.cwd, targetSpec);
+      const loadedConfig = await loadDiffwardenConfig({
+        cwd: options.cwd,
+        repoRoot: resolved.target.repo_root,
+      });
       const artifact = await runReview({
         cwd: options.cwd,
         resolved,
         reviewer: options.reviewer,
         ...(options.model !== undefined ? { model: options.model } : {}),
         ...(options.effort !== undefined ? { effort: options.effort } : {}),
+        ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
       });
 
       if (options.out) {
