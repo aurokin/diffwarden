@@ -16,6 +16,7 @@ export type ReviewReviewerConfig = {
   id: string;
   sdk: "fake" | "cursor" | "claude" | "pi";
   profile?: string;
+  provider?: string;
   model?: string;
   effort?: string;
   readonly: boolean;

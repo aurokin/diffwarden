@@ -1,6 +1,7 @@
 import { claudeAdapter } from "../adapters/claude.js";
 import { cursorAdapter } from "../adapters/cursor.js";
 import { fakeAdapter } from "../adapters/fake.js";
+import { piAdapter } from "../adapters/pi.js";
 import type { ReviewAdapter, ReviewReviewerConfig } from "../adapters/types.js";
 import { parseChangedLineRanges } from "./diff.js";
 import { invalidCli } from "./errors.js";
@@ -14,11 +15,14 @@ export type RunReviewOptions = {
   cwd: string;
   resolved: ResolvedDiff;
   reviewer: string;
+  model?: string;
+  env?: NodeJS.ProcessEnv;
+  adapters?: Partial<Record<ReviewReviewerConfig["sdk"], ReviewAdapter>>;
 };
 
 export async function runReview(options: RunReviewOptions): Promise<ReviewArtifact> {
-  const reviewer = resolveReviewer(options.reviewer);
-  const adapter = getAdapter(reviewer.sdk);
+  const reviewer = resolveReviewer(options.reviewer, options.model);
+  const adapter = getAdapter(reviewer.sdk, options.adapters);
   const start = Date.now();
   const prompt = buildReviewPrompt(options.resolved.target, options.resolved.diff);
   const adapterInput = {
@@ -29,7 +33,7 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
     changedFiles: options.resolved.target.changed_files,
     prompt,
     readonly: true,
-    env: process.env,
+    env: options.env ?? process.env,
   };
   const preflight = await adapter.preflight?.({
     cwd: adapterInput.cwd,
@@ -52,6 +56,10 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
   const reviewerArtifact: ReviewReviewerArtifact = {
     id: reviewer.id,
     sdk: reviewer.sdk,
+    ...(reviewer.profile ? { profile: reviewer.profile } : {}),
+    ...(reviewer.provider ? { provider: reviewer.provider } : {}),
+    ...(reviewer.model ? { model: reviewer.model } : {}),
+    ...(reviewer.effort ? { effort: reviewer.effort } : {}),
     result: parsed.result,
     validation,
     timing_ms: timingMs,
@@ -82,11 +90,12 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
   };
 }
 
-function resolveReviewer(spec: string): ReviewReviewerConfig {
+function resolveReviewer(spec: string, model: string | undefined): ReviewReviewerConfig {
   if (spec === "fake") {
     return {
       id: "fake",
       sdk: "fake",
+      ...(model ? { model } : {}),
       readonly: true,
     };
   }
@@ -95,7 +104,7 @@ function resolveReviewer(spec: string): ReviewReviewerConfig {
     return {
       id: "cursor",
       sdk: "cursor",
-      model: "composer-2",
+      model: model ?? "composer-2",
       readonly: true,
     };
   }
@@ -104,7 +113,16 @@ function resolveReviewer(spec: string): ReviewReviewerConfig {
     return {
       id: "claude",
       sdk: "claude",
-      model: "claude-sonnet-4-6",
+      model: model ?? "claude-sonnet-4-6",
+      readonly: true,
+    };
+  }
+
+  if (spec === "pi") {
+    return {
+      id: "pi",
+      sdk: "pi",
+      ...(model ? { model } : {}),
       readonly: true,
     };
   }
@@ -112,7 +130,15 @@ function resolveReviewer(spec: string): ReviewReviewerConfig {
   throw invalidCli(`Reviewer is not implemented yet: ${spec}`);
 }
 
-function getAdapter(sdk: ReviewReviewerConfig["sdk"]): ReviewAdapter {
+function getAdapter(
+  sdk: ReviewReviewerConfig["sdk"],
+  overrides: Partial<Record<ReviewReviewerConfig["sdk"], ReviewAdapter>> | undefined,
+): ReviewAdapter {
+  const override = overrides?.[sdk];
+  if (override !== undefined) {
+    return override;
+  }
+
   if (sdk === "fake") {
     return fakeAdapter;
   }
@@ -123,6 +149,10 @@ function getAdapter(sdk: ReviewReviewerConfig["sdk"]): ReviewAdapter {
 
   if (sdk === "claude") {
     return claudeAdapter;
+  }
+
+  if (sdk === "pi") {
+    return piAdapter;
   }
 
   throw invalidCli(`Reviewer is not implemented yet: ${sdk}`);

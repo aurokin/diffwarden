@@ -35,12 +35,13 @@ export function createPiAdapter(
       if (!availableModels.length) {
         throw missingAuth("No authenticated Pi models are available for the Pi reviewer");
       }
-      selectPiModel(availableModels, input.reviewer.model);
+      const selectedModel = selectPiModel(availableModels, input.reviewer.model);
 
       const metadata: ReviewAdapterPreflightResult["metadata"] = {
         readonlyCapability: "tool-restricted",
         preferredCaptureMode: "tool-call",
         availableModelCount: availableModels.length,
+        model: formatPiModel(selectedModel),
       };
 
       return {
@@ -57,8 +58,11 @@ export function createPiAdapter(
           },
           {
             name: "model",
-            status: "skipped",
-            detail: "Pi profile/model selection is not implemented yet.",
+            status: "passed",
+            detail:
+              input.reviewer.model === undefined
+                ? `Using first available Pi model: ${formatPiModel(selectedModel)}.`
+                : `Using requested Pi model: ${formatPiModel(selectedModel)}.`,
           },
           {
             name: "readonly",
@@ -290,6 +294,18 @@ function selectPiModel(availableModels: PiModel[], requestedModel: string | unde
   }
 
   return selectedModel;
+}
+
+function formatPiModel(model: PiModel): string {
+  if (typeof model.provider === "string" && typeof model.id === "string") {
+    return `${model.provider}/${model.id}`;
+  }
+
+  if (typeof model.id === "string") {
+    return model.id;
+  }
+
+  return "unknown";
 }
 
 function materializeScopedEnvAuth(
