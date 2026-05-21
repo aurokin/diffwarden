@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { createCursorAdapter, cursorAdapter } from "../src/adapters/cursor.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
 import { isIntegrationDisabled } from "./integration.js";
+import {
+  createLiveAdapterInput,
+  createLiveFixture,
+  expectFixtureReadOnly,
+  expectLiveAdapterOutput,
+} from "./live/helpers.js";
 
 describe("cursorAdapter", () => {
   it("preflights auth before loading the SDK", async () => {
@@ -233,22 +239,31 @@ describe("cursorAdapter", () => {
   it.skipIf(isIntegrationDisabled("cursor") || !process.env.CURSOR_API_KEY)(
     "runs a live Cursor local review smoke test",
     async () => {
-      const preflight = await cursorAdapter.preflight?.({
-        cwd: process.cwd(),
-        reviewer: {
-          id: "cursor",
-          sdk: "cursor",
-          model: "composer-2",
-          readonly: true,
-        },
+      const fixture = createLiveFixture("diffwarden-live-cursor-sdk-");
+      const reviewer = {
+        id: "cursor",
+        sdk: "cursor" as const,
+        model: process.env.CURSOR_SMOKE_MODEL ?? "composer-2",
         readonly: true,
-        env: process.env,
-      });
-      const output = await cursorAdapter.run(input({ env: process.env }));
+      };
+      try {
+        const preflight = await cursorAdapter.preflight?.({
+          cwd: fixture.repo,
+          reviewer,
+          readonly: true,
+          env: process.env,
+        });
+        const output = await cursorAdapter.run(
+          await createLiveAdapterInput(fixture, reviewer, process.env),
+        );
 
-      expect(preflight?.metadata?.readonlyCapability).toBe("prompt-only");
-      expect(output.metadata?.captureMode).toBe("text");
-      expect(typeof output.text).toBe("string");
+        expect(preflight?.metadata?.readonlyCapability).toBe("prompt-only");
+        expect(output.metadata?.captureMode).toBe("text");
+        expectLiveAdapterOutput(output);
+        expectFixtureReadOnly(fixture.repo);
+      } finally {
+        fixture.cleanup();
+      }
     },
     120_000,
   );

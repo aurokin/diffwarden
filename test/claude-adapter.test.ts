@@ -4,8 +4,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { claudeAdapter, createClaudeAdapter } from "../src/adapters/claude.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
-import { parseReviewOutput } from "../src/core/parse.js";
 import { isIntegrationDisabled } from "./integration.js";
+import {
+  createLiveAdapterInput,
+  createLiveFixture,
+  expectFixtureReadOnly,
+  expectLiveAdapterOutput,
+} from "./live/helpers.js";
 
 let tempDir: string | undefined;
 
@@ -365,35 +370,32 @@ describe("claudeAdapter", () => {
   it.skipIf(isIntegrationDisabled("claude"))(
     "runs a live Claude local review smoke test",
     async () => {
-      const preflight = await claudeAdapter.preflight?.({
-        cwd: process.cwd(),
-        reviewer: {
-          id: "claude",
-          sdk: "claude",
-          model: "sonnet",
-          readonly: true,
-        },
+      const fixture = createLiveFixture("diffwarden-live-claude-sdk-");
+      const reviewer = {
+        id: "claude",
+        sdk: "claude" as const,
+        model: process.env.CLAUDE_SMOKE_MODEL ?? "sonnet",
         readonly: true,
-        env: process.env,
-      });
-      const output = await claudeAdapter.run(input({ env: process.env }));
+      };
+      try {
+        const preflight = await claudeAdapter.preflight?.({
+          cwd: fixture.repo,
+          reviewer,
+          readonly: true,
+          env: process.env,
+        });
+        const output = await claudeAdapter.run(
+          await createLiveAdapterInput(fixture, reviewer, process.env),
+        );
 
-      expect(preflight?.metadata?.readonlyCapability).toBe("enforced");
-      expect(["api-key", "claude-code"]).toContain(preflight?.metadata?.authMode);
-      expect(["native-structured", "text"]).toContain(output.metadata?.captureMode);
-
-      const parsed =
-        output.structured !== undefined
-          ? parseReviewOutput({ structured: output.structured })
-          : parseReviewOutput({ text: output.text ?? "" });
-
-      expect(parsed.validation.valid_schema).toBe(true);
-      expect(parsed.result).toMatchObject({
-        findings: expect.any(Array),
-        overall_correctness: expect.any(String),
-        overall_explanation: expect.any(String),
-        overall_confidence_score: expect.any(Number),
-      });
+        expect(preflight?.metadata?.readonlyCapability).toBe("enforced");
+        expect(["api-key", "claude-code"]).toContain(preflight?.metadata?.authMode);
+        expect(["native-structured", "text"]).toContain(output.metadata?.captureMode);
+        expectLiveAdapterOutput(output);
+        expectFixtureReadOnly(fixture.repo);
+      } finally {
+        fixture.cleanup();
+      }
     },
     120_000,
   );

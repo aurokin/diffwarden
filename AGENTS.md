@@ -18,6 +18,7 @@
 | Run e2e tests | `pnpm test:e2e` |
 | Report coverage | `pnpm test:coverage` |
 | Report complexity | `pnpm complexity` |
+| Check live tool discovery | `pnpm live:doctor` |
 
 ## Read Order
 

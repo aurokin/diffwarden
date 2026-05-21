@@ -41,7 +41,7 @@ The adapter uses `@cursor/sdk`. That SDK currently depends on `sqlite3`, so
 Live smoke test:
 
 ```bash
-zsh -lic 'INTEGRATION_TEST_ON=1 pnpm vitest run test/cursor-adapter.test.ts'
+zsh -lic 'pnpm test:live:sdk'
 ```
 
 ## Claude SDK
@@ -66,7 +66,7 @@ setting sources, and native JSON Schema output. If no API key is present and
 Live smoke test:
 
 ```bash
-INTEGRATION_TEST_ON=1 pnpm vitest run test/claude-adapter.test.ts
+pnpm test:live:sdk
 ```
 
 ## Pi SDK
@@ -86,14 +86,14 @@ and keeps tests credential-free by default.
 Live smoke test:
 
 ```bash
-INTEGRATION_TEST_ON=1 pnpm vitest run test/pi-adapter.test.ts
+pnpm test:live:sdk
 ```
 
 By default, the smoke test requests `anthropic/claude-sonnet-4-5`. Select another
 authenticated model with `PI_SMOKE_MODEL`.
 
 ```bash
-INTEGRATION_TEST_ON=1 PI_SMOKE_MODEL=anthropic/claude-opus-4-5 pnpm vitest run test/pi-adapter.test.ts
+PI_SMOKE_MODEL=anthropic/claude-opus-4-5 pnpm test:live:sdk
 ```
 
 ## CLI Transports
@@ -119,9 +119,34 @@ currently report prompt-only read-only behavior when hard enforcement is not pro
 
 ## Live Test Controls
 
+Inspect local tool availability:
+
+```bash
+pnpm live:doctor
+```
+
 Set `INTEGRATION_DISABLE` with any SDK names that should remain disabled during broader
 live test runs.
 
 ```bash
 INTEGRATION_DISABLE=cursor,claude,pi
+```
+
+Restrict live CLI adapter tests to a subset with `DIFFWARDEN_LIVE_CLI`.
+
+```bash
+DIFFWARDEN_LIVE_CLI=codex,claude,gemini pnpm test:live:cli
+```
+
+Override CLI executable paths with engine-specific variables when a binary is not on `PATH`.
+
+```bash
+DIFFWARDEN_LIVE_PI_EXECUTABLE=/Users/auro/.local/share/mise/installs/npm-earendil-works-pi-coding-agent/latest/bin/pi
+DIFFWARDEN_LIVE_ANTIGRAVITY_EXECUTABLE=/Users/auro/.local/bin/agy
+```
+
+Run built-binary e2e smoke tests against selected reviewers with:
+
+```bash
+DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
 ```

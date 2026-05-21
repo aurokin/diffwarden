@@ -2,9 +2,14 @@ import { describe, expect, it } from "vitest";
 import { createPiAdapter, piAdapter } from "../src/adapters/pi.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
 import { missingRequirement } from "../src/core/errors.js";
-import { parseReviewOutput } from "../src/core/parse.js";
 import { reviewResultJsonSchema } from "../src/core/schema.js";
 import { isIntegrationDisabled } from "./integration.js";
+import {
+  createLiveAdapterInput,
+  createLiveFixture,
+  expectFixtureReadOnly,
+  expectLiveAdapterOutput,
+} from "./live/helpers.js";
 
 const defaultPiSmokeModel = "anthropic/claude-sonnet-4-5";
 
@@ -577,6 +582,7 @@ describe("piAdapter", () => {
   it.skipIf(isIntegrationDisabled("pi"))(
     "runs a live Pi structured review smoke test",
     async () => {
+      const fixture = createLiveFixture("diffwarden-live-pi-sdk-");
       const smokeModel = process.env.PI_SMOKE_MODEL ?? defaultPiSmokeModel;
       const reviewer = {
         id: "pi",
@@ -584,35 +590,26 @@ describe("piAdapter", () => {
         readonly: true,
         model: smokeModel,
       };
-      const preflight = await piAdapter.preflight?.({
-        cwd: process.cwd(),
-        reviewer,
-        readonly: true,
-        env: process.env,
-      });
-      const output = await piAdapter.run(
-        input({
+      try {
+        const preflight = await piAdapter.preflight?.({
+          cwd: fixture.repo,
           reviewer,
+          readonly: true,
           env: process.env,
-          prompt: [
-            "This is a diffwarden Pi adapter smoke test.",
-            "Do not inspect files unless required.",
-            "Call the review_output tool exactly once with an empty findings array,",
-            'overall_correctness "patch is correct", overall_explanation "Smoke test passed.",',
-            "and overall_confidence_score 0.9.",
-          ].join(" "),
-        }),
-      );
+        });
+        const output = await piAdapter.run(
+          await createLiveAdapterInput(fixture, reviewer, process.env),
+        );
 
-      expect(preflight?.metadata?.readonlyCapability).toBe("tool-restricted");
-      expect(preflight?.metadata?.preferredCaptureMode).toBe("tool-call");
-      expect(output.metadata?.captureMode).toBe("tool-call");
-      expect(output.metadata?.readonlyCapability).toBe("tool-restricted");
-
-      const parsed = parseReviewOutput({ structured: output.structured });
-
-      expect(parsed.validation.valid_schema).toBe(true);
-      expect(parsed.result.overall_correctness).toBe("patch is correct");
+        expect(preflight?.metadata?.readonlyCapability).toBe("tool-restricted");
+        expect(preflight?.metadata?.preferredCaptureMode).toBe("tool-call");
+        expect(output.metadata?.captureMode).toBe("tool-call");
+        expect(output.metadata?.readonlyCapability).toBe("tool-restricted");
+        expectLiveAdapterOutput(output);
+        expectFixtureReadOnly(fixture.repo);
+      } finally {
+        fixture.cleanup();
+      }
     },
     120_000,
   );

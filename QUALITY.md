@@ -9,8 +9,10 @@ Use the numbers to decide whether a future threshold would improve confidence.
 pnpm check
 ```
 
-Runs Biome linting, strict TypeScript type checking, and the default Vitest suite.
-The default suite excludes black-box e2e tests and live SDK smoke tests.
+Runs Biome linting, strict TypeScript type checking, and the default Vitest suite. The
+default `pnpm test`, `pnpm test:coverage`, and `pnpm test:e2e` commands force
+`INTEGRATION_TEST_ON=0`, so inherited shell environment cannot accidentally trigger live
+model calls.
 
 ## Coverage
 
@@ -43,13 +45,41 @@ JSON output, and CLI error handling.
 
 ## Live Smoke Tests
 
+Live tests are opt-in because they require local tools, may require credentials, and may make
+real model requests.
+
+Check local tool discovery first:
+
+```bash
+pnpm live:doctor
+```
+
+Run SDK smoke tests:
+
+```bash
+pnpm test:live:sdk
+```
+
+Run CLI transport smoke tests:
+
+```bash
+pnpm test:live:cli
+```
+
+Run built-binary e2e smoke tests for selected reviewers:
+
+```bash
+DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
+```
+
+Run all live suites:
+
 ```bash
 pnpm test:live
 ```
 
-Runs the opt-in SDK smoke tests with `INTEGRATION_TEST_ON=1`. These tests may require real
-credentials and may make live model requests. Use `INTEGRATION_DISABLE=cursor,claude,pi` to
-skip specific SDKs during live runs.
+Use `INTEGRATION_DISABLE=cursor,claude,pi,codex` to skip specific SDKs or CLIs during live
+runs. Use `DIFFWARDEN_LIVE_CLI=codex,claude,gemini` to restrict CLI live tests to a subset.
 
 ## Combined Metrics
 

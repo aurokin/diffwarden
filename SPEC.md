@@ -1060,12 +1060,17 @@ Adapter smoke tests should be opt-in because they may require credentials and sp
 Integration test controls:
 
 ```bash
-INTEGRATION_TEST_ON=1 npm test -- --runInBand
-INTEGRATION_TEST_ON=1 INTEGRATION_DISABLE=cursor npm test
-INTEGRATION_TEST_ON=1 INTEGRATION_DISABLE=cursor,claude npm test
+pnpm test:live:sdk
+pnpm test:live:cli
+DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
+INTEGRATION_DISABLE=cursor,claude pnpm test:live
 ```
 
-`INTEGRATION_TEST_ON=1` enables live SDK tests. `INTEGRATION_DISABLE` is a comma-separated denylist for SDKs that are not authenticated or should not spend tokens in the current environment.
+The live scripts set `INTEGRATION_TEST_ON=1`. `INTEGRATION_DISABLE` is a comma-separated
+denylist for SDKs or CLIs that are not authenticated or should not spend tokens in the
+current environment. Default `pnpm test`, `pnpm test:coverage`, and `pnpm test:e2e` commands
+force `INTEGRATION_TEST_ON=0` so inherited shell environment cannot accidentally trigger
+live model calls.
 
 ### 17.3 End-to-end fixture
 
@@ -1126,7 +1131,7 @@ Deliverables:
 - Pi structured-output implementation through a typed terminating `review_output` tool.
 - preflight checks for SDK/runtime requirements, auth, provider/profile coherence, model, and effort.
 - graceful error messages for invalid model, invalid effort, missing requirements, missing auth, timeout, and SDK execution failures.
-- live smoke commands gated by `INTEGRATION_TEST_ON` and `INTEGRATION_DISABLE`.
+- live smoke commands split into SDK, CLI transport, and built-binary e2e suites.
 - model, effort, provider, `sdkOptions`, and `providerOptions` mapping per adapter.
 
 ### Phase 3: Multi-reviewer runner
@@ -1198,7 +1203,7 @@ Resolved design decisions:
 - Config is required for real SDK runs and should be discovered through project config, then XDG user config.
 - `diffwarden init` creates the user-level config.
 - `ReviewArtifact.schema_version` is locked at `1`; breaking artifact changes require a future schema version.
-- Integration tests are gated by `INTEGRATION_TEST_ON` with `INTEGRATION_DISABLE` as an SDK denylist.
+- Live integration tests are gated by `INTEGRATION_TEST_ON` with `INTEGRATION_DISABLE` as an SDK/CLI denylist.
 - License: MIT.
 - Package manager/tooling: `pnpm`, `tsx`, `vitest`, `zod`, strict TypeScript, formatting, linting, and complexity enforcement from the first scaffold.
 
