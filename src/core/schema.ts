@@ -122,6 +122,20 @@ export const reviewResultJsonSchema = {
   },
 } as const;
 
+export const reviewResultStrictJsonSchema = {
+  ...reviewResultJsonSchema,
+  properties: {
+    ...reviewResultJsonSchema.properties,
+    findings: {
+      ...reviewResultJsonSchema.properties.findings,
+      items: {
+        ...reviewResultJsonSchema.properties.findings.items,
+        required: ["title", "body", "confidence_score", "priority", "code_location"],
+      },
+    },
+  },
+} as const;
+
 export const reviewArtifactResultSchema = reviewResultSchema.extend({
   findings: z.array(reviewArtifactFindingSchema),
   overall_correctness: artifactOverallCorrectnessSchema,

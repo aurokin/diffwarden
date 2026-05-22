@@ -41,8 +41,16 @@ export function parseReviewOutput(input: ParseReviewOutputInput): ParseReviewOut
     }
   }
 
-  const extracted = extractJsonObject(input.text);
-  if (extracted !== undefined) {
+  const candidates = extractJsonObjectCandidates(input.text);
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const candidate = candidates[index];
+    if (candidate === undefined) {
+      continue;
+    }
+    const extracted = parseJsonObject(candidate);
+    if (extracted === undefined) {
+      continue;
+    }
     const parsed = reviewResultSchema.safeParse(extracted);
     if (parsed.success) {
       return buildParsedResult(parsed.data, "extracted-json", input.text);
@@ -105,13 +113,55 @@ function stringifyFallback(value: unknown): string {
   }
 }
 
-function extractJsonObject(text: string): unknown | undefined {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
+function extractJsonObjectCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
 
-  if (start === -1 || end === -1 || start >= end) {
-    return undefined;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (depth === 0) {
+      if (character === "{") {
+        start = index;
+        depth = 1;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (character === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (character !== "}") {
+      continue;
+    }
+
+    depth -= 1;
+    if (depth === 0 && start !== -1) {
+      candidates.push(text.slice(start, index + 1));
+      start = -1;
+    }
   }
 
-  return parseJsonObject(text.slice(start, end + 1));
+  return candidates;
 }

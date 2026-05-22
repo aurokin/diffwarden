@@ -42,6 +42,49 @@ describe("parseReviewOutput", () => {
     expect(parsed.result.findings).toHaveLength(1);
   });
 
+  it("extracts the final JSON object when earlier prompt text contains JSON examples", () => {
+    const example = {
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation: "Example only.",
+      overall_confidence_score: 0,
+    };
+    const final = {
+      ...validReviewResult,
+      findings: [],
+      overall_correctness: "patch is correct" as const,
+      overall_explanation: "Final review.",
+    };
+
+    const parsed = parseReviewOutput({
+      text: `Echoed prompt:\n${JSON.stringify(example)}\nFinal answer:\n${JSON.stringify(final)}`,
+    });
+
+    expect(parsed.validation.parse_mode).toBe("extracted-json");
+    expect(parsed.validation.valid_schema).toBe(true);
+    expect(parsed.result.overall_explanation).toBe("Final review.");
+  });
+
+  it("keeps scanning JSON objects when a later object is not a review result", () => {
+    const parsed = parseReviewOutput({
+      text: `${JSON.stringify(validReviewResult)}\n${JSON.stringify({ usage: { total_tokens: 12 } })}`,
+    });
+
+    expect(parsed.validation.parse_mode).toBe("extracted-json");
+    expect(parsed.validation.valid_schema).toBe(true);
+    expect(parsed.result.overall_explanation).toBe(validReviewResult.overall_explanation);
+  });
+
+  it("ignores unmatched prose quotes before an extracted JSON review result", () => {
+    const parsed = parseReviewOutput({
+      text: `The reviewer wrote " before JSON:\n${JSON.stringify(validReviewResult)}`,
+    });
+
+    expect(parsed.validation.parse_mode).toBe("extracted-json");
+    expect(parsed.validation.valid_schema).toBe(true);
+    expect(parsed.result.overall_explanation).toBe(validReviewResult.overall_explanation);
+  });
+
   it("uses tool-output mode for structured adapter output", () => {
     const parsed = parseReviewOutput({ structured: validReviewResult });
 

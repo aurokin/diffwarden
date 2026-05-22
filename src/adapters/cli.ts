@@ -1,10 +1,15 @@
-import { spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { invalidCli, missingAuth, missingRequirement, reviewerFailed } from "../core/errors.js";
-import { type ReviewResult, reviewResultJsonSchema, reviewResultSchema } from "../core/schema.js";
+import {
+  type ReviewResult,
+  reviewResultJsonSchema,
+  reviewResultSchema,
+  reviewResultStrictJsonSchema,
+} from "../core/schema.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -19,6 +24,7 @@ type CliEngine = Exclude<ReviewReviewerConfig["sdk"], "fake">;
 type CliInvocation = {
   executable: string;
   args: string[];
+  cwd?: string;
   env?: NodeJS.ProcessEnv;
   stdin?: string;
   outputPath?: string;
@@ -51,7 +57,7 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
     async buildInvocation(input, tempDir) {
       const schemaPath = path.join(tempDir, "review-schema.json");
       const outputPath = path.join(tempDir, "codex-review.json");
-      await writeFile(schemaPath, `${JSON.stringify(reviewResultJsonSchema)}\n`, "utf8");
+      await writeFile(schemaPath, `${JSON.stringify(reviewResultStrictJsonSchema)}\n`, "utf8");
 
       const args = [
         ...codexGlobalArgs(input.reviewer),
@@ -103,7 +109,9 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
     readonlyCapability: "tool-restricted",
     supportsModel: true,
     supportsEffort: true,
-    async buildInvocation(input) {
+    async buildInvocation(input, tempDir) {
+      const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
+      await writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: {} })}\n`, "utf8");
       const args = [
         "-p",
         "--permission-mode",
@@ -117,7 +125,7 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
         "",
         "--strict-mcp-config",
         "--mcp-config",
-        "{}",
+        mcpConfigPath,
         "--disable-slash-commands",
         "--no-chrome",
         "--output-format",
@@ -187,6 +195,9 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
       return {
         executable: cliExecutable(input.reviewer, "gemini"),
         args,
+        env: {
+          GEMINI_CLI_TRUST_WORKSPACE: "true",
+        },
         stdin: input.prompt,
         captureMode: "text",
       };
@@ -310,8 +321,6 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
         "--no-subagents",
         "--no-memory",
         "--disable-web-search",
-        "--max-turns",
-        "8",
       ];
       pushModel(args, input.reviewer);
       if (input.reviewer.effort !== undefined && input.reviewer.effort !== "off") {
@@ -336,13 +345,21 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
     readonlyCapability: "prompt-only",
     supportsModel: false,
     supportsEffort: false,
-    async buildInvocation(input) {
+    async buildInvocation(input, tempDir) {
       const printTimeoutSeconds = numberCliOption(input.reviewer, "printTimeoutSeconds") ?? 300;
-      const args = ["--print", "--print-timeout", `${printTimeoutSeconds}s`, "--sandbox"];
+      const args = [
+        "--print",
+        "--print-timeout",
+        `${printTimeoutSeconds}s`,
+        "--sandbox",
+        "--add-dir",
+        input.cwd,
+      ];
 
       return {
         executable: cliExecutable(input.reviewer, "agy"),
         args,
+        cwd: tempDir,
         stdin: input.prompt,
         captureMode: "text",
       };
@@ -442,11 +459,17 @@ async function runCli(invocation: CliInvocation, input: ReviewAdapterInput): Pro
   const executable = await resolveExecutable(invocation.executable, env);
 
   return await new Promise((resolve, reject) => {
-    const child = spawn(executable, invocation.args, {
-      cwd: input.cwd,
-      env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(executable, invocation.args, {
+        cwd: invocation.cwd ?? input.cwd,
+        env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      reject(classifyCliStartError(invocation.executable, error));
+      return;
+    }
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let settled = false;
@@ -470,7 +493,7 @@ async function runCli(invocation: CliInvocation, input: ReviewAdapterInput): Pro
         rejectOnce(missingRequirement(`CLI executable not found: ${invocation.executable}`));
         return;
       }
-      rejectOnce(reviewerFailed(`${invocation.executable} failed to start: ${error.message}`));
+      rejectOnce(classifyCliStartError(invocation.executable, error));
     });
     child.on("close", (code, signal) => {
       removeAbortListener();
@@ -515,7 +538,23 @@ async function runCli(invocation: CliInvocation, input: ReviewAdapterInput): Pro
   });
 }
 
+function classifyCliStartError(executable: string, error: unknown): Error {
+  if (isNodeErrorWithCode(error, "ENOENT")) {
+    return missingRequirement(`CLI executable not found: ${executable}`);
+  }
+
+  if (isNodeErrorWithCode(error, "ENOEXEC")) {
+    return missingRequirement(`CLI executable is not runnable: ${executable}`);
+  }
+
+  return reviewerFailed(`${executable} failed to start: ${errorMessage(error)}`);
+}
+
 function classifyCliExit(executable: string, code: number | null, detail: string): Error {
+  if (/max_turns exceeded/i.test(detail)) {
+    return reviewerFailed(`${executable} exited with code ${code}: ${detail}`);
+  }
+
   if (isMissingAuthOutput(detail)) {
     return missingAuth(`${executable} authentication is missing or expired: ${detail}`);
   }

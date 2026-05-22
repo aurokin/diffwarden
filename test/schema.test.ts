@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reviewResultJsonSchema } from "../src/core/schema.js";
+import { reviewResultJsonSchema, reviewResultStrictJsonSchema } from "../src/core/schema.js";
 
 describe("reviewResultJsonSchema", () => {
   it("describes the normalized review result contract", () => {
@@ -30,6 +30,13 @@ describe("reviewResultJsonSchema", () => {
       type: "integer",
       enum: [0, 1, 2, 3],
     });
+  });
+
+  it("provides a strict provider schema for CLIs that require all properties", () => {
+    const findingSchema = reviewResultStrictJsonSchema.properties.findings.items;
+
+    expect(findingSchema.required).toContain("priority");
+    expect(reviewResultJsonSchema.properties.findings.items.required).not.toContain("priority");
   });
 
   it("rejects additional properties in reviewer output", () => {
