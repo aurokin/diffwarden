@@ -47,6 +47,7 @@ describe("createCliAdapter", () => {
     ["claude", "tool-restricted"],
     ["cursor", "prompt-only"],
     ["gemini", "tool-restricted"],
+    ["droid", "enforced"],
     ["grok", "prompt-only"],
     ["antigravity", "prompt-only"],
   ] as const)("runs %s CLI and normalizes its text output", async (engine, readonlyCapability) => {
@@ -85,7 +86,15 @@ describe("createCliAdapter", () => {
     if (engine !== "antigravity") {
       expect(invocation.args.join(" ")).toContain("test-model");
     }
-    if (engine === "grok") {
+    if (engine === "droid") {
+      expect(invocation.args).toContain("exec");
+      expect(invocation.args).toContain("--cwd");
+      expect(invocation.args).toContain(harness.cwd);
+      expect(invocation.args).toContain("--use-spec");
+      expect(invocation.args).toContain("--file");
+      expect(invocation.args).not.toContain("--auto");
+      expect(invocation.stdin).toBe("");
+    } else if (engine === "grok") {
       expect(invocation.args).toContain("--prompt-file");
       expect(invocation.stdin).toBe("");
     } else if (engine === "cursor") {
@@ -274,6 +283,22 @@ describe("createCliAdapter", () => {
     ]);
   });
 
+  it("maps public effort values to Droid CLI native effort values", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable, { effort: "minimal" });
+
+    await adapter.run(createInput(reviewer, harness));
+
+    const args = harness.readInvocation().args;
+    expect(
+      args.slice(
+        args.indexOf("--spec-reasoning-effort"),
+        args.indexOf("--spec-reasoning-effort") + 2,
+      ),
+    ).toEqual(["--spec-reasoning-effort", "low"]);
+  });
+
   it("rejects oversized Cursor prompts before spawning", async () => {
     const harness = createHarness("cursor");
     const adapter = createCliAdapter("cursor");
@@ -382,6 +407,8 @@ if (engine === "codex") {
   process.stdout.write(JSON.stringify({ result: engine + " text" }));
 } else if (engine === "gemini") {
   process.stdout.write(JSON.stringify({ response: engine + " text" }));
+} else if (engine === "droid") {
+  process.stdout.write(JSON.stringify({ result: engine + " text" }));
 } else if (engine === "grok") {
   process.stdout.write(JSON.stringify({ result: engine + " text" }));
 } else if (engine === "opencode" || engine === "pi") {

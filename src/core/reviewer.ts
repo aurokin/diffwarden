@@ -7,6 +7,7 @@ const reviewerSdkValues = [
   "cursor",
   "claude",
   "pi",
+  "droid",
   "codex",
   "gemini",
   "opencode",
@@ -368,7 +369,12 @@ function cliTransportSupportsModel(sdk: ReviewerSdk): boolean {
 
 function cliTransportSupportsEffort(sdk: ReviewerSdk): boolean {
   return (
-    sdk === "codex" || sdk === "claude" || sdk === "pi" || sdk === "opencode" || sdk === "grok"
+    sdk === "codex" ||
+    sdk === "claude" ||
+    sdk === "pi" ||
+    sdk === "droid" ||
+    sdk === "opencode" ||
+    sdk === "grok"
   );
 }
 

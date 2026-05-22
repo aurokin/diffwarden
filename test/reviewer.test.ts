@@ -11,6 +11,7 @@ describe("parseReviewerSpec", () => {
     expect(parseReviewerSpec("pi")).toEqual({ sdk: "pi" });
     expect(parseReviewerSpec("claude")).toEqual({ sdk: "claude" });
     expect(parseReviewerSpec("cursor")).toEqual({ sdk: "cursor" });
+    expect(parseReviewerSpec("droid")).toEqual({ sdk: "droid" });
     expect(parseReviewerSpec("codex")).toEqual({ sdk: "codex" });
     expect(parseReviewerSpec("gemini")).toEqual({ sdk: "gemini" });
     expect(parseReviewerSpec("opencode")).toEqual({ sdk: "opencode" });
@@ -218,6 +219,7 @@ describe("resolveReviewerConfig", () => {
       model: "sonnet",
     });
     expect(resolveReviewerConfig({ spec: "pi" })).not.toHaveProperty("model");
+    expect(resolveReviewerConfig({ spec: "droid" })).not.toHaveProperty("model");
   });
 
   it("defaults CLI-only reviewers to CLI transport", () => {
@@ -246,23 +248,23 @@ describe("resolveReviewerConfig", () => {
   it("preserves explicit CLI transport and options for SDK-backed reviewer families", () => {
     expect(
       resolveReviewerConfig({
-        spec: "claude-cli",
+        spec: "droid-cli",
         config: {
           reviewers: [
             {
-              id: "claude-cli",
-              sdk: "claude",
+              id: "droid-cli",
+              sdk: "droid",
               transport: "cli",
-              cliOptions: { executable: "/usr/local/bin/claude" },
+              cliOptions: { executable: "/usr/local/bin/droid" },
             },
           ],
         },
       }),
     ).toMatchObject({
-      id: "claude-cli",
-      sdk: "claude",
+      id: "droid-cli",
+      sdk: "droid",
       transport: "cli",
-      cliOptions: { executable: "/usr/local/bin/claude" },
+      cliOptions: { executable: "/usr/local/bin/droid" },
     });
   });
 

@@ -182,6 +182,7 @@ export const reviewerSdkSchema = z.enum([
   "cursor",
   "claude",
   "pi",
+  "droid",
   "codex",
   "gemini",
   "opencode",

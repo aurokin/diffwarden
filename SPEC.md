@@ -152,6 +152,7 @@ Reviewer specs should stay compact and SDK-agnostic at the public boundary:
 cursor                            Cursor SDK with default config.
 claude                            Claude SDK with default config.
 pi                                Pi SDK with default config.
+droid                             Droid SDK with default config.
 codex                             Codex CLI transport.
 gemini                            Gemini CLI transport.
 opencode                          OpenCode CLI transport.
@@ -280,7 +281,7 @@ export type ReviewError = {
       | "validation_failed";
     message: string;
     reviewer_id?: string;
-    sdk?: "cursor" | "claude" | "pi" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
+    sdk?: "cursor" | "claude" | "pi" | "droid" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
     hint?: string;
   };
 };
@@ -334,7 +335,7 @@ The CLI should wrap model output with local metadata.
 ```ts
 export type ReviewArtifact = {
   schema_version: 1;
-  sdk?: "cursor" | "claude" | "pi" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
+  sdk?: "cursor" | "claude" | "pi" | "droid" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
   reviewers?: ReviewReviewerArtifact[];
   cwd: string;
   target: ReviewTargetResolved;
@@ -350,7 +351,7 @@ For single-reviewer runs, `sdk` and `result` are enough for simple consumers. Fo
 ```ts
 export type ReviewReviewerArtifact = {
   id: string;
-  sdk: "cursor" | "claude" | "pi" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
+  sdk: "cursor" | "claude" | "pi" | "droid" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
   profile?: string;
   provider?: string;
   model?: string;
@@ -370,7 +371,7 @@ Reviewer config is the internal representation produced from CLI flags, environm
 ```ts
 export type ReviewReviewerConfig = {
   id: string;
-  sdk: "cursor" | "claude" | "pi" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
+  sdk: "cursor" | "claude" | "pi" | "droid" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
   transport?: "sdk" | "cli";
   profile?: string;
   provider?: string;
@@ -990,7 +991,7 @@ Rules:
 
 - If no reviewer is provided, use `defaultReviewerSet`, then `reviewerSets["1"]`.
 - `--reviewer-set <name|count>` must resolve to a configured set.
-- `--reviewer <spec>` may reference a built-in SDK id (`pi`, `claude`, `cursor`) or a named profile.
+- `--reviewer <spec>` may reference a built-in SDK id (`pi`, `claude`, `cursor`, `droid`) or a named profile.
 - Config validation is part of CLI startup. Unknown reviewer profiles, malformed reviewer sets, invalid model catalogs, and invalid effort catalogs exit `2`.
 - Secrets in config must be env var references only. Do not support literal API keys in committed or user config.
 - Pi is the recommended default reviewer profile because it supports the broadest provider surface. Claude subscription users should configure a Claude profile, Cursor subscription users should configure a Cursor profile, and other provider routes should generally use Pi profiles.
@@ -1000,6 +1001,7 @@ The public `effort` vocabulary follows Pi thinking levels: `off`, `minimal`, `lo
 - Pi: clamp the requested level through model metadata, send the effective `thinkingLevel`, and record requested/effective/supported effort metadata.
 - Claude: `off` disables thinking; `minimal` and `low` map to `low`; `medium` maps to `medium`; `high` maps to `high`; `xhigh` maps to `max`.
 - Cursor: record the requested value as ignored until the SDK exposes an effort control.
+- Droid: omit `off`, map `minimal` to `low`, and pass other supported values through as `specModeReasoningEffort` for spec-mode reviews.
 
 ## 16. Security and side effects
 
@@ -1123,12 +1125,14 @@ Deliverables:
 - `src/adapters/cursor.ts`
 - `src/adapters/claude.ts`
 - `src/adapters/pi.ts`
-- SDK-backed execution remains the primary path for Cursor, Claude, and Pi.
+- `src/adapters/droid.ts`
+- SDK-backed execution remains the primary path for Cursor, Claude, Pi, and Droid.
 - shared adapter output handling for `{ structured }`, `{ text }`, capture metadata, timeout, and execution errors.
 - structured output support where each SDK has a reliable schema/tool mechanism.
 - Cursor text-output proof through local SDK execution first; then structured-output proof through a local MCP `review_output` tool and captured SDK `tool_call` event args.
 - Claude structured-output implementation through `query({ options: { outputFormat: { type: "json_schema", schema } } })`.
 - Pi structured-output implementation through a typed terminating `review_output` tool.
+- Droid structured-output implementation through `@factory/droid-sdk` JSON Schema output.
 - preflight checks for SDK/runtime requirements, auth, provider/profile coherence, model, and effort.
 - graceful error messages for invalid model, invalid effort, missing requirements, missing auth, timeout, and SDK execution failures.
 - live smoke commands split into SDK, CLI transport, and built-binary e2e suites.

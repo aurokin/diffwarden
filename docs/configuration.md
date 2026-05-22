@@ -114,6 +114,14 @@ SDK-backed families can be configured to use a CLI transport.
       "cliOptions": {
         "executable": "/Users/auro/.local/bin/claude"
       }
+    },
+    {
+      "id": "droid-cli",
+      "sdk": "droid",
+      "transport": "cli",
+      "cliOptions": {
+        "executable": "/Users/auro/.local/bin/droid"
+      }
     }
   ]
 }

@@ -37,6 +37,18 @@ Use upstream docs for current `query()` options, structured output support, tool
 
 Use the upstream repository for the current SDK docs, JSON mode docs, extension examples, structured output patterns, and agent harness lifecycle.
 
+## Factory Droid SDK
+
+- Factory CLI reference: https://docs.factory.ai/reference/cli-reference
+- Droid Exec docs: https://docs.factory.ai/cli/droid-exec/overview
+- Factory CLI repository: https://github.com/Factory-AI/factory
+- Droid TypeScript SDK repository: https://github.com/Factory-AI/droid-sdk-typescript
+- NPM package: https://www.npmjs.com/package/@factory/droid-sdk
+- Implemented adapter dependency on 2026-05-21: `@factory/droid-sdk@0.2.0`.
+- Local CLI inspection on 2026-05-21: Droid CLI `0.131.0` supports `droid exec --output-format json`, `--file`, `--cwd`, `--model`, and `--reasoning-effort`; default exec mode is read-only unless `--auto` is set.
+
+Use official Factory docs over local source when CLI or SDK behavior differs.
+
 ## Codex review reference
 
 - OpenAI Codex repository: https://github.com/openai/codex
@@ -49,6 +61,7 @@ Use Codex as the semantic reference for review behavior, especially its review r
 
 - Gemini CLI repository: https://github.com/google-gemini/gemini-cli
 - OpenCode repository: https://github.com/sst/opencode
+- Factory Droid CLI docs: https://docs.factory.ai/reference/cli-reference
 - Grok CLI docs: https://docs.x.ai/docs/grok-cli/overview
 - Antigravity CLI docs: https://www.google.com/antigravity
 

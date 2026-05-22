@@ -301,6 +301,45 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
       };
     },
   },
+  droid: {
+    defaultExecutable: "droid",
+    readonlyCapability: "enforced",
+    supportsModel: true,
+    supportsEffort: true,
+    async buildInvocation(input, tempDir) {
+      const promptPath = path.join(tempDir, "droid-prompt.txt");
+      await writeFile(promptPath, input.prompt, "utf8");
+      const args = [
+        "exec",
+        "--cwd",
+        input.cwd,
+        "--output-format",
+        "json",
+        "--use-spec",
+        "--file",
+        promptPath,
+      ];
+      const model = providerQualifiedModel(input.reviewer);
+      if (model !== undefined) {
+        args.push("--spec-model", model);
+      }
+      if (input.reviewer.effort !== undefined && input.reviewer.effort !== "off") {
+        args.push("--spec-reasoning-effort", droidCliEffort(input.reviewer.effort));
+      }
+
+      return {
+        executable: cliExecutable(input.reviewer, "droid"),
+        args,
+        captureMode: "text",
+      };
+    },
+    async parseOutput(result) {
+      return normalizeJsonLikeOutput(result.stdout, {
+        captureMode: "text",
+        readonlyCapability: "enforced",
+      });
+    },
+  },
   grok: {
     defaultExecutable: "grok",
     readonlyCapability: "prompt-only",
@@ -808,6 +847,10 @@ function claudeCliEffort(effort: string): string {
 }
 
 function grokCliEffort(effort: string): string {
+  return effort === "minimal" ? "low" : effort;
+}
+
+function droidCliEffort(effort: string): string {
   return effort === "minimal" ? "low" : effort;
 }
 

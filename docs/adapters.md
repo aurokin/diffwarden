@@ -10,6 +10,7 @@ SDK adapters remain the default for:
 - `cursor`
 - `claude`
 - `pi`
+- `droid`
 
 CLI-only reviewers use `transport: "cli"` automatically:
 
@@ -96,6 +97,22 @@ authenticated model with `PI_SMOKE_MODEL`.
 PI_SMOKE_MODEL=anthropic/claude-opus-4-5 pnpm test:live:sdk
 ```
 
+## Droid SDK
+
+```bash
+diffwarden --target uncommitted --reviewer droid
+```
+
+The adapter uses `@factory/droid-sdk` and the local `droid` executable. It requests native
+JSON Schema output and runs in Droid's spec interaction mode for read-only review behavior.
+Set `FACTORY_API_KEY` or use local Droid auth supported by the installed CLI.
+
+Live smoke test:
+
+```bash
+pnpm test:live:sdk
+```
+
 ## CLI Transports
 
 ```bash
@@ -110,9 +127,10 @@ The shared CLI adapter performs executable preflight, runs the selected CLI in i
 restrictive documented review mode, and returns either native structured output or text for
 the core parser.
 
-`cliOptions.executable` can point at non-standard installs, such as local `pi` or `agy`
-binaries. CLI auth is delegated to the underlying executable, so live runs require each tool
-to be logged in or configured through its own environment variables.
+SDK-backed families, including Droid, can use `transport: "cli"` from config.
+`cliOptions.executable` can point at non-standard installs, such as local `pi`, `droid`, or
+`agy` binaries. CLI auth is delegated to the underlying executable, so live runs require each
+tool to be logged in or configured through its own environment variables.
 
 Capability metadata is conservative. OpenCode, Grok, Antigravity, and Cursor CLI paths
 currently report prompt-only read-only behavior when hard enforcement is not proven.
@@ -142,6 +160,7 @@ Override CLI executable paths with engine-specific variables when a binary is no
 
 ```bash
 DIFFWARDEN_LIVE_PI_EXECUTABLE=/Users/auro/.local/share/mise/installs/npm-earendil-works-pi-coding-agent/latest/bin/pi
+DIFFWARDEN_LIVE_DROID_EXECUTABLE=/Users/auro/.local/bin/droid
 DIFFWARDEN_LIVE_ANTIGRAVITY_EXECUTABLE=/Users/auro/.local/bin/agy
 ```
 

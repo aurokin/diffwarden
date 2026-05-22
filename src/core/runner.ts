@@ -1,6 +1,7 @@
 import { claudeAdapter } from "../adapters/claude.js";
 import { createCliAdapter } from "../adapters/cli.js";
 import { cursorAdapter } from "../adapters/cursor.js";
+import { droidAdapter } from "../adapters/droid.js";
 import { fakeAdapter } from "../adapters/fake.js";
 import { piAdapter } from "../adapters/pi.js";
 import type { ReviewAdapter, ReviewReviewerConfig } from "../adapters/types.js";
@@ -600,6 +601,10 @@ function getAdapter(
 
   if (reviewer.sdk === "pi") {
     return piAdapter;
+  }
+
+  if (reviewer.sdk === "droid") {
+    return droidAdapter;
   }
 
   return createCliAdapter(reviewer.sdk);

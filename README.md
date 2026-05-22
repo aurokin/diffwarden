@@ -38,6 +38,7 @@ diffwarden --target uncommitted --reviewer fake
 diffwarden --target base:main --reviewer cursor
 diffwarden --target base:main --reviewer claude --model sonnet --effort high
 diffwarden --target base:main --reviewer pi --model anthropic/claude-sonnet-4-5
+diffwarden --target base:main --reviewer droid --model claude-opus-4-7
 diffwarden --target base:main --reviewer-set 2
 diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 diffwarden --target commit:abc123 --format json
@@ -69,9 +70,9 @@ Implemented:
 - Review parsing, rendering, validation, and aggregation.
 - Project/user `diffwarden.config.json` discovery.
 - Reviewer sets and `sdk[:profile]` reviewer specs.
-- Cursor, Claude, and Pi Agent SDK adapters.
+- Cursor, Claude, Pi, and Droid Agent SDK adapters.
 - Thin CLI transport adapters for Codex, Gemini, OpenCode, Grok, Antigravity, and CLI
-  variants of Cursor, Claude, and Pi.
+  variants of Cursor, Claude, Pi, and Droid.
 
 Not implemented:
 

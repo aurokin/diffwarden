@@ -20,6 +20,7 @@ export type ReviewReviewerConfig = {
     | "cursor"
     | "claude"
     | "pi"
+    | "droid"
     | "codex"
     | "gemini"
     | "opencode"

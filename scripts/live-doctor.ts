@@ -23,12 +23,20 @@ const checks: Check[] = [
       : "API key absent; Claude Code auth may work",
   },
   { id: "pi-sdk", kind: "sdk", auth: "provider auth checked by Pi preflight" },
+  {
+    id: "droid-sdk",
+    kind: "sdk",
+    auth: process.env.FACTORY_API_KEY
+      ? "FACTORY_API_KEY present"
+      : "API key absent; Droid local auth may work",
+  },
   { id: "codex", kind: "cli", executable: "codex", auth: "delegated to CLI" },
   { id: "claude-cli", kind: "cli", executable: "claude", auth: "delegated to CLI" },
   { id: "cursor-cli", kind: "cli", executable: "cursor-agent", auth: "delegated to CLI" },
   { id: "gemini", kind: "cli", executable: "gemini", auth: "delegated to CLI" },
   { id: "opencode", kind: "cli", executable: "opencode", auth: "delegated to CLI" },
   { id: "pi-cli", kind: "cli", executable: "pi", auth: "delegated to CLI" },
+  { id: "droid-cli", kind: "cli", executable: "droid", auth: "delegated to CLI" },
   { id: "grok", kind: "cli", executable: "grok", auth: "delegated to CLI" },
   { id: "antigravity", kind: "cli", executable: "agy", auth: "delegated to CLI" },
 ];
