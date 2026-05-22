@@ -169,3 +169,10 @@ Run built-binary e2e smoke tests against selected reviewers with:
 ```bash
 DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
 ```
+
+The e2e harness uses CLI transports through a temporary config file and honors the same
+per-reviewer live overrides as the CLI adapter harness:
+
+```bash
+DIFFWARDEN_LIVE_E2E_REVIEWERS=droid DIFFWARDEN_LIVE_DROID_EFFORT=low pnpm test:live:e2e
+```

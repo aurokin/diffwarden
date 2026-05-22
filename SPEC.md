@@ -1065,6 +1065,7 @@ Integration test controls:
 pnpm test:live:sdk
 pnpm test:live:cli
 DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
+DIFFWARDEN_LIVE_E2E_REVIEWERS=droid DIFFWARDEN_LIVE_DROID_EFFORT=low pnpm test:live:e2e
 INTEGRATION_DISABLE=cursor,claude pnpm test:live
 ```
 

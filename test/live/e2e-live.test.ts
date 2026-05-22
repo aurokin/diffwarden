@@ -24,6 +24,31 @@ afterEach(() => {
 });
 
 describe("live diffwarden CLI e2e", () => {
+  it("passes live reviewer overrides into generated config", () => {
+    const parsed = JSON.parse(
+      liveE2eConfigJson(["droid"], {
+        DIFFWARDEN_LIVE_DROID_PROVIDER: "factory",
+        DIFFWARDEN_LIVE_DROID_MODEL: "claude-opus-4-7",
+        DIFFWARDEN_LIVE_DROID_EFFORT: "high",
+        DIFFWARDEN_LIVE_DROID_EXECUTABLE: "/opt/droid",
+      }),
+    );
+
+    expect(parsed.reviewers).toEqual([
+      {
+        id: "live-droid",
+        sdk: "droid",
+        transport: "cli",
+        provider: "factory",
+        model: "claude-opus-4-7",
+        effort: "high",
+        cliOptions: {
+          executable: "/opt/droid",
+        },
+      },
+    ]);
+  });
+
   it.skipIf(isIntegrationDisabled("e2e") || liveE2eReviewers().length === 0)(
     "runs selected live reviewers through the built binary",
     async () => {
@@ -68,13 +93,16 @@ function liveE2eReviewers(): string[] {
   return enabledIntegrationItems(requested);
 }
 
-function liveE2eConfigJson(reviewers: string[]): string {
+function liveE2eConfigJson(reviewers: string[], env: NodeJS.ProcessEnv = process.env): string {
   const configReviewers = reviewers.map((reviewer) => {
-    const executable = liveExecutable(reviewer);
+    const executable = liveEnv(reviewer, "EXECUTABLE", env);
     return {
       id: liveReviewerId(reviewer),
       sdk: reviewer,
       transport: "cli",
+      ...optionalString("provider", liveEnv(reviewer, "PROVIDER", env)),
+      ...optionalString("model", liveEnv(reviewer, "MODEL", env)),
+      ...optionalString("effort", liveEnv(reviewer, "EFFORT", env)),
       ...(executable === undefined
         ? {}
         : {
@@ -95,12 +123,25 @@ function createLiveConfigHome(reviewers: string[]): string {
   return home;
 }
 
-function liveExecutable(reviewer: string): string | undefined {
-  return process.env[`DIFFWARDEN_LIVE_${reviewer.toUpperCase()}_EXECUTABLE`];
+function liveEnv(
+  reviewer: string,
+  suffix: "PROVIDER" | "MODEL" | "EFFORT" | "EXECUTABLE",
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  return env[`DIFFWARDEN_LIVE_${reviewer.toUpperCase()}_${suffix}`];
 }
 
 function liveReviewerId(reviewer: string): string {
   return `live-${reviewer}`;
+}
+
+function optionalString<K extends "provider" | "model" | "effort">(
+  key: K,
+  value: string | undefined,
+): Pick<{ provider: string; model: string; effort: string }, K> | Record<string, never> {
+  return value === undefined || value.trim() === ""
+    ? {}
+    : ({ [key]: value } as Pick<{ provider: string; model: string; effort: string }, K>);
 }
 
 function isSuccessfulReviewer(reviewer: { status?: string }): boolean {

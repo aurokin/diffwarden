@@ -126,3 +126,9 @@ SDK-backed families can be configured to use a CLI transport.
   ]
 }
 ```
+
+Run the configured Droid CLI profile through the normal CLI:
+
+```bash
+diffwarden --target base:main --reviewer droid-cli --model claude-opus-4-7 --effort high
+```

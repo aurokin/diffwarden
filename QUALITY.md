@@ -70,6 +70,7 @@ Run built-binary e2e smoke tests for selected reviewers:
 
 ```bash
 DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
+DIFFWARDEN_LIVE_E2E_REVIEWERS=droid DIFFWARDEN_LIVE_DROID_EFFORT=low pnpm test:live:e2e
 ```
 
 Run all live suites:
@@ -80,6 +81,9 @@ pnpm test:live
 
 Use `INTEGRATION_DISABLE=cursor,claude,pi,droid,codex` to skip specific SDKs or CLIs during live
 runs. Use `DIFFWARDEN_LIVE_CLI=codex,claude,gemini` to restrict CLI live tests to a subset.
+Live CLI and e2e tests also honor `DIFFWARDEN_LIVE_<REVIEWER>_PROVIDER`,
+`DIFFWARDEN_LIVE_<REVIEWER>_MODEL`, `DIFFWARDEN_LIVE_<REVIEWER>_EFFORT`, and
+`DIFFWARDEN_LIVE_<REVIEWER>_EXECUTABLE`.
 
 The `v0.1.0` release machine verified every implemented live path:
 
