@@ -20,6 +20,14 @@ afterEach(() => {
 });
 
 describe("diffwarden CLI e2e", () => {
+  it("reports the package version", async () => {
+    const result = await runDiffwarden(process.cwd(), ["--version"]);
+    const packageJson = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8"));
+
+    expect(result.stdout.trim()).toBe(packageJson.version);
+    expect(result.stderr).toBe("");
+  });
+
   it("reviews uncommitted changes with the fake reviewer in Markdown", async () => {
     const repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");

@@ -12,6 +12,7 @@ import { resolveGitTarget } from "./core/git.js";
 import { renderJson, renderMarkdown } from "./core/render.js";
 import { runReview } from "./core/runner.js";
 import { parseTargetSpec } from "./core/target.js";
+import { version } from "./version.js";
 
 const program = new Command();
 const collectReviewers = (value: string, previous: string[]): string[] => [...previous, value];
@@ -19,7 +20,7 @@ const collectReviewers = (value: string, previous: string[]): string[] => [...pr
 program
   .name("diffwarden")
   .description("A small CLI for agent-callable code review.")
-  .version("0.0.0")
+  .version(version)
   .option("--target <target>", "review target, such as uncommitted, base:main, or commit:abc123")
   .option(
     "--reviewer <spec>",

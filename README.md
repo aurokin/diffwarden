@@ -9,6 +9,20 @@ stay behind adapters.
 
 ## Quick Start
 
+Install from the GitHub source release or a local checkout:
+
+```bash
+git clone https://github.com/aurokin/diffwarden.git
+cd diffwarden
+git checkout v0.1.0
+pnpm install
+pnpm build
+pnpm link --global
+diffwarden --version
+```
+
+For local development without installing the binary:
+
 ```bash
 pnpm install
 pnpm build
@@ -65,7 +79,7 @@ Not implemented:
 - `custom:<text>` review targets.
 - GitHub PR posting or inline review comments.
 - `--fail-on-findings` CI gating.
-- npm publishing.
+- npm publishing. GitHub source releases are available.
 
 ## Documentation
 

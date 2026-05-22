@@ -81,6 +81,13 @@ pnpm test:live
 Use `INTEGRATION_DISABLE=cursor,claude,pi,codex` to skip specific SDKs or CLIs during live
 runs. Use `DIFFWARDEN_LIVE_CLI=codex,claude,gemini` to restrict CLI live tests to a subset.
 
+The `v0.1.0` release machine verified every implemented live path:
+
+- SDK smoke tests: Cursor SDK, Claude SDK, and Pi SDK.
+- CLI smoke tests: Codex, Claude, Cursor, Gemini, OpenCode, Pi, Grok, and Antigravity.
+- Built-binary e2e smoke test with all eight CLI reviewers selected through
+  `DIFFWARDEN_LIVE_E2E_REVIEWERS`.
+
 ## Combined Metrics
 
 ```bash
