@@ -57,6 +57,13 @@ Supported v1 targets:
 - `uncommitted`
 - `base:<branch>`
 - `commit:<sha>`
+- `custom:<text>`
+
+`custom:<text>` is for repository-scoped review instructions rather than a precomputed
+patch. It still runs reviewer preflight, prompt assembly, parsing, schema validation,
+path validation, aggregation, and rendering, but it does not collect a diff, populate
+`changed_files`, embed a patch fence in the prompt, or validate findings against
+changed-line overlap.
 
 When no `--reviewer` or `--reviewer-set` is provided, config must define
 `defaultReviewerSet`; otherwise the CLI exits with a config-required error. For local
@@ -87,6 +94,7 @@ Implemented:
 
 - TypeScript CLI scaffold.
 - Git target resolution for uncommitted, base branch, and single-commit reviews.
+- Custom instruction targets for repository-scoped reviews.
 - Fake reviewer for credential-free development.
 - Review parsing, rendering, validation, and aggregation.
 - Project/user `diffwarden.config.json` discovery.
@@ -98,7 +106,6 @@ Implemented:
 Not implemented:
 
 - `pr:<number|url>` targets.
-- `custom:<text>` review targets.
 - GitHub PR posting or inline review comments.
 - `--fail-on-findings` CI gating.
 - npm publishing. GitHub source releases are available.

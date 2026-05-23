@@ -25,7 +25,10 @@ program
   .name("diffwarden")
   .description("A small CLI for agent-callable code review.")
   .version(version)
-  .option("--target <target>", "review target, such as uncommitted, base:main, or commit:abc123")
+  .option(
+    "--target <target>",
+    "review target, such as uncommitted, base:main, commit:abc123, or custom:Review auth",
+  )
   .option(
     "--reviewer <spec>",
     "reviewer spec, such as fake, cursor, claude, pi, droid, codex, gemini, opencode, grok, antigravity, or pi:profile",

@@ -40,6 +40,24 @@ describe("runReview", () => {
     expect(artifact.result.overall_correctness).toBe("patch is correct");
   });
 
+  it("runs custom targets without diff-backed location validation", async () => {
+    repo = createRepo();
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("custom:Review auth paths"));
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "fake",
+    });
+
+    expect(artifact.target.kind).toBe("custom");
+    expect(artifact.target.instructions).toBe("Review auth paths");
+    expect(artifact.target.changed_files).toEqual([]);
+    expect(artifact.validation.valid_locations).toBe(true);
+    expect(artifact.validation.findings_overlap_diff).toBe(true);
+    expect(() => reviewArtifactSchema.parse(artifact)).not.toThrow();
+  });
+
   it("rejects implicit reviewer selection without config", async () => {
     repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");

@@ -99,6 +99,28 @@ describe("diffwarden CLI e2e", () => {
     expect(artifact.target.changed_files).toEqual(["tracked.txt"]);
   });
 
+  it("reviews custom instructions with the fake reviewer in JSON", async () => {
+    const repo = createRepo();
+
+    const result = await runDiffwarden(repo, [
+      "--target",
+      "custom:Review auth paths",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--format",
+      "json",
+    ]);
+    const artifact = JSON.parse(result.stdout);
+
+    expect(artifact.target.kind).toBe("custom");
+    expect(artifact.target.instructions).toBe("Review auth paths");
+    expect(artifact.target.changed_files).toEqual([]);
+    expect(artifact.validation.valid_locations).toBe(true);
+    expect(artifact.validation.findings_overlap_diff).toBe(true);
+  });
+
   it("runs doctor preflight checks without requiring a target", async () => {
     const repo = createRepo();
 

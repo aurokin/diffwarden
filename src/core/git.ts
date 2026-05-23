@@ -24,6 +24,10 @@ export async function resolveGitTarget(cwd: string, spec: ReviewTargetSpec): Pro
     return resolveBaseTarget(repoRoot, spec.branch, headSha);
   }
 
+  if (spec.kind === "custom") {
+    return resolveCustomTarget(repoRoot, headSha, spec.instructions);
+  }
+
   return resolveCommitTarget(repoRoot, spec.sha);
 }
 
@@ -110,6 +114,24 @@ async function resolveCommitTarget(repoRoot: string, sha: string): Promise<Resol
           ? `git diff-tree --root --patch --no-commit-id ${commitSha}`
           : `git diff ${firstParent} ${commitSha}`,
       changed_files: lines(changedText),
+    },
+  };
+}
+
+function resolveCustomTarget(
+  repoRoot: string,
+  headSha: string,
+  instructions: string,
+): ResolvedDiff {
+  return {
+    diff: "",
+    target: {
+      kind: "custom",
+      repo_root: repoRoot,
+      head_sha: headSha,
+      instructions,
+      diff_command: "custom instructions",
+      changed_files: [],
     },
   };
 }

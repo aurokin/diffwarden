@@ -25,6 +25,20 @@ describe("parseTargetSpec", () => {
     });
   });
 
+  it("parses custom targets", () => {
+    expect(parseTargetSpec("custom: Review the auth flow ")).toEqual({
+      kind: "custom",
+      raw: "custom: Review the auth flow ",
+      instructions: "Review the auth flow",
+    });
+  });
+
+  it("rejects empty custom targets", () => {
+    expect(() => parseTargetSpec("custom:   ")).toThrow(
+      "Invalid target: custom target requires instructions",
+    );
+  });
+
   it("rejects unsupported targets", () => {
     expect(() => parseTargetSpec("pr:1")).toThrow("Invalid target");
   });

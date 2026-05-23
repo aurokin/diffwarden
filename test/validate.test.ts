@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
   ReviewArtifactResult,
@@ -92,7 +95,118 @@ describe("validateReviewResult", () => {
       },
     ]);
   });
+
+  it("does not require diff overlap for custom targets", () => {
+    const repo = createCustomRepo();
+    const result = reviewResult("src/other.ts", 20);
+
+    try {
+      const nextValidation = validateReviewResult({
+        result,
+        target: customTarget(repo),
+        validation,
+        changedLineRanges: {},
+      });
+
+      expect(nextValidation.valid_locations).toBe(true);
+      expect(nextValidation.findings_overlap_diff).toBe(true);
+      expect(nextValidation.invalid_locations).toEqual([]);
+    } finally {
+      rmSync(repo, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts absolute custom finding paths inside the repo", () => {
+    const repo = createCustomRepo();
+    const result = reviewResult(path.join(repo, "src/other.ts"), 20);
+
+    try {
+      const nextValidation = validateReviewResult({
+        result,
+        target: customTarget(repo),
+        validation,
+      });
+
+      expect(nextValidation.valid_locations).toBe(true);
+      expect(nextValidation.findings_overlap_diff).toBe(true);
+      expect(nextValidation.invalid_locations).toEqual([]);
+    } finally {
+      rmSync(repo, { force: true, recursive: true });
+    }
+  });
+
+  it("reports custom finding paths outside the repo", () => {
+    const repo = createCustomRepo();
+    const outsideFile = path.join(tmpdir(), "outside.ts");
+    writeFileSync(outsideFile, "outside\n");
+    const result = reviewResult(outsideFile, 1);
+
+    try {
+      const nextValidation = validateReviewResult({
+        result,
+        target: customTarget(repo),
+        validation,
+      });
+
+      expect(nextValidation.valid_locations).toBe(false);
+      expect(nextValidation.findings_overlap_diff).toBe(true);
+      expect(nextValidation.invalid_locations).toEqual([
+        {
+          index: 0,
+          reason: `Finding path is outside the repository: ${outsideFile}`,
+        },
+      ]);
+    } finally {
+      rmSync(repo, { force: true, recursive: true });
+      rmSync(outsideFile, { force: true });
+    }
+  });
+
+  it("reports custom finding paths that do not exist", () => {
+    const repo = createCustomRepo();
+    const result = reviewResult("src/missing.ts", 1);
+
+    try {
+      const nextValidation = validateReviewResult({
+        result,
+        target: customTarget(repo),
+        validation,
+      });
+
+      expect(nextValidation.valid_locations).toBe(false);
+      expect(nextValidation.findings_overlap_diff).toBe(true);
+      expect(nextValidation.invalid_locations).toEqual([
+        {
+          index: 0,
+          reason: "Finding path does not exist: src/missing.ts",
+        },
+      ]);
+    } finally {
+      rmSync(repo, { force: true, recursive: true });
+    }
+  });
 });
+
+function createCustomRepo(): string {
+  const repo = mkdtempSync(path.join(tmpdir(), "diffwarden-validate-"));
+  const src = path.join(repo, "src");
+  mkdirSync(src);
+  writeFileSync(path.join(repo, "README.md"), "repo\n");
+  writeFileSync(path.join(repo, "tracked.ts"), "tracked\n");
+  writeFileSync(path.join(src, "other.ts"), "other\n");
+  return repo;
+}
+
+function customTarget(repoRoot: string): ReviewTargetResolved {
+  return {
+    kind: "custom",
+    repo_root: repoRoot,
+    head_sha: "abc123",
+    instructions: "Review auth paths",
+    diff_command: "custom instructions",
+    changed_files: [],
+  };
+}
 
 function reviewResult(filePath: string, line = 1): ReviewArtifactResult {
   return {

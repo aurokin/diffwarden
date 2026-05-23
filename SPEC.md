@@ -46,8 +46,7 @@ Permanent non-goals for this CLI:
 
 Deferred, but potentially useful later:
 
-1. Custom reviewer instructions.
-2. Read-only PR target resolution, if it can preserve the same output contract without adding posting behavior.
+1. Read-only PR target resolution, if it can preserve the same output contract without adding posting behavior.
 
 ## 4. Primary user stories
 
@@ -226,8 +225,14 @@ uncommitted                       Review staged, unstaged, and untracked local c
 base:<branch>                     Review HEAD against merge-base with branch.
 commit:<sha>                      Review one commit.
 pr:<number|url>                   Review a pull request. Later phase.
-custom:<text>                     Custom reviewer instructions. Later phase.
+custom:<text>                     Custom repository-scoped reviewer instructions.
 ```
+
+`custom:<text>` is intentionally not diff-backed. It gives the reviewer a repository root
+and custom instructions, then uses the same reviewer preflight, prompt assembly, parsing,
+schema validation, path validation, aggregation, rendering, and artifact output as other
+targets. Because no patch is collected, custom targets do not populate `changed_files`,
+embed a patch in the prompt, or validate findings against changed-line overlap.
 
 ### 5.5 Initial v1 targets
 
@@ -236,11 +241,11 @@ Implement in v1:
 - `uncommitted`
 - `base:<branch>`
 - `commit:<sha>`
+- `custom:<text>`
 
 Defer:
 
 - `pr:<number|url>`
-- `custom:<text>`
 
 ## 6. Exit codes
 

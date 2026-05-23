@@ -61,6 +61,9 @@ function renderTarget(kind: string, target: ReviewArtifact["target"]): string {
   if (kind === "commit" && target.commit_sha) {
     return `commit:${target.commit_sha}`;
   }
+  if (kind === "custom" && target.instructions) {
+    return `custom:${target.instructions}`;
+  }
   return kind;
 }
 

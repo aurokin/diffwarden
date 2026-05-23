@@ -90,7 +90,7 @@ These features apply across adapter paths:
 | `base:<branch>` targets | yes |
 | `commit:<sha>` targets | yes |
 | `pr:<number\|url>` targets | no |
-| `custom:<text>` targets | no |
+| `custom:<text>` targets | yes |
 | Multiple reviewers in one run | yes |
 | Reviewer sets from config | yes |
 | Markdown output | yes |
@@ -100,3 +100,15 @@ These features apply across adapter paths:
 | GitHub PR posting | no |
 | Inline GitHub review comments | no |
 | `--fail-on-findings` CI gating | no |
+
+## Target Behavior
+
+Diff-backed targets (`uncommitted`, `base:<branch>`, and `commit:<sha>`) collect a patch,
+populate `changed_files`, embed the patch in the reviewer prompt, and validate findings
+against the changed files and changed-line ranges.
+
+`custom:<text>` targets use the provided text as repository-scoped review instructions.
+They still use the normal reviewer selection, preflight, output parsing, schema validation,
+path validation, aggregation, Markdown rendering, and JSON artifact path. They skip diff
+collection, patch embedding, `changed_files` population, and changed-line overlap
+validation because there is no single target patch.

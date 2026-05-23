@@ -5,10 +5,12 @@ workflow, and when choosing SDK or CLI transports for a reviewer.
 
 ## Diffwarden vs Codex Review
 
-Codex has a first-class review path. This comparison was checked against the upstream
-Codex repository at commit
-[`7d47056ea4`](https://github.com/openai/codex/tree/7d47056ea4). The relevant source
-paths are:
+Codex has a first-class review path. This comparison was dated May 23, 2026, when the
+latest GitHub release was
+[`0.133.0` / `rust-v0.133.0`](https://github.com/openai/codex/releases/tag/rust-v0.133.0)
+(published May 21, 2026). The source inspection used upstream commit
+[`7d47056ea4`](https://github.com/openai/codex/tree/7d47056ea4). The relevant source paths
+are:
 
 - `codex-rs/exec/src/cli.rs` and `codex-rs/exec/src/lib.rs` for `codex review`.
 - `codex-rs/core/src/review_prompts.rs` for target-specific review prompts.
@@ -76,7 +78,7 @@ review runner independent from the Codex app/session model.
 | Primary use case | Native Codex review inside a Codex thread/session | Agent-callable review runner across multiple engines |
 | Reviewer engines | Codex only | Codex, Claude, Cursor, Pi, Droid, Gemini, OpenCode, Grok, Antigravity, fake |
 | Multi-reviewer orchestration | No | Yes, via repeated `--reviewer` flags or reviewer sets |
-| Review targets | Uncommitted, base branch, commit, custom instructions | Uncommitted, base branch, commit |
+| Review targets | Uncommitted, base branch, commit, custom instructions | Uncommitted, base branch, commit, custom instructions |
 | Base branch handling | Review prompt embeds merge-base SHA when Codex can compute it | Core computes merge base and passes an actual diff |
 | Commit handling | Prompt instructs the reviewer to inspect the commit, with optional title | Core computes the commit diff, including root commits |
 | Diff materialization | Reviewer is prompted to inspect the repo/diff | Core captures the patch and embeds it in the prompt |
@@ -89,7 +91,7 @@ review runner independent from the Codex app/session model.
 | Read-only controls | Review child disables selected features and uses `AskForApproval::Never` | Per-adapter read-only/sandbox/tool restriction metadata and validation |
 | Session integration | Strong: review mode events and parent history integration | Deliberately external; no Codex thread UI integration |
 | Agent portability | Codex-specific | Designed for any agent that can call a CLI |
-| Custom review instructions | Yes | Not yet |
+| Custom review instructions | Yes | Yes, through `custom:<text>` |
 | PR target support | Not in this inspected CLI path | Not yet |
 
 Choose Codex review when:
@@ -97,7 +99,6 @@ Choose Codex review when:
 - The user is in Codex and wants the built-in Codex review flow.
 - One Codex reviewer is enough.
 - Session-integrated review UI matters more than cross-agent portability.
-- Custom review instructions are needed today.
 
 Choose Diffwarden when:
 
@@ -108,9 +109,9 @@ Choose Diffwarden when:
 - You want machine-readable JSON artifacts independent of a specific agent product.
 - You want preflight checks for reviewer runtime/auth/model settings before running a review.
 
-Current Diffwarden target support is narrower than upstream Codex review: Diffwarden
-supports `uncommitted`, `base:<branch>`, and `commit:<sha>`. Custom prompt targets and PR
-targets are not implemented.
+Current Diffwarden target support is narrower than upstream Codex review only for PR
+targets: Diffwarden supports `uncommitted`, `base:<branch>`, `commit:<sha>`, and
+`custom:<text>` targets.
 
 Current Codex review is narrower than Diffwarden in orchestration: it is a Codex-native
 single-reviewer workflow. It does not provide Diffwarden's multi-engine reviewer sets,

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -121,6 +121,21 @@ describe("resolveGitTarget", () => {
     expect(resolved.target.commit_sha).toBe(rootSha);
     expect(resolved.target.changed_files).toEqual(["tracked.txt"]);
     expect(resolved.diff).toContain("initial");
+  });
+
+  it("resolves custom instructions without a diff", async () => {
+    const repo = createRepo();
+
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("custom:Review auth paths"));
+
+    expect(resolved.diff).toBe("");
+    expect(resolved.target).toMatchObject({
+      kind: "custom",
+      repo_root: realpathSync(repo),
+      head_sha: git(repo, ["rev-parse", "HEAD"]),
+      instructions: "Review auth paths",
+      changed_files: [],
+    });
   });
 });
 

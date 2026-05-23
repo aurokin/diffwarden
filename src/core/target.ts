@@ -14,6 +14,11 @@ export type ReviewTargetSpec =
       kind: "commit";
       raw: string;
       sha: string;
+    }
+  | {
+      kind: "custom";
+      raw: string;
+      instructions: string;
     };
 
 export function parseTargetSpec(target: string): ReviewTargetSpec {
@@ -49,6 +54,22 @@ export function parseTargetSpec(target: string): ReviewTargetSpec {
       kind: "commit",
       raw: target,
       sha,
+    };
+  }
+
+  const customPrefix = "custom:";
+  if (target.startsWith(customPrefix)) {
+    const instructions = target.slice(customPrefix.length).trim();
+    if (instructions.length === 0) {
+      throw invalidCli(
+        "Invalid target: custom target requires instructions, for example custom:Review the auth flow",
+      );
+    }
+
+    return {
+      kind: "custom",
+      raw: target,
+      instructions,
     };
   }
 

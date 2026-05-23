@@ -174,6 +174,7 @@ export const reviewTargetResolvedSchema = z.object({
       url: z.string().optional(),
     })
     .optional(),
+  instructions: z.string().min(1).optional(),
   diff_command: z.string(),
   changed_files: z.array(z.string()),
 });
