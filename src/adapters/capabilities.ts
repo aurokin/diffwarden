@@ -1,3 +1,4 @@
+import { invalidCli } from "../core/errors.js";
 import type { ReviewAdapterOutput, ReviewReviewerConfig } from "./types.js";
 
 export const reviewerSdkValues = [
@@ -235,4 +236,58 @@ export function getTransportCapability(
   transport: ReviewerTransport,
 ): ReviewerTransportCapability | undefined {
   return reviewerCapabilities[sdk].transports[transport];
+}
+
+export function reviewerCapabilityDefaults(
+  sdk: ReviewerSdk,
+  model: string | undefined,
+): Pick<ReviewReviewerConfig, "model" | "transport"> {
+  return {
+    ...reviewerDefaultTransport(sdk),
+    ...reviewerDefaultModel(sdk, model),
+  };
+}
+
+export function reviewerTransportDefaults(
+  sdk: ReviewerSdk,
+): Pick<ReviewReviewerConfig, "transport"> {
+  return reviewerDefaultTransport(sdk);
+}
+
+export function validateReviewerCapabilityOverrides(
+  reviewer: ReviewReviewerConfig,
+): ReviewReviewerConfig {
+  const transport = reviewer.transport ?? "sdk";
+  if (transport !== "cli") {
+    return reviewer;
+  }
+
+  const capability = getTransportCapability(reviewer.sdk, transport);
+
+  if (capability?.supportsModel !== true && reviewer.model !== undefined) {
+    throw invalidCli(`${reviewer.sdk} CLI transport does not support per-run model overrides`);
+  }
+
+  if (capability?.supportsEffort !== true && reviewer.effort !== undefined) {
+    throw invalidCli(`${reviewer.sdk} CLI transport does not support per-run effort overrides`);
+  }
+
+  return reviewer;
+}
+
+function reviewerDefaultTransport(sdk: ReviewerSdk): Pick<ReviewReviewerConfig, "transport"> {
+  const transport = defaultReviewerTransport(sdk);
+  return transport === undefined ? {} : { transport };
+}
+
+function reviewerDefaultModel(
+  sdk: ReviewerSdk,
+  model: string | undefined,
+): Pick<ReviewReviewerConfig, "model"> {
+  if (model !== undefined) {
+    return { model };
+  }
+
+  const defaultModel = defaultReviewerModel(sdk);
+  return defaultModel === undefined ? {} : { model: defaultModel };
 }

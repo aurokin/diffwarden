@@ -110,6 +110,21 @@ describe("resolveReviewerConfig", () => {
     });
   });
 
+  it("does not apply built-in default models to configured reviewers", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "claude-configured",
+        config: {
+          reviewers: [{ id: "claude-configured", sdk: "claude" }],
+        },
+      }),
+    ).toEqual({
+      id: "claude-configured",
+      sdk: "claude",
+      readonly: true,
+    });
+  });
+
   it("lets timeout overrides take precedence over config timeouts", () => {
     expect(
       resolveReviewerConfig({
