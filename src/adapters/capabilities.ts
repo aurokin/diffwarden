@@ -45,7 +45,7 @@ const reviewerCapabilityDefinitions = {
   },
   cursor: {
     sdk: "cursor",
-    defaultModel: "composer-2",
+    defaultModel: "composer-2.5",
     transports: {
       sdk: {
         transport: "sdk",

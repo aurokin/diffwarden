@@ -110,7 +110,7 @@ describe("resolveReviewerConfig", () => {
     });
   });
 
-  it("does not apply built-in default models to configured reviewers", () => {
+  it("applies built-in default models to configured reviewers when no model is configured", () => {
     expect(
       resolveReviewerConfig({
         spec: "claude-configured",
@@ -121,6 +121,21 @@ describe("resolveReviewerConfig", () => {
     ).toEqual({
       id: "claude-configured",
       sdk: "claude",
+      model: "sonnet",
+      readonly: true,
+    });
+
+    expect(
+      resolveReviewerConfig({
+        spec: "cursor-configured",
+        config: {
+          reviewers: [{ id: "cursor-configured", sdk: "cursor" }],
+        },
+      }),
+    ).toEqual({
+      id: "cursor-configured",
+      sdk: "cursor",
+      model: "composer-2.5",
       readonly: true,
     });
   });
@@ -227,7 +242,7 @@ describe("resolveReviewerConfig", () => {
   it("keeps existing default models for SDKs with built-in defaults", () => {
     expect(resolveReviewerConfig({ spec: "cursor" })).toMatchObject({
       sdk: "cursor",
-      model: "composer-2",
+      model: "composer-2.5",
     });
     expect(resolveReviewerConfig({ spec: "claude" })).toMatchObject({
       sdk: "claude",

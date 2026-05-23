@@ -44,6 +44,14 @@ diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 diffwarden --target commit:abc123 --format json
 ```
 
+Verify reviewer runtime, auth, model, and effort settings without reviewing a diff:
+
+```bash
+diffwarden doctor --reviewer cursor --model composer-2.5
+diffwarden doctor --reviewer claude --model sonnet --effort high
+diffwarden doctor --reviewer pi --model anthropic/claude-sonnet-4-5
+```
+
 Supported v1 targets:
 
 - `uncommitted`

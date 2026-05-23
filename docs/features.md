@@ -21,7 +21,7 @@ Legend:
 | `fake` | Built-in fake reviewer | n/a | n/a | n/a | n/a |
 | `codex` | Codex CLI | CLI | no | `codex` | CLI default |
 | `claude` | Claude Agent SDK | SDK | CLI | `claude` for CLI/local auth | `sonnet` |
-| `cursor` | Cursor SDK | SDK | CLI | `cursor-agent` for CLI | `composer-2` |
+| `cursor` | Cursor SDK | SDK | CLI | `cursor-agent` for CLI | `composer-2.5` |
 | `pi` | Pi Coding Agent SDK | SDK | CLI | `pi` for CLI | first authenticated Pi model |
 | `droid` | Factory Droid SDK | SDK | CLI | `droid` | Droid default |
 | `gemini` | Gemini CLI | CLI | no | `gemini` | CLI default |

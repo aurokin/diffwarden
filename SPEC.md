@@ -954,8 +954,8 @@ If no config exists, exit `2` with a message explaining where to create one. The
     {
       "id": "cursor-fast",
       "sdk": "cursor",
-      "model": "composer-2",
-      "modelCatalog": ["composer-2"],
+      "model": "composer-2.5",
+      "modelCatalog": ["composer-2.5"],
       "effort": "medium"
     },
     {

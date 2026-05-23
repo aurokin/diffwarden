@@ -4,11 +4,11 @@ import { sdkOutputMetadata, sdkPreflightMetadata } from "../src/adapters/metadat
 
 describe("SDK adapter metadata", () => {
   it("derives preflight metadata defaults from SDK capability facts", () => {
-    expect(sdkPreflightMetadata("cursor", { model: "composer-2" })).toMatchObject({
+    expect(sdkPreflightMetadata("cursor", { model: "composer-2.5" })).toMatchObject({
       transport: "sdk",
       readonlyCapability: "prompt-only",
       preferredCaptureMode: "text",
-      model: "composer-2",
+      model: "composer-2.5",
     });
     expect(sdkPreflightMetadata("claude")).toMatchObject({
       transport: "sdk",

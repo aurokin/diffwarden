@@ -28,7 +28,7 @@ describe("reviewerCapabilities", () => {
   });
 
   it("owns default reviewer models and transports", () => {
-    expect(defaultReviewerModel("cursor")).toBe("composer-2");
+    expect(defaultReviewerModel("cursor")).toBe("composer-2.5");
     expect(defaultReviewerModel("claude")).toBe("sonnet");
     expect(defaultReviewerModel("pi")).toBeUndefined();
     expect(defaultReviewerModel("droid")).toBeUndefined();

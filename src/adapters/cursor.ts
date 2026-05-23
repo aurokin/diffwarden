@@ -14,7 +14,7 @@ import type {
   ReviewAdapterPreflightResult,
 } from "./types.js";
 
-const defaultCursorModel = "composer-2";
+const defaultCursorModel = "composer-2.5";
 
 type CursorAdapterDependencies = {
   loadSdk: () => Promise<CursorSdk>;

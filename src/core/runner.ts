@@ -44,6 +44,26 @@ export type RunReviewOptions = {
   adapters?: Partial<Record<string, ReviewAdapter>>;
 };
 
+export type ReviewerPreflightArtifact = {
+  id: string;
+  sdk: ReviewReviewerConfig["sdk"];
+  status: "passed" | "failed";
+  profile?: string;
+  provider?: string;
+  model?: string;
+  effort?: string;
+  preflight?: Awaited<ReturnType<NonNullable<ReviewAdapter["preflight"]>>>;
+  error?: NonNullable<ReviewReviewerArtifact["error"]>;
+  timing_ms: number;
+};
+
+export type ReviewerPreflightReport = {
+  schema_version: 1;
+  cwd: string;
+  reviewers: ReviewerPreflightArtifact[];
+  timing_ms: number;
+};
+
 export async function runReview(options: RunReviewOptions): Promise<ReviewArtifact> {
   const reviewers = resolveReviewerConfigs({
     ...(options.reviewers !== undefined
@@ -131,6 +151,42 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
       ? { warnings: failedReviewerArtifacts.map(formatReviewerFailureWarning) }
       : {}),
     timing_ms: timingMs,
+  };
+}
+
+export async function runReviewerPreflightReport(
+  options: Omit<RunReviewOptions, "resolved" | "strict">,
+): Promise<ReviewerPreflightReport> {
+  const reviewers = resolveReviewerConfigs({
+    ...(options.reviewers !== undefined
+      ? { reviewers: options.reviewers }
+      : options.reviewer !== undefined
+        ? { reviewers: [options.reviewer] }
+        : {}),
+    ...(options.reviewerSet !== undefined ? { reviewerSet: options.reviewerSet } : {}),
+    ...(options.model !== undefined ? { model: options.model } : {}),
+    ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    ...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
+    ...(options.config !== undefined ? { config: options.config } : {}),
+  });
+  const env = options.env ?? process.env;
+  const started = Date.now();
+  const artifacts = await Promise.all(
+    reviewers.map((reviewer) =>
+      runSingleReviewerPreflight({
+        cwd: options.cwd,
+        reviewer,
+        env,
+        ...(options.adapters !== undefined ? { adapters: options.adapters } : {}),
+      }),
+    ),
+  );
+
+  return {
+    schema_version: 1,
+    cwd: options.cwd,
+    reviewers: artifacts,
+    timing_ms: Date.now() - started,
   };
 }
 
@@ -330,6 +386,41 @@ async function preflightReviewer(options: {
     ...(preflight !== undefined ? { preflight } : {}),
     ...(remainingTimeoutMs !== undefined ? { remainingTimeoutMs } : {}),
   };
+}
+
+async function runSingleReviewerPreflight(options: {
+  cwd: string;
+  reviewer: ReviewReviewerConfig;
+  env: NodeJS.ProcessEnv;
+  adapters?: Partial<Record<string, ReviewAdapter>>;
+}): Promise<ReviewerPreflightArtifact> {
+  const start = Date.now();
+  try {
+    const context = await preflightReviewer(options);
+    return {
+      id: context.reviewer.id,
+      sdk: context.reviewer.sdk,
+      status: "passed",
+      ...(context.reviewer.profile ? { profile: context.reviewer.profile } : {}),
+      ...(context.reviewer.provider ? { provider: context.reviewer.provider } : {}),
+      ...(context.reviewer.model ? { model: context.reviewer.model } : {}),
+      ...(context.reviewer.effort ? { effort: context.reviewer.effort } : {}),
+      ...(context.preflight !== undefined ? { preflight: context.preflight } : {}),
+      timing_ms: Date.now() - start,
+    };
+  } catch (error) {
+    return {
+      id: options.reviewer.id,
+      sdk: options.reviewer.sdk,
+      status: "failed",
+      ...(options.reviewer.profile ? { profile: options.reviewer.profile } : {}),
+      ...(options.reviewer.provider ? { provider: options.reviewer.provider } : {}),
+      ...(options.reviewer.model ? { model: options.reviewer.model } : {}),
+      ...(options.reviewer.effort ? { effort: options.reviewer.effort } : {}),
+      error: reviewerError(error),
+      timing_ms: Date.now() - start,
+    };
+  }
 }
 
 function createFailedReviewerArtifact(

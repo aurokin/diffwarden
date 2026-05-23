@@ -99,6 +99,34 @@ describe("diffwarden CLI e2e", () => {
     expect(artifact.target.changed_files).toEqual(["tracked.txt"]);
   });
 
+  it("runs doctor preflight checks without requiring a target", async () => {
+    const repo = createRepo();
+
+    const result = await runDiffwarden(repo, [
+      "doctor",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--format",
+      "json",
+    ]);
+    const report = JSON.parse(result.stdout);
+
+    expect(report.reviewers).toHaveLength(1);
+    expect(report.reviewers[0]).toMatchObject({
+      id: "fake",
+      sdk: "fake",
+      status: "passed",
+      preflight: {
+        checks: expect.arrayContaining([
+          expect.objectContaining({ name: "runtime", status: "passed" }),
+        ]),
+      },
+    });
+    expect(result.stderr).toBe("");
+  });
+
   it("returns a CLI error for unsupported targets", async () => {
     const repo = createRepo();
 

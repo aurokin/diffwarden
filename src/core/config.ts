@@ -173,21 +173,11 @@ function starterConfigJson(): string {
       defaultReviewerSet: "1",
       reviewerSets: {
         "1": ["pi-default"],
-        "2": ["pi-default", "claude-default"],
-        "3": ["pi-default", "claude-default", "cursor-default"],
       },
       reviewers: [
         {
           id: "pi-default",
           sdk: "pi",
-        },
-        {
-          id: "claude-default",
-          sdk: "claude",
-        },
-        {
-          id: "cursor-default",
-          sdk: "cursor",
         },
       ],
       readonly: true,

@@ -143,12 +143,8 @@ describe("initDiffwardenConfig", () => {
     });
 
     expect(loaded?.config.defaultReviewerSet).toBe("1");
-    expect(loaded?.config.reviewerSets?.["2"]).toEqual(["pi-default", "claude-default"]);
-    expect(loaded?.config.reviewers?.map((reviewer) => reviewer.id)).toEqual([
-      "pi-default",
-      "claude-default",
-      "cursor-default",
-    ]);
+    expect(loaded?.config.reviewerSets).toEqual({ "1": ["pi-default"] });
+    expect(loaded?.config.reviewers).toEqual([{ id: "pi-default", sdk: "pi" }]);
   });
 
   it("refuses to overwrite an existing user config", async () => {

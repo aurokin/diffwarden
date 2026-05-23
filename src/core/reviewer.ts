@@ -1,5 +1,6 @@
 import {
   type ReviewerSdk,
+  defaultReviewerModel,
   isReviewerSdk,
   reviewerCapabilityDefaults,
   reviewerSdkValues,
@@ -191,7 +192,7 @@ function materializeConfiguredReviewer(
   configured: NonNullable<DiffwardenConfig["reviewers"]>[number],
   options: ResolveReviewerOptions,
 ): ReviewReviewerConfig {
-  const model = options.model ?? configured.model;
+  const model = options.model ?? configured.model ?? defaultReviewerModel(configured.sdk);
   const effort = options.effort ?? configured.effort;
 
   validateConfiguredModel(configured, model);

@@ -17,7 +17,7 @@ describe("cursorAdapter", () => {
         reviewer: {
           id: "cursor",
           sdk: "cursor",
-          model: "composer-2",
+          model: "composer-2.5",
           readonly: true,
         },
         readonly: true,
@@ -40,7 +40,7 @@ describe("cursorAdapter", () => {
     const adapter = createCursorAdapter({
       async loadSdk() {
         return mockCursorSdk({
-          models: [{ id: "composer-2", aliases: ["composer-latest"] }],
+          models: [{ id: "composer-2.5", aliases: ["composer-latest"] }],
         });
       },
     });
@@ -59,11 +59,11 @@ describe("cursorAdapter", () => {
 
     expect(preflight?.checks.find((check) => check.name === "model")).toMatchObject({
       status: "passed",
-      detail: "Cursor model alias is available: composer-latest -> composer-2.",
+      detail: "Cursor model alias is available: composer-latest -> composer-2.5.",
     });
     expect(preflight?.metadata).toMatchObject({
       model: "composer-latest",
-      canonicalModel: "composer-2",
+      canonicalModel: "composer-2.5",
       modelAlias: "composer-latest",
     });
   });
@@ -72,7 +72,7 @@ describe("cursorAdapter", () => {
     const adapter = createCursorAdapter({
       async loadSdk() {
         return mockCursorSdk({
-          models: [{ id: "composer-2", aliases: ["composer-latest"] }],
+          models: [{ id: "composer-2.5", aliases: ["composer-latest"] }],
         });
       },
     });
@@ -115,7 +115,7 @@ describe("cursorAdapter", () => {
         reviewer: {
           id: "cursor",
           sdk: "cursor",
-          model: "composer-2",
+          model: "composer-2.5",
           readonly: true,
         },
         readonly: true,
@@ -186,7 +186,7 @@ describe("cursorAdapter", () => {
     const adapter = createCursorAdapter({
       async loadSdk() {
         return mockCursorSdk({
-          models: [{ id: "composer-2" }],
+          models: [{ id: "composer-2.5" }],
           async createAgent() {
             return {
               agentId: "agent-1",
@@ -198,7 +198,7 @@ describe("cursorAdapter", () => {
                     return {
                       status: "finished",
                       result: "",
-                      model: "composer-2",
+                      model: "composer-2.5",
                       durationMs: 12,
                     };
                   },
@@ -213,7 +213,7 @@ describe("cursorAdapter", () => {
     const reviewer = {
       id: "cursor",
       sdk: "cursor" as const,
-      model: "composer-2",
+      model: "composer-2.5",
       effort: "high",
       readonly: true,
     };
@@ -243,7 +243,7 @@ describe("cursorAdapter", () => {
       const reviewer = {
         id: "cursor",
         sdk: "cursor" as const,
-        model: process.env.CURSOR_SMOKE_MODEL ?? "composer-2",
+        model: process.env.CURSOR_SMOKE_MODEL ?? "composer-2.5",
         readonly: true,
       };
       try {
@@ -304,7 +304,7 @@ function mockCursorSdk(options: {
           if (options.listModels !== undefined) {
             return options.listModels();
           }
-          return options.models ?? [{ id: "composer-2" }];
+          return options.models ?? [{ id: "composer-2.5" }];
         },
       },
     },
@@ -317,7 +317,7 @@ function input(overrides: Partial<ReviewAdapterInput> = {}): ReviewAdapterInput 
     reviewer: {
       id: "cursor",
       sdk: "cursor",
-      model: "composer-2",
+      model: "composer-2.5",
       readonly: true,
     },
     target: {
