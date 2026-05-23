@@ -1,0 +1,24 @@
+import type { ReviewAdapterInput, ReviewAdapterOutput, ReviewReviewerConfig } from "./types.js";
+
+export type CliEngine = Exclude<ReviewReviewerConfig["sdk"], "fake">;
+
+export type CliInvocation = {
+  executable: string;
+  args: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  stdin?: string;
+  outputPath?: string;
+  captureMode: NonNullable<ReviewAdapterOutput["metadata"]>["captureMode"];
+};
+
+export type CliRunResult = {
+  executable: string;
+  stdout: string;
+  stderr: string;
+};
+
+export type CliSpec = {
+  buildInvocation(input: ReviewAdapterInput, tempDir: string): Promise<CliInvocation>;
+  parseOutput(result: CliRunResult, invocation: CliInvocation): Promise<ReviewAdapterOutput>;
+};
