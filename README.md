@@ -60,6 +60,19 @@ Create a starter user config with:
 diffwarden init
 ```
 
+## Agent Skill
+
+Diffwarden includes a reusable skill for agents that want to call the installed CLI from
+another repository:
+
+```text
+skills/diffwarden/
+```
+
+This skill is for agents using Diffwarden, not for agents developing this repo. Install or
+copy that folder into your agent's skills directory according to the agent's skill-loading
+mechanism, then ask the agent to use `$diffwarden` for code review.
+
 ## Current Status
 
 Implemented:
