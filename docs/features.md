@@ -1,8 +1,8 @@
 # Reviewer Feature Matrix
 
-This matrix is the source of truth for currently supported reviewer capabilities in
-Diffwarden. It describes Diffwarden's adapter behavior, not every feature exposed by the
-underlying vendor tool.
+This matrix summarizes currently supported reviewer capabilities in Diffwarden. The
+code-owned source of truth is `src/adapters/capabilities.ts`; this page describes
+Diffwarden's adapter behavior, not every feature exposed by the underlying vendor tool.
 
 Legend:
 

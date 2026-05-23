@@ -1,22 +1,16 @@
+import {
+  type ReviewerSdk,
+  defaultReviewerModel,
+  defaultReviewerTransport,
+  getTransportCapability,
+  isReviewerSdk,
+  reviewerSdkValues,
+} from "../adapters/capabilities.js";
 import type { ReviewReviewerConfig } from "../adapters/types.js";
 import type { DiffwardenConfig } from "./config.js";
 import { invalidCli, invalidConfig } from "./errors.js";
 
-const reviewerSdkValues = [
-  "fake",
-  "cursor",
-  "claude",
-  "pi",
-  "droid",
-  "codex",
-  "gemini",
-  "opencode",
-  "grok",
-  "antigravity",
-] as const;
 const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-
-type ReviewerSdk = (typeof reviewerSdkValues)[number];
 
 export type ReviewEffort = (typeof effortValues)[number];
 
@@ -103,8 +97,8 @@ export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewRe
   return validateCliTransportOverrides({
     id: parsed.sdk,
     sdk: parsed.sdk,
-    ...defaultReviewerTransport(parsed.sdk),
-    ...defaultReviewerModel(parsed.sdk, options.model),
+    ...reviewerDefaultTransport(parsed.sdk),
+    ...reviewerModel(parsed.sdk, options.model),
     ...(options.effort !== undefined ? { effort: options.effort } : {}),
     ...reviewerTimeout(timeoutSeconds),
     readonly: true,
@@ -193,7 +187,7 @@ export function parseReviewEffort(effort: string): ReviewEffort {
   throw invalidCli(`Invalid --effort value: ${effort}`);
 }
 
-function defaultReviewerModel(
+function reviewerModel(
   sdk: ReviewerSdk,
   model: string | undefined,
 ): Pick<ReviewReviewerConfig, "model"> {
@@ -201,23 +195,13 @@ function defaultReviewerModel(
     return { model };
   }
 
-  if (sdk === "cursor") {
-    return { model: "composer-2" };
-  }
-
-  if (sdk === "claude") {
-    return { model: "sonnet" };
-  }
-
-  return {};
+  const defaultModel = defaultReviewerModel(sdk);
+  return defaultModel === undefined ? {} : { model: defaultModel };
 }
 
-function defaultReviewerTransport(sdk: ReviewerSdk): Pick<ReviewReviewerConfig, "transport"> {
-  if (isCliOnlyReviewerSdk(sdk)) {
-    return { transport: "cli" };
-  }
-
-  return {};
+function reviewerDefaultTransport(sdk: ReviewerSdk): Pick<ReviewReviewerConfig, "transport"> {
+  const transport = defaultReviewerTransport(sdk);
+  return transport === undefined ? {} : { transport };
 }
 
 function materializeConfiguredReviewer(
@@ -249,7 +233,7 @@ function materializeConfiguredReviewer(
     sdk: configured.sdk,
     ...(configured.transport !== undefined
       ? { transport: configured.transport }
-      : defaultReviewerTransport(configured.sdk)),
+      : reviewerDefaultTransport(configured.sdk)),
     ...(configured.profile !== undefined ? { profile: configured.profile } : {}),
     ...(configured.provider !== undefined ? { provider: configured.provider } : {}),
     ...(model !== undefined ? { model } : {}),
@@ -328,22 +312,8 @@ function secondsToMilliseconds(timeoutSeconds: number): number {
   return Math.round(timeoutSeconds * 1000);
 }
 
-function isReviewerSdk(value: string | undefined): value is ReviewerSdk {
-  return reviewerSdkValues.some((sdk) => sdk === value);
-}
-
 function isReviewEffort(value: string): value is ReviewEffort {
   return effortValues.some((effort) => effort === value);
-}
-
-function isCliOnlyReviewerSdk(sdk: ReviewerSdk): boolean {
-  return (
-    sdk === "codex" ||
-    sdk === "gemini" ||
-    sdk === "opencode" ||
-    sdk === "grok" ||
-    sdk === "antigravity"
-  );
 }
 
 function validateCliTransportOverrides(reviewer: ReviewReviewerConfig): ReviewReviewerConfig {
@@ -352,30 +322,17 @@ function validateCliTransportOverrides(reviewer: ReviewReviewerConfig): ReviewRe
     return reviewer;
   }
 
-  if (!cliTransportSupportsModel(reviewer.sdk) && reviewer.model !== undefined) {
+  const capability = getTransportCapability(reviewer.sdk, "cli");
+
+  if (capability?.supportsModel !== true && reviewer.model !== undefined) {
     throw invalidCli(`${reviewer.sdk} CLI transport does not support per-run model overrides`);
   }
 
-  if (!cliTransportSupportsEffort(reviewer.sdk) && reviewer.effort !== undefined) {
+  if (capability?.supportsEffort !== true && reviewer.effort !== undefined) {
     throw invalidCli(`${reviewer.sdk} CLI transport does not support per-run effort overrides`);
   }
 
   return reviewer;
-}
-
-function cliTransportSupportsModel(sdk: ReviewerSdk): boolean {
-  return sdk !== "fake" && sdk !== "antigravity";
-}
-
-function cliTransportSupportsEffort(sdk: ReviewerSdk): boolean {
-  return (
-    sdk === "codex" ||
-    sdk === "claude" ||
-    sdk === "pi" ||
-    sdk === "droid" ||
-    sdk === "opencode" ||
-    sdk === "grok"
-  );
 }
 
 function isValidProfileName(profile: string): boolean {

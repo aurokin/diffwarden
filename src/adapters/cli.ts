@@ -10,6 +10,8 @@ import {
   reviewResultSchema,
   reviewResultStrictJsonSchema,
 } from "../core/schema.js";
+import { getTransportCapability } from "./capabilities.js";
+import type { ReviewerTransportCapability } from "./capabilities.js";
 import { droidSessionTag } from "./droid-session.js";
 import type {
   ReviewAdapter,
@@ -39,22 +41,12 @@ type CliRunResult = {
 };
 
 type CliSpec = {
-  defaultExecutable: string;
-  readonlyCapability: NonNullable<
-    NonNullable<ReviewAdapterOutput["metadata"]>["readonlyCapability"]
-  >;
-  supportsModel: boolean;
-  supportsEffort: boolean;
   buildInvocation(input: ReviewAdapterInput, tempDir: string): Promise<CliInvocation>;
   parseOutput(result: CliRunResult, invocation: CliInvocation): Promise<ReviewAdapterOutput>;
 };
 
 const cliSpecs: Record<CliEngine, CliSpec> = {
   codex: {
-    defaultExecutable: "codex",
-    readonlyCapability: "enforced",
-    supportsModel: true,
-    supportsEffort: true,
     async buildInvocation(input, tempDir) {
       const schemaPath = path.join(tempDir, "review-schema.json");
       const outputPath = path.join(tempDir, "codex-review.json");
@@ -76,7 +68,7 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
       ];
 
       return {
-        executable: cliExecutable(input.reviewer, "codex"),
+        executable: cliExecutable(input.reviewer, defaultCliExecutable("codex")),
         args,
         stdin: input.prompt,
         outputPath,
@@ -106,10 +98,6 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
     },
   },
   claude: {
-    defaultExecutable: "claude",
-    readonlyCapability: "tool-restricted",
-    supportsModel: true,
-    supportsEffort: true,
     async buildInvocation(input, tempDir) {
       const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
       await writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: {} })}\n`, "utf8");
@@ -137,7 +125,7 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
       pushModelAndEffort(args, input.reviewer, claudeCliEffort);
 
       return {
-        executable: cliExecutable(input.reviewer, "claude"),
+        executable: cliExecutable(input.reviewer, defaultCliExecutable("claude")),
         args,
         stdin: input.prompt,
         captureMode: "native-structured",
@@ -151,10 +139,6 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
     },
   },
   cursor: {
-    defaultExecutable: "cursor-agent",
-    readonlyCapability: "prompt-only",
-    supportsModel: true,
-    supportsEffort: false,
     async buildInvocation(input) {
       const args = [
         "-p",
@@ -172,7 +156,7 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
       pushPromptArg(args, input.prompt, "cursor");
 
       return {
-        executable: cliExecutable(input.reviewer, "cursor-agent"),
+        executable: cliExecutable(input.reviewer, defaultCliExecutable("cursor")),
         args,
         captureMode: "text",
       };
@@ -185,16 +169,12 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
     },
   },
   gemini: {
-    defaultExecutable: "gemini",
-    readonlyCapability: "tool-restricted",
-    supportsModel: true,
-    supportsEffort: false,
     async buildInvocation(input) {
       const args = ["--prompt", "", "--output-format", "json", "--approval-mode", "plan"];
       pushModel(args, input.reviewer);
 
       return {
-        executable: cliExecutable(input.reviewer, "gemini"),
+        executable: cliExecutable(input.reviewer, defaultCliExecutable("gemini")),
         args,
         env: {
           GEMINI_CLI_TRUST_WORKSPACE: "true",
@@ -211,10 +191,6 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
     },
   },
   opencode: {
-    defaultExecutable: "opencode",
-    readonlyCapability: "prompt-only",
-    supportsModel: true,
-    supportsEffort: true,
     async buildInvocation(input) {
       const args = ["run", "--pure", "--format", "json", "--dir", input.cwd];
       const model = providerQualifiedModel(input.reviewer);
@@ -227,7 +203,7 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
       pushPromptArg(args, input.prompt, "opencode");
 
       return {
-        executable: cliExecutable(input.reviewer, "opencode"),
+        executable: cliExecutable(input.reviewer, defaultCliExecutable("opencode")),
         args,
         env: {
           OPENCODE_PERMISSION: JSON.stringify({
@@ -259,10 +235,6 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
     },
   },
   pi: {
-    defaultExecutable: "pi",
-    readonlyCapability: "tool-restricted",
-    supportsModel: true,
-    supportsEffort: true,
     async buildInvocation(input) {
       const args = [
         "--print",
@@ -286,7 +258,7 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
       }
 
       return {
-        executable: cliExecutable(input.reviewer, "pi"),
+        executable: cliExecutable(input.reviewer, defaultCliExecutable("pi")),
         args,
         stdin: input.prompt,
         captureMode: "text",
@@ -303,10 +275,6 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
     },
   },
   droid: {
-    defaultExecutable: "droid",
-    readonlyCapability: "enforced",
-    supportsModel: true,
-    supportsEffort: true,
     async buildInvocation(input, tempDir) {
       const promptPath = path.join(tempDir, "droid-prompt.txt");
       await writeFile(promptPath, input.prompt, "utf8");
@@ -330,7 +298,7 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
       args.push("--tag", JSON.stringify(droidSessionTag(input, "cli")));
 
       return {
-        executable: cliExecutable(input.reviewer, "droid"),
+        executable: cliExecutable(input.reviewer, defaultCliExecutable("droid")),
         args,
         captureMode: "text",
       };
@@ -343,10 +311,6 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
     },
   },
   grok: {
-    defaultExecutable: "grok",
-    readonlyCapability: "prompt-only",
-    supportsModel: true,
-    supportsEffort: true,
     async buildInvocation(input, tempDir) {
       const promptPath = path.join(tempDir, "grok-prompt.txt");
       await writeFile(promptPath, input.prompt, "utf8");
@@ -369,7 +333,7 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
       }
 
       return {
-        executable: cliExecutable(input.reviewer, "grok"),
+        executable: cliExecutable(input.reviewer, defaultCliExecutable("grok")),
         args,
         captureMode: "text",
       };
@@ -382,10 +346,6 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
     },
   },
   antigravity: {
-    defaultExecutable: "agy",
-    readonlyCapability: "prompt-only",
-    supportsModel: false,
-    supportsEffort: false,
     async buildInvocation(input, tempDir) {
       const printTimeoutSeconds = numberCliOption(input.reviewer, "printTimeoutSeconds") ?? 300;
       const args = [
@@ -398,7 +358,7 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
       ];
 
       return {
-        executable: cliExecutable(input.reviewer, "agy"),
+        executable: cliExecutable(input.reviewer, defaultCliExecutable("antigravity")),
         args,
         cwd: tempDir,
         stdin: input.prompt,
@@ -419,14 +379,15 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
 
 export function createCliAdapter(engine: CliEngine): ReviewAdapter {
   const spec = cliSpecs[engine];
+  const capability = cliCapability(engine);
   return {
     name: `${engine}:cli`,
     async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
-      validateSupportedCliOverrides(engine, spec, input.reviewer);
-      const executable = cliExecutable(input.reviewer, spec.defaultExecutable);
+      validateSupportedCliOverrides(engine, input.reviewer);
+      const executable = cliExecutable(input.reviewer, capability.defaultExecutable);
       const resolvedExecutable = await resolveExecutable(executable, input.env);
       const metadata: ReviewAdapterPreflightResult["metadata"] = {
-        readonlyCapability: spec.readonlyCapability,
+        readonlyCapability: capability.readonlyCapability,
         transport: "cli",
         executable: resolvedExecutable,
         ...(input.reviewer.model !== undefined ? { model: input.reviewer.model } : {}),
@@ -442,8 +403,8 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
           },
           {
             name: "readonly",
-            status: spec.readonlyCapability === "prompt-only" ? "warning" : "passed",
-            detail: readonlyDetail(spec.readonlyCapability),
+            status: capability.readonlyCapability === "prompt-only" ? "warning" : "passed",
+            detail: readonlyDetail(capability.readonlyCapability),
           },
           {
             name: "auth",
@@ -471,7 +432,7 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
       };
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
-      validateSupportedCliOverrides(engine, spec, input.reviewer);
+      validateSupportedCliOverrides(engine, input.reviewer);
       const tempDir = await mkdtemp(path.join(tmpdir(), "diffwarden-cli-"));
       try {
         const invocation = await spec.buildInvocation(input, tempDir);
@@ -785,6 +746,20 @@ function cliExecutable(reviewer: ReviewReviewerConfig, fallback: string): string
   return typeof executable === "string" && executable.trim() ? executable : fallback;
 }
 
+function cliCapability(
+  engine: CliEngine,
+): ReviewerTransportCapability & { defaultExecutable: string } {
+  const capability = getTransportCapability(engine, "cli");
+  if (capability === undefined || capability.defaultExecutable === undefined) {
+    throw invalidCli(`${engine} CLI transport is not supported`);
+  }
+  return capability as ReviewerTransportCapability & { defaultExecutable: string };
+}
+
+function defaultCliExecutable(engine: CliEngine): string {
+  return cliCapability(engine).defaultExecutable;
+}
+
 function numberCliOption(reviewer: ReviewReviewerConfig, key: string): number | undefined {
   const value = reviewer.cliOptions?.[key];
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
@@ -856,15 +831,12 @@ function droidCliEffort(effort: string): string {
   return effort === "minimal" ? "low" : effort;
 }
 
-function validateSupportedCliOverrides(
-  engine: CliEngine,
-  spec: CliSpec,
-  reviewer: ReviewReviewerConfig,
-): void {
-  if (!spec.supportsModel && reviewer.model !== undefined) {
+function validateSupportedCliOverrides(engine: CliEngine, reviewer: ReviewReviewerConfig): void {
+  const capability = cliCapability(engine);
+  if (!capability.supportsModel && reviewer.model !== undefined) {
     throw invalidCli(`${engine} CLI transport does not support per-run model overrides`);
   }
-  if (!spec.supportsEffort && reviewer.effort !== undefined) {
+  if (!capability.supportsEffort && reviewer.effort !== undefined) {
     throw invalidCli(`${engine} CLI transport does not support per-run effort overrides`);
   }
 }
