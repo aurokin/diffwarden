@@ -11,6 +11,7 @@ import {
   reviewerFailed,
 } from "../core/errors.js";
 import { reviewResultJsonSchema } from "../core/schema.js";
+import { sdkOutputMetadata, sdkPreflightMetadata } from "./metadata.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -76,8 +77,7 @@ export function createClaudeAdapter(
             detail: "Claude built-in tools are disabled for this adapter path.",
           },
         ],
-        metadata: {
-          readonlyCapability: "enforced",
+        metadata: sdkPreflightMetadata("claude", {
           model: modelPreflight.model.value,
           ...(modelPreflight.model.displayName !== undefined
             ? { modelDisplayName: modelPreflight.model.displayName }
@@ -89,10 +89,9 @@ export function createClaudeAdapter(
             ? { supportedEffortLevels: modelPreflight.model.supportedEffortLevels }
             : {}),
           ...claudeEffortMetadata(input.reviewer.effort),
-          preferredCaptureMode: "native-structured",
           authMode: runtime.authMode,
           executable: runtime.executable,
-        },
+        }),
       };
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
@@ -492,10 +491,9 @@ function claudeOutputMetadata(options: {
   fallbackReason?: string;
   previousResult?: ClaudeResultMessage;
 }): NonNullable<ReviewAdapterOutput["metadata"]> {
-  const metadata: NonNullable<ReviewAdapterOutput["metadata"]> = {
+  const metadata = sdkOutputMetadata("claude", {
     captureMode: options.captureMode,
     sessionId: options.result.session_id,
-    readonlyCapability: "enforced",
     model: options.input.reviewer.model ?? defaultClaudeModel,
     ...claudeEffortMetadata(options.input.reviewer.effort),
     durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
@@ -505,7 +503,7 @@ function claudeOutputMetadata(options: {
     ),
     authMode: options.runtime.authMode,
     executable: options.runtime.executable,
-  };
+  });
 
   if (options.fallbackReason !== undefined) {
     return {

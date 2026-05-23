@@ -10,6 +10,7 @@ import {
   reviewerFailed,
 } from "../core/errors.js";
 import { type ReviewResult, reviewResultJsonSchema } from "../core/schema.js";
+import { sdkOutputMetadata, sdkPreflightMetadata } from "./metadata.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -50,14 +51,12 @@ export function createPiAdapter(
       );
       const effort = resolvePiEffort(selectedModel, input.reviewer.effort);
 
-      const metadata: ReviewAdapterPreflightResult["metadata"] = {
-        readonlyCapability: "tool-restricted",
-        preferredCaptureMode: "tool-call",
+      const metadata: ReviewAdapterPreflightResult["metadata"] = sdkPreflightMetadata("pi", {
         availableModelCount: availableModels.length,
         model: formatPiModel(selectedModel),
         ...piProviderMetadata(input.reviewer),
         ...piEffortMetadata(effort),
-      };
+      });
 
       return {
         checks: [
@@ -161,13 +160,11 @@ export function createPiAdapter(
         throw reviewerFailed("Pi reviewer did not call the review_output tool");
       }
 
-      const metadata: ReviewAdapterOutput["metadata"] = {
-        captureMode: "tool-call",
-        readonlyCapability: "tool-restricted",
+      const metadata: ReviewAdapterOutput["metadata"] = sdkOutputMetadata("pi", {
         availableModelCount: availableModels.length,
         ...piProviderMetadata(input.reviewer),
         ...piEffortMetadata(effort),
-      };
+      });
 
       const output = buildStructuredReviewAdapterOutput(capturedReview, {
         metadata,

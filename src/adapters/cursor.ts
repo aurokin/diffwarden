@@ -5,6 +5,7 @@ import {
   missingRequirement,
   reviewerFailed,
 } from "../core/errors.js";
+import { sdkOutputMetadata, sdkPreflightMetadata } from "./metadata.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -65,8 +66,7 @@ export function createCursorAdapter(
               "Cursor local mode is constrained by prompt instructions, not tool-level enforcement.",
           },
         ],
-        metadata: {
-          readonlyCapability: "prompt-only",
+        metadata: sdkPreflightMetadata("cursor", {
           model,
           canonicalModel: modelPreflight.canonicalModelId,
           ...(modelPreflight.alias !== undefined ? { modelAlias: modelPreflight.alias } : {}),
@@ -76,7 +76,7 @@ export function createCursorAdapter(
                 requestedEffort: input.reviewer.effort,
               }
             : {}),
-        },
+        }),
       };
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
@@ -123,11 +123,9 @@ export function createCursorAdapter(
 
         return {
           text: result.result ?? "",
-          metadata: {
-            captureMode: "text",
+          metadata: sdkOutputMetadata("cursor", {
             agentId: agent.agentId,
             runId: run.id,
-            readonlyCapability: "prompt-only",
             model: result.model,
             durationMs: result.durationMs,
             ...(input.reviewer.effort !== undefined
@@ -136,7 +134,7 @@ export function createCursorAdapter(
                   requestedEffort: input.reviewer.effort,
                 }
               : {}),
-          },
+          }),
         };
       } catch (error) {
         if (isCursorAuthenticationError(error)) {

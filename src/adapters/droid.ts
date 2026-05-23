@@ -10,6 +10,7 @@ import {
 } from "../core/errors.js";
 import { reviewResultJsonSchema } from "../core/schema.js";
 import { droidSessionTag } from "./droid-session.js";
+import { sdkOutputMetadata, sdkPreflightMetadata } from "./metadata.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -104,16 +105,13 @@ export function createDroidAdapter(
                 : `Passing Droid machine override: ${machineId}.`,
           },
         ],
-        metadata: {
-          readonlyCapability: "enforced",
-          preferredCaptureMode: "native-structured",
+        metadata: sdkPreflightMetadata("droid", {
           executable: resolvedExecutable,
-          transport: "sdk",
           ...(input.reviewer.model !== undefined ? { model: input.reviewer.model } : {}),
           ...(effort !== undefined ? { effort } : {}),
           ...(machineId !== undefined ? { machineId } : {}),
           sdkVersion: sdk.SDK_VERSION,
-        },
+        }),
       };
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
@@ -249,10 +247,8 @@ function droidOutputMetadata(
   machineId: string | undefined,
   extra: NonNullable<ReviewAdapterOutput["metadata"]>,
 ): NonNullable<ReviewAdapterOutput["metadata"]> {
-  return {
+  return sdkOutputMetadata("droid", {
     ...extra,
-    readonlyCapability: "enforced",
-    transport: "sdk",
     executable,
     sessionId: result.sessionId,
     durationMs: result.durationMs,
@@ -260,7 +256,7 @@ function droidOutputMetadata(
     ...(reviewer.model !== undefined ? { model: reviewer.model } : {}),
     ...(effort !== undefined ? { effort } : {}),
     ...(machineId !== undefined ? { machineId } : {}),
-  };
+  });
 }
 
 function droidResultError(result: { error: unknown }): string {
