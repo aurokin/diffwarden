@@ -14,7 +14,7 @@ Install from the GitHub source release or a local checkout:
 ```bash
 git clone https://github.com/aurokin/diffwarden.git
 cd diffwarden
-git checkout v0.1.0
+git checkout v0.2.0
 pnpm install
 pnpm build
 pnpm link --global
