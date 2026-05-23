@@ -55,7 +55,7 @@ Use official Factory docs over local source when CLI or SDK behavior differs.
 
 - OpenAI Codex repository: https://github.com/openai/codex
 - Local reference inspected on 2026-05-14: `/Users/auro/code/upstream/codex` at commit `02a7205250`.
-- Local CLI/source refreshed on 2026-05-20: `/Users/auro/code/upstream/codex` at commit `c5bd131567b3`; `codex exec` is the CLI transport path because `codex review` is a specialized wrapper and does not expose the same JSON-schema contract.
+- Local CLI/source refreshed on 2026-05-23: `/Users/auro/code/upstream/codex` at commit `7d47056ea4`; `codex exec` is the CLI transport path because `codex review` is a specialized wrapper and does not expose the same JSON-schema contract used by Diffwarden's shared parser.
 
 Use Codex as the semantic reference for review behavior, especially its review rubric and review output model. Do not duplicate large Codex prompt or protocol excerpts here; link to the upstream source and copy only what the implementation needs into source-controlled constants with attribution.
 

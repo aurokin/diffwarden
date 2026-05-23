@@ -100,13 +100,16 @@ Not implemented:
 Read from top to bottom until you have enough detail:
 
 1. `README.md` - quickstart, current status, and common commands.
-2. [`docs/configuration.md`](./docs/configuration.md) - config files, reviewer sets, and
+2. [`docs/comparisons.md`](./docs/comparisons.md) - Codex review comparison and SDK vs CLI
+   transport tradeoffs.
+3. [`docs/features.md`](./docs/features.md) - supported reviewer feature matrix.
+4. [`docs/configuration.md`](./docs/configuration.md) - config files, reviewer sets, and
    environment defaults.
-3. [`docs/adapters.md`](./docs/adapters.md) - SDK and CLI reviewer adapter behavior.
-4. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
+5. [`docs/adapters.md`](./docs/adapters.md) - SDK and CLI reviewer adapter behavior.
+6. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
    commands.
-5. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
-6. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
+7. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
+8. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
 
 ## Design Principles
 

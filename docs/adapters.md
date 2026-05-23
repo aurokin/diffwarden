@@ -3,6 +3,9 @@
 Adapters run reviewer engines and return text or structured output. Core CLI logic owns
 target resolution, prompt assembly, parsing, validation, aggregation, and rendering.
 
+For the source-of-truth capability table, see [`features.md`](./features.md). This page
+explains adapter behavior and operational notes.
+
 ## Adapter Families
 
 SDK adapters remain the default for:
