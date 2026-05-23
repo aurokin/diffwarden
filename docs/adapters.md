@@ -97,14 +97,21 @@ authenticated model with `PI_SMOKE_MODEL`.
 PI_SMOKE_MODEL=anthropic/claude-opus-4-5 pnpm test:live:sdk
 ```
 
-## Droid SDK
+## Droid
 
 ```bash
-diffwarden --target uncommitted --reviewer droid
+diffwarden --target uncommitted --reviewer droid-cli
 ```
 
-The adapter uses `@factory/droid-sdk` and the local `droid` executable. It requests native
-JSON Schema output and runs in Droid's spec interaction mode for read-only review behavior.
+Prefer Droid's CLI transport for routine reviews. It follows the current `droid exec`
+surface, uses read-only spec mode by default, and keeps Diffwarden on the same runtime path
+as the installed Droid CLI.
+
+The Droid SDK adapter remains available through `--reviewer droid` or configured SDK
+profiles. It uses `@factory/droid-sdk`, requests native JSON Schema output, and runs in
+Droid's spec interaction mode for read-only review behavior. Treat this path as
+experimental if Factory UI session history matters, because SDK runs still appear in Droid
+session history and may be grouped differently from CLI-created Droid Computer sessions.
 Set `FACTORY_API_KEY` or use local Droid auth supported by the installed CLI.
 
 Set `sdkOptions.machineId` on a Droid reviewer to target a specific Droid Computer. For live
@@ -114,9 +121,11 @@ SDK smoke tests, set `DIFFWARDEN_LIVE_DROID_MACHINE_ID` to the ID from
 Droid persists session history under `~/.factory/sessions` and groups sessions by `cwd`.
 Diffwarden passes the reviewed repository as `cwd` so Droid can inspect files, and tags its
 SDK and CLI sessions with `diffwarden` metadata for discovery. The current Droid CLI and SDK
-do not expose an ephemeral/no-history review mode.
+do not expose an ephemeral/no-history review mode. Diffwarden cannot currently suppress
+Droid session history without isolating Factory's home/config directory, which is not the
+default review path.
 
-Live smoke test:
+Live SDK smoke test:
 
 ```bash
 pnpm test:live:sdk

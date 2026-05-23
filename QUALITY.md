@@ -84,6 +84,9 @@ runs. Use `DIFFWARDEN_LIVE_CLI=codex,claude,gemini` to restrict CLI live tests t
 Live CLI and e2e tests also honor `DIFFWARDEN_LIVE_<REVIEWER>_PROVIDER`,
 `DIFFWARDEN_LIVE_<REVIEWER>_MODEL`, `DIFFWARDEN_LIVE_<REVIEWER>_EFFORT`, and
 `DIFFWARDEN_LIVE_<REVIEWER>_EXECUTABLE`.
+Droid SDK live tests also honor `DIFFWARDEN_LIVE_DROID_MACHINE_ID`, but SDK runs still
+create Factory session-history entries. Use the Droid CLI live path when validating the
+recommended Droid reviewer behavior.
 
 The `v0.1.0` release machine verified every implemented live path:
 
@@ -93,7 +96,9 @@ The `v0.1.0` release machine verified every implemented live path:
   `DIFFWARDEN_LIVE_E2E_REVIEWERS`.
 
 Droid SDK and CLI live smoke tests were added after `v0.1.0`; use `pnpm live:doctor` to
-confirm the local `droid` executable and Factory auth before running them.
+confirm the local `droid` executable and Factory auth before running them. The Droid CLI
+path is the recommended live path while the SDK path remains useful for coverage of native
+structured output.
 
 ## Combined Metrics
 

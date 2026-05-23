@@ -152,7 +152,7 @@ Reviewer specs should stay compact and SDK-agnostic at the public boundary:
 cursor                            Cursor SDK with default config.
 claude                            Claude SDK with default config.
 pi                                Pi SDK with default config.
-droid                             Droid SDK with default config.
+droid                             Droid SDK with default config; experimental if Factory UI session history matters.
 codex                             Codex CLI transport.
 gemini                            Gemini CLI transport.
 opencode                          OpenCode CLI transport.
@@ -1127,7 +1127,9 @@ Deliverables:
 - `src/adapters/claude.ts`
 - `src/adapters/pi.ts`
 - `src/adapters/droid.ts`
-- SDK-backed execution remains the primary path for Cursor, Claude, Pi, and Droid.
+- SDK-backed execution remains the primary path for Cursor, Claude, and Pi. Droid CLI
+  transport is recommended for routine Droid reviews while SDK behavior around Factory UI
+  session history remains less desirable.
 - shared adapter output handling for `{ structured }`, `{ text }`, capture metadata, timeout, and execution errors.
 - structured output support where each SDK has a reliable schema/tool mechanism.
 - Cursor text-output proof through local SDK execution first; then structured-output proof through a local MCP `review_output` tool and captured SDK `tool_call` event args.

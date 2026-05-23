@@ -101,6 +101,8 @@ while leaving the public CLI surface unchanged.
 ## CLI Transport Example
 
 SDK-backed families can be configured to use a CLI transport.
+Droid users should prefer the CLI profile for routine reviews when Factory UI session
+history matters.
 
 ```json
 {
