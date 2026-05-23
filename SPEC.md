@@ -129,7 +129,7 @@ diffwarden [options]
 --strict                          Fail if structured output cannot be parsed or validated.
 --readonly                        Read-only mode. Default and only supported mode.
 --timeout <seconds>               Reviewer timeout.
---fail-on-findings <P0|P1|P2|P3>  Optional CI behavior. Not required in v1.
+--fail-on-findings <P0|P1|P2|P3>  Exit 1 when prioritized findings meet the threshold.
 --verbose                         Include reviewer and validation details.
 --help                            Print usage.
 ```
@@ -258,6 +258,9 @@ Defer:
 ```
 
 By default, findings should not make the command fail. The most common caller is another agent that needs to read and act on the review.
+`--fail-on-findings P2` keeps normal output behavior, then exits `1` after the artifact is
+produced when the final aggregated findings include any P0, P1, or P2 finding.
+Unprioritized findings do not trigger the gate.
 
 Error handling rules:
 

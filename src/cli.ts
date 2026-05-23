@@ -8,6 +8,7 @@ import {
   resolveReviewerSelectionWithEnv,
 } from "./core/env.js";
 import { invalidCli } from "./core/errors.js";
+import { hasFindingAtOrAbovePriority, parseFindingFailureThreshold } from "./core/finding-gate.js";
 import { resolveGitTarget } from "./core/git.js";
 import { renderJson, renderMarkdown } from "./core/render.js";
 import {
@@ -40,6 +41,7 @@ program
   .option("--effort <level>", "effort override for the selected reviewer")
   .option("--timeout <seconds>", "reviewer timeout in seconds")
   .option("--strict", "fail if any reviewer fails")
+  .option("--fail-on-findings <priority>", "exit 1 when findings include P0, P1, P2, or P3")
   .option("--verbose", "include per-reviewer details in Markdown output")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--format <format>", "output format: markdown or json", "markdown")
@@ -53,6 +55,7 @@ program
       effort?: string;
       timeout?: string;
       strict?: boolean;
+      failOnFindings?: string;
       verbose?: boolean;
       cwd: string;
       format: string;
@@ -67,6 +70,10 @@ program
         return;
       }
 
+      const failOnFindings =
+        options.failOnFindings === undefined
+          ? undefined
+          : parseFindingFailureThreshold(options.failOnFindings);
       const targetSpec = parseTargetSpec(options.target);
       const resolved = await resolveGitTarget(options.cwd, targetSpec);
       const loadedConfig = await loadDiffwardenConfig({
@@ -115,6 +122,13 @@ program
           ? renderJson(artifact)
           : renderMarkdown(artifact, { verbose: options.verbose === true }),
       );
+
+      if (
+        failOnFindings !== undefined &&
+        hasFindingAtOrAbovePriority(artifact.result, failOnFindings)
+      ) {
+        process.exitCode = 1;
+      }
     },
   );
 

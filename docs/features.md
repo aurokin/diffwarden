@@ -99,7 +99,7 @@ These features apply across adapter paths:
 | Finding deduplication and attribution | yes |
 | GitHub PR posting | no |
 | Inline GitHub review comments | no |
-| `--fail-on-findings` CI gating | no |
+| `--fail-on-findings` CI gating | yes |
 
 ## Target Behavior
 
@@ -112,3 +112,10 @@ They still use the normal reviewer selection, preflight, output parsing, schema 
 path validation, aggregation, Markdown rendering, and JSON artifact path. They skip diff
 collection, patch embedding, `changed_files` population, and changed-line overlap
 validation because there is no single target patch.
+
+## CI Gating
+
+`--fail-on-findings <P0|P1|P2|P3>` keeps the normal Markdown or JSON output, then exits `1`
+when the final aggregated findings include a prioritized finding at or above the threshold.
+For example, `--fail-on-findings P2` fails for P0, P1, and P2 findings but not P3 findings.
+Findings without a `priority` do not trigger the gate.

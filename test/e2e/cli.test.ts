@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -121,6 +121,95 @@ describe("diffwarden CLI e2e", () => {
     expect(artifact.validation.findings_overlap_diff).toBe(true);
   });
 
+  it("accepts fail-on-findings when no matching findings are reported", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    const result = await runDiffwarden(repo, [
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--fail-on-findings",
+      "P2",
+    ]);
+
+    expect(result.stdout).toContain("# Code Review");
+    expect(result.stderr).toBe("");
+  });
+
+  it("exits 1 after writing output when findings meet the fail-on-findings threshold", async () => {
+    const repo = createRepo();
+    const outputPath = path.join(repo, "review.json");
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    try {
+      await runDiffwarden(
+        repo,
+        [
+          "--target",
+          "uncommitted",
+          "--reviewer",
+          "fake",
+          "--cwd",
+          repo,
+          "--format",
+          "json",
+          "--out",
+          outputPath,
+          "--fail-on-findings",
+          "P2",
+        ],
+        {
+          DIFFWARDEN_FAKE_FINDING_PATH: path.join(repo, "tracked.txt"),
+        },
+      );
+      throw new Error("Expected diffwarden to exit 1");
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 1,
+        stderr: "",
+      });
+      if (!isExecError(error)) {
+        throw error;
+      }
+
+      const stdoutArtifact = JSON.parse(error.stdout);
+      const outArtifact = JSON.parse(readFileSync(outputPath, "utf8"));
+      expect(stdoutArtifact.result.findings[0]).toMatchObject({
+        title: "[P2] Fake finding",
+        priority: 2,
+      });
+      expect(outArtifact.result.findings[0]).toMatchObject({
+        title: "[P2] Fake finding",
+        priority: 2,
+      });
+      expect(existsSync(outputPath)).toBe(true);
+    }
+  });
+
+  it("returns a CLI error for invalid fail-on-findings thresholds", async () => {
+    const repo = createRepo();
+
+    await expect(
+      runDiffwarden(repo, [
+        "--target",
+        "uncommitted",
+        "--reviewer",
+        "fake",
+        "--cwd",
+        repo,
+        "--fail-on-findings",
+        "P4",
+      ]),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("Invalid --fail-on-findings value"),
+    });
+  });
+
   it("runs doctor preflight checks without requiring a target", async () => {
     const repo = createRepo();
 
@@ -164,8 +253,12 @@ describe("diffwarden CLI e2e", () => {
 async function runDiffwarden(
   cwd: string,
   args: string[],
+  envOverrides: NodeJS.ProcessEnv = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  const env = isolatedEnv();
+  const env = {
+    ...isolatedEnv(),
+    ...envOverrides,
+  };
   return execFileAsync(process.execPath, [cliPath, ...args], {
     cwd,
     env,
@@ -201,6 +294,19 @@ function isolatedEnv(): NodeJS.ProcessEnv {
     HOME: home,
     XDG_CONFIG_HOME: configHome,
   };
+}
+
+function isExecError(error: unknown): error is { code: number; stdout: string; stderr: string } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    "stdout" in error &&
+    "stderr" in error &&
+    typeof error.code === "number" &&
+    typeof error.stdout === "string" &&
+    typeof error.stderr === "string"
+  );
 }
 
 function mkdtemp(prefix: string): string {

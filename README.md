@@ -42,6 +42,7 @@ diffwarden --target base:main --reviewer droid-cli --model claude-opus-4-7
 diffwarden --target base:main --reviewer-set 2
 diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 diffwarden --target commit:abc123 --format json
+diffwarden --target base:main --reviewer-set 2 --fail-on-findings P2
 ```
 
 Verify reviewer runtime, auth, model, and effort settings without reviewing a diff:
@@ -107,7 +108,6 @@ Not implemented:
 
 - `pr:<number|url>` targets.
 - GitHub PR posting or inline review comments.
-- `--fail-on-findings` CI gating.
 - npm publishing. GitHub source releases are available.
 
 ## Documentation
