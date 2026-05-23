@@ -107,6 +107,15 @@ The adapter uses `@factory/droid-sdk` and the local `droid` executable. It reque
 JSON Schema output and runs in Droid's spec interaction mode for read-only review behavior.
 Set `FACTORY_API_KEY` or use local Droid auth supported by the installed CLI.
 
+Set `sdkOptions.machineId` on a Droid reviewer to target a specific Droid Computer. For live
+SDK smoke tests, set `DIFFWARDEN_LIVE_DROID_MACHINE_ID` to the ID from
+`droid computer list`.
+
+Droid persists session history under `~/.factory/sessions` and groups sessions by `cwd`.
+Diffwarden passes the reviewed repository as `cwd` so Droid can inspect files, and tags its
+SDK and CLI sessions with `diffwarden` metadata for discovery. The current Droid CLI and SDK
+do not expose an ephemeral/no-history review mode.
+
 Live smoke test:
 
 ```bash
@@ -161,6 +170,7 @@ Override CLI executable paths with engine-specific variables when a binary is no
 ```bash
 DIFFWARDEN_LIVE_PI_EXECUTABLE=/Users/auro/.local/share/mise/installs/npm-earendil-works-pi-coding-agent/latest/bin/pi
 DIFFWARDEN_LIVE_DROID_EXECUTABLE=/Users/auro/.local/bin/droid
+DIFFWARDEN_LIVE_DROID_MACHINE_ID=YOUR_DROID_COMPUTER_ID
 DIFFWARDEN_LIVE_ANTIGRAVITY_EXECUTABLE=/Users/auro/.local/bin/agy
 ```
 

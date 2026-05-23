@@ -10,6 +10,7 @@ import {
   reviewResultSchema,
   reviewResultStrictJsonSchema,
 } from "../core/schema.js";
+import { droidSessionTag } from "./droid-session.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -326,6 +327,7 @@ const cliSpecs: Record<CliEngine, CliSpec> = {
       if (input.reviewer.effort !== undefined && input.reviewer.effort !== "off") {
         args.push("--spec-reasoning-effort", droidCliEffort(input.reviewer.effort));
       }
+      args.push("--tag", JSON.stringify(droidSessionTag(input, "cli")));
 
       return {
         executable: cliExecutable(input.reviewer, "droid"),

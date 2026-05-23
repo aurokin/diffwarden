@@ -8,6 +8,7 @@ import {
   reviewerFailed,
 } from "../core/errors.js";
 import { reviewResultJsonSchema, reviewResultSchema } from "../core/schema.js";
+import { droidSessionTag } from "./droid-session.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -51,6 +52,7 @@ export function createDroidAdapter(
         input.signal,
       );
       const effort = droidEffort(input.reviewer.effort);
+      const machineId = droidMachineId(input.reviewer);
 
       return {
         checks: [
@@ -92,6 +94,14 @@ export function createDroidAdapter(
                 ? "No effort override was requested."
                 : `Passing reasoning effort to Droid: ${effort}.`,
           },
+          {
+            name: "machine",
+            status: machineId === undefined ? "skipped" : "passed",
+            detail:
+              machineId === undefined
+                ? "Using Droid's default machine selection."
+                : `Passing Droid machine override: ${machineId}.`,
+          },
         ],
         metadata: {
           readonlyCapability: "enforced",
@@ -100,6 +110,7 @@ export function createDroidAdapter(
           transport: "sdk",
           ...(input.reviewer.model !== undefined ? { model: input.reviewer.model } : {}),
           ...(effort !== undefined ? { effort } : {}),
+          ...(machineId !== undefined ? { machineId } : {}),
           sdkVersion: sdk.SDK_VERSION,
         },
       };
@@ -108,10 +119,12 @@ export function createDroidAdapter(
       const sdk = await dependencies.loadSdk();
       const executable = droidExecutable(input.reviewer);
       const effort = droidEffort(input.reviewer.effort);
+      const machineId = droidMachineId(input.reviewer);
 
       try {
         const result = await sdk.run(input.prompt, {
           cwd: input.cwd,
+          ...(machineId !== undefined ? { machineId } : {}),
           execPath: executable,
           interactionMode: sdk.DroidInteractionMode.Spec,
           autonomyLevel: sdk.AutonomyLevel.Off,
@@ -119,6 +132,7 @@ export function createDroidAdapter(
             type: sdk.OutputFormatType.JsonSchema,
             schema: reviewResultJsonSchema as Record<string, unknown>,
           } as OutputFormat,
+          tags: [droidSessionTag(input, "sdk")],
           ...(input.env !== undefined ? { env: stringEnv(droidProcessEnv(input.env)) } : {}),
           ...(input.signal !== undefined ? { abortSignal: input.signal } : {}),
           ...(input.reviewer.model !== undefined ? { specModeModelId: input.reviewer.model } : {}),
@@ -134,7 +148,7 @@ export function createDroidAdapter(
           return {
             structured: structured.data,
             usage: result.tokenUsage ?? undefined,
-            metadata: droidOutputMetadata(input.reviewer, result, executable, effort, {
+            metadata: droidOutputMetadata(input.reviewer, result, executable, effort, machineId, {
               captureMode: "native-structured",
             }),
           };
@@ -145,7 +159,7 @@ export function createDroidAdapter(
           return {
             text,
             usage: result.tokenUsage ?? undefined,
-            metadata: droidOutputMetadata(input.reviewer, result, executable, effort, {
+            metadata: droidOutputMetadata(input.reviewer, result, executable, effort, machineId, {
               captureMode: "text",
               fallbackReason: "invalid_structured_output",
             }),
@@ -202,6 +216,11 @@ function droidExecutable(reviewer: ReviewReviewerConfig): string {
   return typeof executable === "string" && executable.trim() ? executable : defaultDroidExecutable;
 }
 
+function droidMachineId(reviewer: ReviewReviewerConfig): string | undefined {
+  const machineId = reviewer.sdkOptions?.machineId;
+  return typeof machineId === "string" && machineId.trim() ? machineId : undefined;
+}
+
 function droidEffort(effort: string | undefined): ReasoningEffort | undefined {
   if (effort === undefined || effort === "off") {
     return undefined;
@@ -236,6 +255,7 @@ function droidOutputMetadata(
   result: { sessionId: string; durationMs: number; turnCount: number },
   executable: string,
   effort: ReasoningEffort | undefined,
+  machineId: string | undefined,
   extra: NonNullable<ReviewAdapterOutput["metadata"]>,
 ): NonNullable<ReviewAdapterOutput["metadata"]> {
   return {
@@ -248,6 +268,7 @@ function droidOutputMetadata(
     turnCount: result.turnCount,
     ...(reviewer.model !== undefined ? { model: reviewer.model } : {}),
     ...(effort !== undefined ? { effort } : {}),
+    ...(machineId !== undefined ? { machineId } : {}),
   };
 }
 

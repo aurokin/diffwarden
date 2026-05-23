@@ -23,6 +23,7 @@ describe("droidAdapter", () => {
     });
     const reviewer = createReviewer({
       cliOptions: { executable: "/opt/droid" },
+      sdkOptions: { machineId: "machine-123" },
       model: "claude-test",
       effort: "minimal",
     });
@@ -41,6 +42,7 @@ describe("droidAdapter", () => {
       ["readonly", "passed"],
       ["model", "passed"],
       ["effort", "passed"],
+      ["machine", "passed"],
     ]);
     expect(preflight?.metadata).toMatchObject({
       readonlyCapability: "enforced",
@@ -48,7 +50,8 @@ describe("droidAdapter", () => {
       executable: "/opt/droid",
       model: "claude-test",
       effort: "low",
-      sdkVersion: "0.2.0-test",
+      machineId: "machine-123",
+      sdkVersion: "0.3.0-test",
     });
     expect(calls).toContainEqual(
       expect.objectContaining({
@@ -151,6 +154,35 @@ describe("droidAdapter", () => {
         interactionMode: "spec",
         autonomyLevel: "off",
         outputFormat: expect.objectContaining({ type: "json_schema" }),
+        tags: [
+          {
+            name: "diffwarden",
+            metadata: {
+              reviewer: "droid",
+              target: "custom",
+              transport: "sdk",
+            },
+          },
+        ],
+      }),
+    });
+  });
+
+  it("passes configured Droid machine IDs to SDK runs", async () => {
+    const calls: unknown[] = [];
+    const adapter = createDroidAdapter({
+      loadSdk: async () => mockDroidSdk(calls),
+      checkExecutable: async (executable) => executable,
+    });
+    const reviewer = createReviewer({ sdkOptions: { machineId: "machine-456" } });
+
+    const output = await adapter.run(createInput(reviewer));
+
+    expect(output.metadata).toMatchObject({ machineId: "machine-456" });
+    expect(calls).toContainEqual({
+      prompt: "review prompt",
+      options: expect.objectContaining({
+        machineId: "machine-456",
       }),
     });
   });
@@ -239,6 +271,7 @@ describe("droidAdapter", () => {
         ...optionalString("model", process.env.DIFFWARDEN_LIVE_DROID_MODEL),
         ...optionalString("effort", process.env.DIFFWARDEN_LIVE_DROID_EFFORT),
         ...cliOptions(process.env.DIFFWARDEN_LIVE_DROID_EXECUTABLE),
+        ...sdkOptions(process.env.DIFFWARDEN_LIVE_DROID_MACHINE_ID),
       });
 
       try {
@@ -294,7 +327,7 @@ function mockDroidSdk(
   runOverride?: () => never,
 ) {
   return {
-    SDK_VERSION: "0.2.0-test",
+    SDK_VERSION: "0.3.0-test",
     OutputFormatType: { JsonSchema: "json_schema" },
     DroidInteractionMode: { Spec: "spec" },
     AutonomyLevel: { Off: "off" },
@@ -335,4 +368,8 @@ function optionalString<K extends "model" | "effort">(
 
 function cliOptions(executable: string | undefined): Pick<ReviewReviewerConfig, "cliOptions"> {
   return executable === undefined || executable.trim() === "" ? {} : { cliOptions: { executable } };
+}
+
+function sdkOptions(machineId: string | undefined): Pick<ReviewReviewerConfig, "sdkOptions"> {
+  return machineId === undefined || machineId.trim() === "" ? {} : { sdkOptions: { machineId } };
 }

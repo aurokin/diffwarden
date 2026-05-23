@@ -93,6 +93,14 @@ describe("createCliAdapter", () => {
       expect(invocation.args).toContain("--use-spec");
       expect(invocation.args).toContain("--file");
       expect(invocation.args).not.toContain("--auto");
+      expect(JSON.parse(invocation.args[invocation.args.indexOf("--tag") + 1] ?? "{}")).toEqual({
+        name: "diffwarden",
+        metadata: {
+          reviewer: "droid",
+          target: "custom",
+          transport: "cli",
+        },
+      });
       expect(invocation.stdin).toBe("");
     } else if (engine === "grok") {
       expect(invocation.args).toContain("--prompt-file");

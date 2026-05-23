@@ -44,8 +44,9 @@ Use the upstream repository for the current SDK docs, JSON mode docs, extension 
 - Factory CLI repository: https://github.com/Factory-AI/factory
 - Droid TypeScript SDK repository: https://github.com/Factory-AI/droid-sdk-typescript
 - NPM package: https://www.npmjs.com/package/@factory/droid-sdk
-- Implemented adapter dependency on 2026-05-21: `@factory/droid-sdk@0.2.0`.
+- Implemented adapter dependency on 2026-05-21 and updated on 2026-05-22: `@factory/droid-sdk@0.3.0`.
 - Local CLI inspection on 2026-05-21: Droid CLI `0.131.0` supports `droid exec --output-format json`, `--file`, `--cwd`, `--model`, and `--reasoning-effort`; default exec mode is read-only unless `--auto` is set.
+- Local CLI and SDK inspection on 2026-05-22: Droid persists sessions under `~/.factory/sessions` by working directory; `droid exec` exposes repeatable `--tag` metadata but no ephemeral/no-history flag, and `@factory/droid-sdk@0.3.0` exposes `tags` and `machineId` on `run()` options.
 
 Use official Factory docs over local source when CLI or SDK behavior differs.
 
