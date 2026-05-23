@@ -1,13 +1,14 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { OutputFormat, ReasoningEffort, RunOptions } from "@factory/droid-sdk";
+import { normalizeStructuredOrTextAdapterOutput } from "../core/adapter-output.js";
 import {
   DiffwardenError,
   missingAuth,
   missingRequirement,
   reviewerFailed,
 } from "../core/errors.js";
-import { reviewResultJsonSchema, reviewResultSchema } from "../core/schema.js";
+import { reviewResultJsonSchema } from "../core/schema.js";
 import { droidSessionTag } from "./droid-session.js";
 import type {
   ReviewAdapter,
@@ -143,27 +144,17 @@ export function createDroidAdapter(
           throw reviewerFailed(`Droid reviewer failed: ${droidResultError(result)}`);
         }
 
-        const structured = reviewResultSchema.safeParse(result.structuredOutput);
-        if (structured.success) {
-          return {
-            structured: structured.data,
-            usage: result.tokenUsage ?? undefined,
-            metadata: droidOutputMetadata(input.reviewer, result, executable, effort, machineId, {
-              captureMode: "native-structured",
-            }),
-          };
-        }
-
-        const text = result.text.trim();
-        if (text.length > 0) {
-          return {
-            text,
-            usage: result.tokenUsage ?? undefined,
-            metadata: droidOutputMetadata(input.reviewer, result, executable, effort, machineId, {
-              captureMode: "text",
-              fallbackReason: "invalid_structured_output",
-            }),
-          };
+        const output = normalizeStructuredOrTextAdapterOutput({
+          structured: result.structuredOutput,
+          text: result.text,
+          usage: result.tokenUsage ?? undefined,
+          fallbackReason: "invalid_structured_output",
+          metadata: droidOutputMetadata(input.reviewer, result, executable, effort, machineId, {
+            captureMode: "native-structured",
+          }),
+        });
+        if (output !== undefined) {
+          return output;
         }
 
         throw reviewerFailed("Droid reviewer returned neither valid structured output nor text");

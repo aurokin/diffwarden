@@ -1,12 +1,16 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
+  buildStructuredReviewAdapterOutput,
+  buildTextAdapterOutput,
+} from "../core/adapter-output.js";
+import {
   DiffwardenError,
   missingAuth,
   missingRequirement,
   reviewerFailed,
 } from "../core/errors.js";
-import { reviewResultJsonSchema, reviewResultSchema } from "../core/schema.js";
+import { reviewResultJsonSchema } from "../core/schema.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -104,13 +108,24 @@ export function createClaudeAdapter(
         });
 
         if (structuredResult.subtype === "success") {
-          if (reviewResultSchema.safeParse(structuredResult.structured_output).success) {
+          const structuredOutput = buildStructuredReviewAdapterOutput(
+            structuredResult.structured_output,
+            {
+              metadata: claudeOutputMetadata({
+                input,
+                result: structuredResult,
+                runtime,
+                captureMode: "native-structured",
+              }),
+            },
+          );
+          if (structuredOutput !== undefined) {
             return buildClaudeOutput({
               input,
               result: structuredResult,
               runtime,
               captureMode: "native-structured",
-              structured: structuredResult.structured_output,
+              structured: structuredOutput.structured,
             });
           }
 
@@ -463,7 +478,43 @@ function buildClaudeTextOutput(options: {
     outputOptions.previousResult = options.previousResult;
   }
 
-  return buildClaudeOutput(outputOptions);
+  return buildTextAdapterOutput({
+    text: outputOptions.text,
+    metadata: claudeOutputMetadata(outputOptions),
+  });
+}
+
+function claudeOutputMetadata(options: {
+  input: ReviewAdapterInput;
+  result: ClaudeResultMessage;
+  runtime: ClaudeRuntime;
+  captureMode: "native-structured" | "text";
+  fallbackReason?: string;
+  previousResult?: ClaudeResultMessage;
+}): NonNullable<ReviewAdapterOutput["metadata"]> {
+  const metadata: NonNullable<ReviewAdapterOutput["metadata"]> = {
+    captureMode: options.captureMode,
+    sessionId: options.result.session_id,
+    readonlyCapability: "enforced",
+    model: options.input.reviewer.model ?? defaultClaudeModel,
+    ...claudeEffortMetadata(options.input.reviewer.effort),
+    durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
+    totalCostUsd: sumKnownNumbers(
+      options.previousResult?.total_cost_usd,
+      options.result.total_cost_usd,
+    ),
+    authMode: options.runtime.authMode,
+    executable: options.runtime.executable,
+  };
+
+  if (options.fallbackReason !== undefined) {
+    return {
+      ...metadata,
+      fallbackReason: options.fallbackReason,
+    };
+  }
+
+  return metadata;
 }
 
 function buildClaudeOutput(options: {
@@ -476,37 +527,20 @@ function buildClaudeOutput(options: {
   fallbackReason?: string;
   previousResult?: ClaudeResultMessage;
 }): ReviewAdapterOutput {
-  const output: ReviewAdapterOutput = {
-    metadata: {
-      captureMode: options.captureMode,
-      sessionId: options.result.session_id,
-      readonlyCapability: "enforced",
-      model: options.input.reviewer.model ?? defaultClaudeModel,
-      ...claudeEffortMetadata(options.input.reviewer.effort),
-      durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
-      totalCostUsd: sumKnownNumbers(
-        options.previousResult?.total_cost_usd,
-        options.result.total_cost_usd,
-      ),
-      authMode: options.runtime.authMode,
-      executable: options.runtime.executable,
-    },
-  };
-
-  if (options.fallbackReason !== undefined) {
-    output.metadata = {
-      ...output.metadata,
-      fallbackReason: options.fallbackReason,
-    };
-  }
+  const metadata = claudeOutputMetadata(options);
 
   if (options.structured !== undefined) {
-    output.structured = options.structured;
-  } else {
-    output.text = options.text ?? "";
+    return (
+      buildStructuredReviewAdapterOutput(options.structured, {
+        metadata,
+      }) ?? { structured: options.structured, metadata }
+    );
   }
 
-  return output;
+  return buildTextAdapterOutput({
+    text: options.text,
+    metadata,
+  });
 }
 
 function claudeQueryEffortOptions(effort: string | undefined): Partial<ClaudeQueryOptions> {

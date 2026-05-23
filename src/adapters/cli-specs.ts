@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { collectJsonLinesText, normalizeJsonLikeAdapterOutput } from "../core/adapter-output.js";
 import { reviewResultJsonSchema, reviewResultStrictJsonSchema } from "../core/schema.js";
 import {
   claudeCliEffort,
@@ -14,7 +15,6 @@ import {
   pushModelAndEffort,
   pushPromptArg,
 } from "./cli-helpers.js";
-import { collectJsonLinesText, normalizeJsonLikeOutput } from "./cli-output.js";
 import type { CliEngine, CliSpec } from "./cli-types.js";
 import { droidSessionTag } from "./droid-session.js";
 
@@ -52,7 +52,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       const outputPath = invocation.outputPath;
       if (outputPath !== undefined) {
         try {
-          return normalizeJsonLikeOutput(await readFile(outputPath, "utf8"), {
+          return normalizeJsonLikeAdapterOutput(await readFile(outputPath, "utf8"), {
             captureMode: "native-structured",
             readonlyCapability: "enforced",
           });
@@ -105,7 +105,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       };
     },
     async parseOutput(result) {
-      return normalizeJsonLikeOutput(result.stdout, {
+      return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "native-structured",
         readonlyCapability: "tool-restricted",
       });
@@ -135,7 +135,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       };
     },
     async parseOutput(result) {
-      return normalizeJsonLikeOutput(result.stdout, {
+      return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
         readonlyCapability: "prompt-only",
       });
@@ -157,7 +157,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       };
     },
     async parseOutput(result) {
-      return normalizeJsonLikeOutput(result.stdout, {
+      return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
         readonlyCapability: "tool-restricted",
       });
@@ -277,7 +277,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       };
     },
     async parseOutput(result) {
-      return normalizeJsonLikeOutput(result.stdout, {
+      return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
         readonlyCapability: "enforced",
       });
@@ -312,7 +312,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       };
     },
     async parseOutput(result) {
-      return normalizeJsonLikeOutput(result.stdout, {
+      return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
         readonlyCapability: "prompt-only",
       });

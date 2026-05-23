@@ -1,10 +1,21 @@
-import { type ReviewResult, reviewResultSchema } from "../core/schema.js";
-import type { ReviewAdapterOutput } from "./types.js";
+import { type ReviewResult, reviewResultSchema } from "./schema.js";
 
-export function normalizeJsonLikeOutput(
+export type AdapterOutputMetadata = {
+  captureMode?: "native-structured" | "tool-call" | "text";
+  [key: string]: unknown;
+};
+
+export type NormalizedAdapterOutput = {
+  text?: string;
+  structured?: unknown;
+  usage?: unknown;
+  metadata?: AdapterOutputMetadata;
+};
+
+export function normalizeJsonLikeAdapterOutput(
   raw: string,
-  metadata: NonNullable<ReviewAdapterOutput["metadata"]>,
-): ReviewAdapterOutput {
+  metadata: AdapterOutputMetadata,
+): NormalizedAdapterOutput {
   const trimmed = raw.trim();
   if (!trimmed) {
     return { text: "", metadata: { ...metadata, captureMode: "text" } };
@@ -27,12 +38,77 @@ export function normalizeJsonLikeOutput(
       };
     }
   } catch {
-    // The parser below handles plain text fallbacks.
+    // Plain text fallback is handled below.
   }
 
   return {
     text: trimmed,
     metadata: { ...metadata, captureMode: "text" },
+  };
+}
+
+export function normalizeStructuredOrTextAdapterOutput(options: {
+  structured: unknown;
+  text?: string;
+  metadata: AdapterOutputMetadata;
+  usage?: unknown;
+  fallbackReason: string;
+}): NormalizedAdapterOutput | undefined {
+  const structured = buildStructuredReviewAdapterOutput(options.structured, {
+    metadata: options.metadata,
+    usage: options.usage,
+  });
+  if (structured !== undefined) {
+    return structured;
+  }
+
+  const text = options.text?.trim();
+  if (!text) {
+    return undefined;
+  }
+
+  return {
+    text,
+    usage: options.usage,
+    metadata: {
+      ...options.metadata,
+      captureMode: "text",
+      fallbackReason: options.fallbackReason,
+    },
+  };
+}
+
+export function buildStructuredReviewAdapterOutput(
+  value: unknown,
+  options: {
+    metadata: AdapterOutputMetadata;
+    usage?: unknown;
+  },
+): NormalizedAdapterOutput | undefined {
+  const review = unwrapStructuredReview(value);
+  if (review === undefined) {
+    return undefined;
+  }
+
+  return {
+    structured: review,
+    usage: options.usage,
+    metadata: options.metadata,
+  };
+}
+
+export function buildTextAdapterOutput(options: {
+  text: string | undefined;
+  metadata: AdapterOutputMetadata;
+  usage?: unknown;
+}): NormalizedAdapterOutput {
+  return {
+    text: options.text ?? "",
+    usage: options.usage,
+    metadata: {
+      ...options.metadata,
+      captureMode: "text",
+    },
   };
 }
 
@@ -57,7 +133,7 @@ export function collectJsonLinesText(raw: string): string {
   return fragments.join("\n").trim();
 }
 
-function unwrapStructuredReview(value: unknown): ReviewResult | undefined {
+export function unwrapStructuredReview(value: unknown): ReviewResult | undefined {
   const parsed = reviewResultSchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
@@ -81,7 +157,7 @@ function unwrapStructuredReview(value: unknown): ReviewResult | undefined {
   return undefined;
 }
 
-function unwrapText(value: unknown): string | undefined {
+export function unwrapText(value: unknown): string | undefined {
   if (typeof value === "string") {
     return value.trim();
   }

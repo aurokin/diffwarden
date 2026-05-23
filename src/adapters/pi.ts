@@ -1,11 +1,15 @@
 import {
+  buildStructuredReviewAdapterOutput,
+  unwrapStructuredReview,
+} from "../core/adapter-output.js";
+import {
   DiffwardenError,
   invalidConfig,
   missingAuth,
   missingRequirement,
   reviewerFailed,
 } from "../core/errors.js";
-import { type ReviewResult, reviewResultJsonSchema, reviewResultSchema } from "../core/schema.js";
+import { type ReviewResult, reviewResultJsonSchema } from "../core/schema.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -157,11 +161,6 @@ export function createPiAdapter(
         throw reviewerFailed("Pi reviewer did not call the review_output tool");
       }
 
-      const parsedReview = reviewResultSchema.safeParse(capturedReview);
-      if (!parsedReview.success) {
-        throw reviewerFailed("Pi reviewer returned invalid review_output arguments");
-      }
-
       const metadata: ReviewAdapterOutput["metadata"] = {
         captureMode: "tool-call",
         readonlyCapability: "tool-restricted",
@@ -170,10 +169,14 @@ export function createPiAdapter(
         ...piEffortMetadata(effort),
       };
 
-      return {
-        structured: parsedReview.data,
+      const output = buildStructuredReviewAdapterOutput(capturedReview, {
         metadata,
-      };
+      });
+      if (output === undefined) {
+        throw reviewerFailed("Pi reviewer returned invalid review_output arguments");
+      }
+
+      return output;
     },
   };
 }
@@ -672,17 +675,17 @@ function createReviewOutputTool(
     ],
     parameters: reviewResultJsonSchema as unknown as Record<string, unknown>,
     async execute(_toolCallId, params) {
-      const parsedReview = reviewResultSchema.safeParse(params);
-      if (!parsedReview.success) {
+      const review = unwrapStructuredReview(params);
+      if (review === undefined) {
         const message = "Pi reviewer called review_output with invalid arguments";
         captureError(message);
         throw reviewerFailed(message);
       }
 
-      capture(parsedReview.data);
+      capture(review);
       return {
         content: [{ type: "text", text: "Captured structured review output." }],
-        details: parsedReview.data,
+        details: review,
         terminate: true,
       };
     },
