@@ -89,7 +89,6 @@ These features apply across adapter paths:
 | `uncommitted` targets | yes |
 | `base:<branch>` targets | yes |
 | `commit:<sha>` targets | yes |
-| `pr:<number\|url>` targets | no |
 | `custom:<text>` targets | yes |
 | Multiple reviewers in one run | yes |
 | Reviewer sets from config | yes |
@@ -97,8 +96,7 @@ These features apply across adapter paths:
 | JSON output | yes |
 | Finding validation | yes |
 | Finding deduplication and attribution | yes |
-| GitHub PR posting | no |
-| Inline GitHub review comments | no |
+| External review comment publishing | no |
 | `--fail-on-findings` CI gating | yes |
 
 ## Target Behavior

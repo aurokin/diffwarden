@@ -106,8 +106,7 @@ Implemented:
 
 Not implemented:
 
-- `pr:<number|url>` targets.
-- GitHub PR posting or inline review comments.
+- Publishing review comments to external services.
 - npm publishing. GitHub source releases are available.
 
 ## Documentation
@@ -134,5 +133,5 @@ Read from top to bottom until you have enough detail:
 - Structured review results first; readable Markdown by default.
 - Read-only behavior by default.
 - Adapter read-only guarantees must be documented explicitly.
-- PR posting, GitHub review comments, and write-capable tools are permanently out of scope.
+- External comment publishing and write-capable tools are permanently out of scope.
 - Avoid stale docs: link to upstream SDK docs instead of copying API details here.

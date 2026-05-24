@@ -38,15 +38,14 @@ Agents call the CLI. The CLI resolves the target diff, runs one or more reviewer
 
 Permanent non-goals for this CLI:
 
-1. Do not post PR reviews.
-2. Do not post GitHub review comments.
-3. Do not let reviewers modify files.
-4. Do not expose write-capable tools.
-5. Do not require a daemon, service, database, or web UI.
+1. Do not publish review comments to external services.
+2. Do not let reviewers modify files.
+3. Do not expose write-capable tools.
+4. Do not require a daemon, service, database, or web UI.
 
 Deferred, but potentially useful later:
 
-1. Read-only PR target resolution, if it can preserve the same output contract without adding posting behavior.
+1. Additional read-only target forms, if they preserve the same output contract without adding posting behavior.
 
 ## 4. Primary user stories
 
@@ -224,7 +223,6 @@ Adapters should implement a preflight step before running review:
 uncommitted                       Review staged, unstaged, and untracked local changes.
 base:<branch>                     Review HEAD against merge-base with branch.
 commit:<sha>                      Review one commit.
-pr:<number|url>                   Review a pull request. Later phase.
 custom:<text>                     Custom repository-scoped reviewer instructions.
 ```
 
@@ -242,10 +240,6 @@ Implement in v1:
 - `base:<branch>`
 - `commit:<sha>`
 - `custom:<text>`
-
-Defer:
-
-- `pr:<number|url>`
 
 ## 6. Exit codes
 
@@ -1017,8 +1011,7 @@ Default posture:
 
 - Read-only.
 - No file modification.
-- No PR posting.
-- No GitHub review comments.
+- No external review comment publishing.
 - No network side effects beyond the selected SDK/API.
 - No secret printing.
 
@@ -1033,7 +1026,7 @@ Codex review reference, refreshed from `/Users/auro/code/upstream/codex` at comm
 - The newer review-thread path disables web search for reviews and keeps review execution constrained while preserving repository inspection context in `codex-rs/core/src/session/review.rs`.
 - Codex review output parsing first tries to deserialize the final agent message as `ReviewOutputEvent`, then extracts the first JSON object substring, then falls back to putting plain text into `overall_explanation` in `codex-rs/core/src/tasks/review.rs`.
 - The Codex tool registry includes shell/unified exec, MCP resource listing/reading, planning/goal tools, view-image, apply-patch, and multi-agent tools depending on configuration in `codex-rs/core/src/tools/spec_plan.rs`.
-- For `diffwarden`, only the read-only subset should be exposed: file read/list/search, `git diff`, `git show`, `git status`, `git grep`, `rg`, `sed`, `nl`, and equivalent inspection commands. Do not expose apply-patch, edit/write tools, web search, PR posting, GitHub comment tools, or multi-agent spawning inside reviewer adapters.
+- For `diffwarden`, only the read-only subset should be exposed: file read/list/search, `git diff`, `git show`, `git status`, `git grep`, `rg`, `sed`, `nl`, and equivalent inspection commands. Do not expose apply-patch, edit/write tools, web search, external comment publishing tools, or multi-agent spawning inside reviewer adapters.
 
 Each adapter must document its read-only capability level:
 
@@ -1174,9 +1167,7 @@ Deliverables:
 
 Deliverables:
 
-- optional `pr:<number|url>` target resolution if it remains read-only.
-- no PR posting.
-- no GitHub review comments.
+- no external review comment publishing.
 - no write-capable tools.
 
 ## 19. Acceptance criteria for v1

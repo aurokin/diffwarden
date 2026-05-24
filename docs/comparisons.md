@@ -92,7 +92,6 @@ review runner independent from the Codex app/session model.
 | Session integration | Strong: review mode events and parent history integration | Deliberately external; no Codex thread UI integration |
 | Agent portability | Codex-specific | Designed for any agent that can call a CLI |
 | Custom review instructions | Yes | Yes, through `custom:<text>` |
-| PR target support | Not in this inspected CLI path | Not yet |
 
 Choose Codex review when:
 
@@ -109,9 +108,8 @@ Choose Diffwarden when:
 - You want machine-readable JSON artifacts independent of a specific agent product.
 - You want preflight checks for reviewer runtime/auth/model settings before running a review.
 
-Current Diffwarden target support is narrower than upstream Codex review only for PR
-targets: Diffwarden supports `uncommitted`, `base:<branch>`, `commit:<sha>`, and
-`custom:<text>` targets.
+Diffwarden supports `uncommitted`, `base:<branch>`, `commit:<sha>`, and `custom:<text>`
+targets.
 
 Current Codex review is narrower than Diffwarden in orchestration: it is a Codex-native
 single-reviewer workflow. It does not provide Diffwarden's multi-engine reviewer sets,

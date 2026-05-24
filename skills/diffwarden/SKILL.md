@@ -1,6 +1,6 @@
 ---
 name: diffwarden
-description: Use when an agent should run the diffwarden CLI to request read-only code review of local changes, a branch diff, or a single commit from the repository it is working in.
+description: Use when an agent should run the diffwarden CLI to request read-only code review of local changes, a branch diff, a single commit, or repository-scoped custom instructions from the repository it is working in.
 ---
 
 # Diffwarden
@@ -17,6 +17,12 @@ issues. Report findings first, then fix only when the user separately asks for r
    - Working tree changes: `uncommitted`
    - Current branch against a base branch: `base:<branch>`
    - One completed commit: `commit:<sha>`
+   - Repository-scoped instructions: `custom:<text>`
+
+   Use `custom:<text>` when the user wants a review that is not tied to one patch, such as
+   "review the auth flow" or "look for migration risks." Custom targets still validate
+   finding paths, but they do not collect a diff, populate `changed_files`, embed a patch in
+   the prompt, or validate findings against changed-line overlap.
 
 2. Pick reviewers:
    - Use explicit `--reviewer` values when the user names reviewers.
@@ -30,7 +36,12 @@ issues. Report findings first, then fix only when the user separately asks for r
 4. Prefer Markdown output for human-facing responses. Use JSON when another tool or agent
    needs structured findings.
 
-5. Read warnings before deciding whether output is complete. Multi-reviewer runs can return
+5. For CI-like checks, use `--fail-on-findings <P0|P1|P2|P3>` only when the user wants an
+   exit-code gate. It preserves normal Markdown or JSON output and exits `1` when final
+   aggregated findings include a prioritized finding at or above the threshold. Findings
+   without `priority` do not trigger the gate.
+
+6. Read warnings before deciding whether output is complete. Multi-reviewer runs can return
    partial results when one reviewer fails unless `--strict` is used.
 
 ## Commands
@@ -47,6 +58,8 @@ diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 diffwarden --target base:main --reviewer claude --model sonnet --effort high
 diffwarden --target base:main --reviewer droid-cli --model claude-opus-4-7 --effort high
 diffwarden --target base:main --reviewer cursor --format json --out review.json
+diffwarden --target 'custom:Review auth flow and permission checks' --reviewer-set <name>
+diffwarden --target base:main --reviewer-set <name> --fail-on-findings P2
 diffwarden init
 ```
 
@@ -68,7 +81,6 @@ diffwarden --target uncommitted --reviewer fake
 
 ## Boundaries
 
-- Diffwarden does not post GitHub comments or inline review threads.
-- Diffwarden does not implement `--fail-on-findings` CI gating.
+- Diffwarden does not publish review comments to external services.
 - Droid users should prefer configured `droid-cli` reviewers for routine reviews when Factory
   UI session history matters.
