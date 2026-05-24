@@ -28,7 +28,6 @@ link_skill() {
         fi
 
         echo "Updating link: $target -> $SKILL_SOURCE"
-        rm "$target"
     elif [ -e "$target" ]; then
         echo "Refusing to overwrite non-symlink skill: $target" >&2
         echo "Remove it manually or move it aside before installing the local development link." >&2
@@ -37,7 +36,7 @@ link_skill() {
         echo "Linking: $target -> $SKILL_SOURCE"
     fi
 
-    ln -s "$SKILL_SOURCE" "$target"
+    ln -sfn "$SKILL_SOURCE" "$target"
 }
 
 preserve_custom_skills_entry() {
@@ -52,9 +51,12 @@ preserve_custom_skills_entry() {
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const [overlayPath, skillName] = process.argv.slice(2);
-const data = existsSync(overlayPath)
+const parsed = existsSync(overlayPath)
   ? JSON.parse(readFileSync(overlayPath, "utf8"))
   : {};
+
+const data =
+  parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
 
 const preserved = Array.isArray(data.preserveGlobalSkillNames)
   ? data.preserveGlobalSkillNames
