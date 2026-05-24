@@ -7,6 +7,7 @@ import type { ReviewTargetSpec } from "./target.js";
 
 const execFileAsync = promisify(execFile);
 const repoLocalReportExclude = ".diffwarden/reports/**";
+const repoLocalReportExcludeForShell = "'.diffwarden/reports/**'";
 
 export type ResolvedDiff = {
   target: ReviewTargetResolved;
@@ -57,7 +58,7 @@ async function resolveUncommittedTarget(repoRoot: string, headSha: string): Prom
       kind: "uncommitted",
       repo_root: repoRoot,
       head_sha: headSha,
-      diff_command: `git diff --staged && git diff && git ls-files --others --exclude-standard --exclude=${repoLocalReportExclude}`,
+      diff_command: `git diff --staged && git diff && git ls-files --others --exclude-standard --exclude=${repoLocalReportExcludeForShell}`,
       changed_files: changedFiles,
     },
   };

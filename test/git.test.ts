@@ -43,6 +43,7 @@ describe("resolveGitTarget", () => {
     const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
 
     expect(resolved.target.changed_files).toEqual(["new.txt"]);
+    expect(resolved.target.diff_command).toContain("--exclude='.diffwarden/reports/**'");
     expect(resolved.diff).toContain("new.txt");
     expect(resolved.diff).not.toContain(".diffwarden/reports");
   });
