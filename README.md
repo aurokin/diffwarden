@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="skills/diffwarden/assets/logo.png" alt="diffwarden logo" width="720">
+</p>
+
 # diffwarden
 
 A small CLI for agent-callable code review.
