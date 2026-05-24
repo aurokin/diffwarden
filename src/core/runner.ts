@@ -50,6 +50,7 @@ export type ReviewerPreflightArtifact = {
   status: "passed" | "failed";
   profile?: string;
   provider?: string;
+  transport?: ReviewReviewerConfig["transport"];
   model?: string;
   effort?: string;
   preflight?: Awaited<ReturnType<NonNullable<ReviewAdapter["preflight"]>>>;
@@ -205,6 +206,7 @@ type PreflightOutcome =
   | {
       type: "context";
       context: ReviewerContext;
+      startedAt: number;
     }
   | {
       type: "failure";
@@ -226,6 +228,7 @@ async function preflightReviewerOutcome(options: {
         env: options.env,
         ...(options.options.adapters !== undefined ? { adapters: options.options.adapters } : {}),
       }),
+      startedAt: start,
     };
   } catch (error) {
     return {
@@ -247,10 +250,9 @@ async function runReviewerOutcome(options: {
     return options.outcome.artifact;
   }
 
-  const start = Date.now();
   const { context } = options.outcome;
   try {
-    return await runSingleReviewer({
+    const artifact = await runSingleReviewer({
       cwd: options.cwd,
       resolved: options.resolved,
       reviewer: context.reviewer,
@@ -263,8 +265,17 @@ async function runReviewerOutcome(options: {
       changedLineRanges: options.changedLineRanges,
       env: options.env,
     });
+    return {
+      ...artifact,
+      timing_ms: Date.now() - options.outcome.startedAt,
+    };
   } catch (error) {
-    return createFailedReviewerArtifact(context.reviewer, error, start, context.preflight);
+    return createFailedReviewerArtifact(
+      context.reviewer,
+      error,
+      options.outcome.startedAt,
+      context.preflight,
+    );
   }
 }
 
@@ -317,6 +328,7 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
     id: options.reviewer.id,
     sdk: options.reviewer.sdk,
     status: "success",
+    ...(options.reviewer.transport ? { transport: options.reviewer.transport } : {}),
     ...(options.reviewer.profile ? { profile: options.reviewer.profile } : {}),
     ...(options.reviewer.provider ? { provider: options.reviewer.provider } : {}),
     ...(options.reviewer.model ? { model: options.reviewer.model } : {}),
@@ -401,6 +413,7 @@ async function runSingleReviewerPreflight(options: {
       id: context.reviewer.id,
       sdk: context.reviewer.sdk,
       status: "passed",
+      ...(context.reviewer.transport ? { transport: context.reviewer.transport } : {}),
       ...(context.reviewer.profile ? { profile: context.reviewer.profile } : {}),
       ...(context.reviewer.provider ? { provider: context.reviewer.provider } : {}),
       ...(context.reviewer.model ? { model: context.reviewer.model } : {}),
@@ -413,6 +426,7 @@ async function runSingleReviewerPreflight(options: {
       id: options.reviewer.id,
       sdk: options.reviewer.sdk,
       status: "failed",
+      ...(options.reviewer.transport ? { transport: options.reviewer.transport } : {}),
       ...(options.reviewer.profile ? { profile: options.reviewer.profile } : {}),
       ...(options.reviewer.provider ? { provider: options.reviewer.provider } : {}),
       ...(options.reviewer.model ? { model: options.reviewer.model } : {}),
@@ -433,6 +447,7 @@ function createFailedReviewerArtifact(
     id: reviewer.id,
     sdk: reviewer.sdk,
     status: "failed",
+    ...(reviewer.transport ? { transport: reviewer.transport } : {}),
     ...(reviewer.profile ? { profile: reviewer.profile } : {}),
     ...(reviewer.provider ? { provider: reviewer.provider } : {}),
     ...(reviewer.model ? { model: reviewer.model } : {}),

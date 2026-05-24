@@ -94,6 +94,7 @@ These features apply across adapter paths:
 | Reviewer sets from config | yes |
 | Markdown output | yes |
 | JSON output | yes |
+| Opt-in review history reports | yes |
 | Finding validation | yes |
 | Finding deduplication and attribution | yes |
 | External review comment publishing | no |

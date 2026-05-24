@@ -54,6 +54,56 @@ DIFFWARDEN_TIMEOUT_SECONDS=300
 Reviewer selector environment defaults are only applied after a config file is discovered.
 Without config, pass `--reviewer` or `--reviewer-set` explicitly.
 
+## Reporting
+
+Review history reports are off by default because they can contain finding bodies, reviewer
+explanations, file paths, and other source-adjacent review content.
+
+Enable reports for one run:
+
+```bash
+diffwarden --target base:main --reviewer-set 2 --report
+```
+
+Use repo-local history:
+
+```bash
+diffwarden --target base:main --reviewer-set 2 --report --report-scope repo
+```
+
+Use a custom directory:
+
+```bash
+diffwarden --target base:main --reviewer-set 2 --report --report-dir ./reports
+```
+
+Config can opt in globally or per project:
+
+```json
+{
+  "reporting": {
+    "enabled": true,
+    "scope": "global",
+    "mode": "full"
+  }
+}
+```
+
+Reporting options:
+
+- `enabled`: write report history when true.
+- `scope`: `global` or `repo`. Global writes under the user state directory. Repo writes
+  under `.diffwarden/reports/` in the Git repo root.
+- `dir`: custom report directory. Relative paths resolve from the CLI cwd and override
+  `scope`.
+- `mode`: `full` stores the full review artifact. `metadata` omits the full artifact and
+  finding bodies while preserving titles, locations, priorities, confidence, reviewer
+  metadata, and counts.
+
+CLI flags take precedence over config, including `--no-report` for disabling a configured
+report on one run. `--out` writes one explicit `ReviewArtifact` file; `--report` writes
+date-partitioned history records for later external analysis.
+
 ## Model And Effort
 
 Model selection is a base CLI option via `--model`.

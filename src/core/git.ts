@@ -6,6 +6,7 @@ import type { ReviewTargetResolved } from "./schema.js";
 import type { ReviewTargetSpec } from "./target.js";
 
 const execFileAsync = promisify(execFile);
+const repoLocalReportExclude = ".diffwarden/reports/**";
 
 export type ResolvedDiff = {
   target: ReviewTargetResolved;
@@ -35,7 +36,12 @@ async function resolveUncommittedTarget(repoRoot: string, headSha: string): Prom
   const [stagedDiff, unstagedDiff, untrackedText, changedText] = await Promise.all([
     runGit(repoRoot, ["diff", "--staged"]),
     runGit(repoRoot, ["diff"]),
-    runGit(repoRoot, ["ls-files", "--others", "--exclude-standard"]),
+    runGit(repoRoot, [
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      `--exclude=${repoLocalReportExclude}`,
+    ]),
     runGit(repoRoot, ["diff", "--name-only", "HEAD"]),
   ]);
   const untrackedFiles = lines(untrackedText);
@@ -51,7 +57,7 @@ async function resolveUncommittedTarget(repoRoot: string, headSha: string): Prom
       kind: "uncommitted",
       repo_root: repoRoot,
       head_sha: headSha,
-      diff_command: "git diff --staged && git diff && git ls-files --others --exclude-standard",
+      diff_command: `git diff --staged && git diff && git ls-files --others --exclude-standard --exclude=${repoLocalReportExclude}`,
       changed_files: changedFiles,
     },
   };

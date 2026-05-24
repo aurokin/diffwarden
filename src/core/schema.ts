@@ -220,6 +220,7 @@ export const reviewReviewerArtifactSchema = z
   .object({
     id: z.string(),
     sdk: reviewerSdkSchema,
+    transport: z.enum(["sdk", "cli"]).optional(),
     status: z.enum(["success", "failed"]).optional(),
     profile: z.string().optional(),
     provider: z.string().optional(),

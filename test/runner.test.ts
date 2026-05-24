@@ -657,7 +657,7 @@ describe("runReview", () => {
       .mockReturnValueOnce(1_250)
       .mockReturnValue(1_250);
 
-    await runReview({
+    const artifact = await runReview({
       cwd: repo,
       resolved,
       reviewer: "pi",
@@ -668,6 +668,7 @@ describe("runReview", () => {
     });
 
     expect(piAdapter.runTimeouts).toEqual([750]);
+    expect(artifact.reviewers?.[0]?.timing_ms).toBe(250);
   });
 
   it("passes validated effort to single reviewers", async () => {

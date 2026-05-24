@@ -10,6 +10,8 @@ const configFileName = "diffwarden.config.json";
 const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 const effortSchema = z.enum(effortValues);
 const transportSchema = z.enum(["sdk", "cli"]);
+const reportingScopeSchema = z.enum(["global", "repo"]);
+const reportingModeSchema = z.enum(["full", "metadata"]);
 
 const reviewerConfigSchema = z
   .object({
@@ -37,6 +39,15 @@ export const diffwardenConfigSchema = z
     reviewers: z.array(reviewerConfigSchema).optional(),
     readonly: z.literal(true).optional(),
     timeoutSeconds: z.number().positive().optional(),
+    reporting: z
+      .object({
+        enabled: z.boolean().optional(),
+        scope: reportingScopeSchema.optional(),
+        dir: z.string().min(1).optional(),
+        mode: reportingModeSchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((config, ctx) => {

@@ -29,6 +29,24 @@ describe("resolveGitTarget", () => {
     expect(resolved.diff).toContain("new.txt");
   });
 
+  it("excludes repo-local report history from uncommitted changes", async () => {
+    const repo = createRepo();
+    mkdirSync(path.join(repo, ".diffwarden", "reports", "2026", "05", "24"), {
+      recursive: true,
+    });
+    writeFileSync(
+      path.join(repo, ".diffwarden", "reports", "2026", "05", "24", "report.json"),
+      "{}\n",
+    );
+    writeFileSync(path.join(repo, "new.txt"), "new\n");
+
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+
+    expect(resolved.target.changed_files).toEqual(["new.txt"]);
+    expect(resolved.diff).toContain("new.txt");
+    expect(resolved.diff).not.toContain(".diffwarden/reports");
+  });
+
   it("resolves base branch changes", async () => {
     const repo = createRepo();
     git(repo, ["checkout", "-b", "feature"]);

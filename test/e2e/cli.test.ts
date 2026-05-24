@@ -210,6 +210,53 @@ describe("diffwarden CLI e2e", () => {
     });
   });
 
+  it("validates report options before resolving reviewers", async () => {
+    const repo = createRepo();
+
+    await expect(
+      runDiffwarden(repo, [
+        "--target",
+        "uncommitted",
+        "--reviewer",
+        "not-a-reviewer",
+        "--cwd",
+        repo,
+        "--report-scope",
+        "workspace",
+      ]),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("Invalid --report-scope value"),
+    });
+  });
+
+  it("writes stdout before surfacing report write failures", async () => {
+    const repo = createRepo();
+    const reportDir = path.join(repo, "report-file");
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    writeFileSync(reportDir, "not a directory\n");
+
+    try {
+      await runDiffwarden(repo, [
+        "--target",
+        "uncommitted",
+        "--reviewer",
+        "fake",
+        "--cwd",
+        repo,
+        "--report",
+        "--report-dir",
+        reportDir,
+      ]);
+      throw new Error("Expected diffwarden to fail writing report");
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 1,
+        stdout: expect.stringContaining("# Code Review"),
+      });
+    }
+  });
+
   it("runs doctor preflight checks without requiring a target", async () => {
     const repo = createRepo();
 

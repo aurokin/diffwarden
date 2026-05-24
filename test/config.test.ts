@@ -116,6 +116,42 @@ describe("loadDiffwardenConfig", () => {
     });
   });
 
+  it("loads reporting configuration", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reporting: {
+        enabled: true,
+        scope: "repo",
+        dir: ".reports",
+        mode: "metadata",
+      },
+    });
+
+    const loaded = await loadDiffwardenConfig({ cwd: root, repoRoot: root });
+
+    expect(loaded?.config.reporting).toEqual({
+      enabled: true,
+      scope: "repo",
+      dir: ".reports",
+      mode: "metadata",
+    });
+  });
+
+  it("rejects unsupported reporting scopes", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reporting: {
+        enabled: true,
+        scope: "workspace",
+      },
+    });
+
+    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+    });
+  });
+
   it("rejects SDK transport for CLI-only reviewers", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {

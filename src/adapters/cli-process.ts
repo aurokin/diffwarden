@@ -6,6 +6,8 @@ import { missingAuth, missingRequirement, reviewerFailed } from "../core/errors.
 import type { CliInvocation, CliRunResult } from "./cli-types.js";
 import type { ReviewAdapterInput } from "./types.js";
 
+const abortKillGraceMs = 1_000;
+
 export async function runCli(
   invocation: CliInvocation,
   input: ReviewAdapterInput,
@@ -23,6 +25,7 @@ export async function runCli(
       child = spawn(executable, invocation.args, {
         cwd: invocation.cwd ?? input.cwd,
         env,
+        detached: process.platform !== "win32",
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
@@ -32,10 +35,13 @@ export async function runCli(
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let settled = false;
+    let abortError: Error | undefined;
+    let abortKillTimer: NodeJS.Timeout | undefined;
 
     const removeAbortListener = bindAbortSignal(input.signal, () => {
-      child.kill("SIGTERM");
-      rejectOnce(reviewerFailed(`${invocation.executable} reviewer aborted`));
+      abortError = reviewerFailed(`${invocation.executable} reviewer aborted`);
+      killChildProcess(child, "SIGTERM");
+      abortKillTimer = setTimeout(() => killChildProcess(child, "SIGKILL"), abortKillGraceMs);
     });
 
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
@@ -48,6 +54,9 @@ export async function runCli(
     });
     child.on("error", (error) => {
       removeAbortListener();
+      if (abortKillTimer !== undefined) {
+        clearTimeout(abortKillTimer);
+      }
       if (isNodeErrorWithCode(error, "ENOENT")) {
         rejectOnce(missingRequirement(`CLI executable not found: ${invocation.executable}`));
         return;
@@ -56,6 +65,13 @@ export async function runCli(
     });
     child.on("close", (code, signal) => {
       removeAbortListener();
+      if (abortKillTimer !== undefined) {
+        clearTimeout(abortKillTimer);
+      }
+      if (abortError !== undefined) {
+        rejectOnce(abortError);
+        return;
+      }
       const result = {
         executable,
         stdout: Buffer.concat(stdout).toString("utf8"),
@@ -95,6 +111,23 @@ export async function runCli(
       reject(error);
     }
   });
+}
+
+function killChildProcess(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+  if (child.killed && signal === "SIGTERM") {
+    return;
+  }
+
+  try {
+    if (process.platform !== "win32" && child.pid !== undefined) {
+      process.kill(-child.pid, signal);
+      return;
+    }
+  } catch {
+    // Fall back to killing the direct child below.
+  }
+
+  child.kill(signal);
 }
 
 export async function resolveExecutable(

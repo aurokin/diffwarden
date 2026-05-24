@@ -246,6 +246,31 @@ describe("createCliAdapter", () => {
     });
   });
 
+  it("reaps CLI processes after abort", async () => {
+    const harness = createHarness("gemini");
+    const adapter = createCliAdapter("gemini");
+    const reviewer = createReviewer("gemini", harness.executable);
+    const abortController = new AbortController();
+    const run = adapter.run({
+      ...createInput(reviewer, harness),
+      signal: abortController.signal,
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_HANG: "1",
+      },
+    });
+
+    await waitForInvocation(harness);
+    const pid = harness.readInvocation().pid;
+    abortController.abort(new Error("test abort"));
+
+    await expect(run).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("reviewer aborted"),
+    });
+    expect(isProcessAlive(pid)).toBe(false);
+  });
+
   it("rejects unsupported Antigravity model overrides", async () => {
     const harness = createHarness("antigravity");
     const adapter = createCliAdapter("antigravity");
@@ -344,6 +369,7 @@ function createHarness(engine: CliEngine) {
       return JSON.parse(readFileSync(invocationPath, "utf8")) as {
         args: string[];
         env: Record<string, string | undefined>;
+        pid: number;
         stdin: string;
       };
     },
@@ -394,11 +420,16 @@ fs.writeFileSync(invocationPath, JSON.stringify({
   env: {
     OPENCODE_PERMISSION: process.env.OPENCODE_PERMISSION,
   },
+  pid: process.pid,
   stdin,
 }));
 if (process.env.DIFFWARDEN_FAKE_EXIT_AUTH === "1") {
   process.stderr.write("not logged in: API key required");
   process.exit(1);
+}
+if (process.env.DIFFWARDEN_FAKE_HANG === "1") {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1000);
 }
 const review = {
   findings: [],
@@ -436,4 +467,25 @@ if (engine === "codex") {
   process.exit(1);
 }
 `;
+}
+
+async function waitForInvocation(harness: ReturnType<typeof createHarness>): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      harness.readInvocation();
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  throw new Error("fake CLI did not record invocation");
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }

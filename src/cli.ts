@@ -11,6 +11,7 @@ import { invalidCli } from "./core/errors.js";
 import { hasFindingAtOrAbovePriority, parseFindingFailureThreshold } from "./core/finding-gate.js";
 import { resolveGitTarget } from "./core/git.js";
 import { renderJson, renderMarkdown } from "./core/render.js";
+import { resolveReportingOptions, writeReviewReport } from "./core/reporting.js";
 import {
   type ReviewerPreflightReport,
   runReview,
@@ -46,6 +47,11 @@ program
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--format <format>", "output format: markdown or json", "markdown")
   .option("--out <path>", "write the full ReviewArtifact JSON to a file")
+  .option("--report", "persist this review to report history")
+  .option("--no-report", "disable configured report history")
+  .option("--report-dir <path>", "write report history under a custom directory")
+  .option("--report-scope <scope>", "report storage scope: global or repo")
+  .option("--report-mode <mode>", "report content mode: full or metadata")
   .action(
     async (options: {
       target?: string;
@@ -60,6 +66,10 @@ program
       cwd: string;
       format: string;
       out?: string;
+      report?: boolean;
+      reportDir?: string;
+      reportScope?: string;
+      reportMode?: string;
     }) => {
       if (options.format !== "markdown" && options.format !== "json") {
         throw invalidCli(`Invalid --format value: ${options.format}`);
@@ -89,6 +99,17 @@ program
         reviewerSet: options.reviewerSet,
         envOptions,
         allowEnvReviewerSelection: loadedConfig !== undefined,
+      });
+      const reportingOptions = resolveReportingOptions({
+        cwd: options.cwd,
+        repoRoot: resolved.target.repo_root,
+        cli: {
+          ...(options.report !== undefined ? { report: options.report } : {}),
+          ...(options.reportDir !== undefined ? { reportDir: options.reportDir } : {}),
+          ...(options.reportScope !== undefined ? { reportScope: options.reportScope } : {}),
+          ...(options.reportMode !== undefined ? { reportMode: options.reportMode } : {}),
+        },
+        ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
       });
       const artifact = await runReview({
         cwd: options.cwd,
@@ -122,6 +143,11 @@ program
           ? renderJson(artifact)
           : renderMarkdown(artifact, { verbose: options.verbose === true }),
       );
+
+      await writeReviewReport({
+        artifact,
+        reporting: reportingOptions,
+      });
 
       if (
         failOnFindings !== undefined &&

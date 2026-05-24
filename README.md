@@ -46,6 +46,7 @@ diffwarden --target base:main --reviewer droid-cli --model claude-opus-4-7
 diffwarden --target base:main --reviewer-set 2
 diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 diffwarden --target commit:abc123 --format json
+diffwarden --target base:main --reviewer-set 2 --report
 diffwarden --target base:main --reviewer-set 2 --fail-on-findings P2
 ```
 
@@ -79,6 +80,24 @@ Create a starter user config with:
 ```bash
 diffwarden init
 ```
+
+## Review History Reports
+
+Reports are opt-in. Use `--report` to persist an analysis-friendly JSON record of a run:
+
+```bash
+diffwarden --target base:main --reviewer-set 2 --report
+diffwarden --target custom:"Review auth paths" --reviewer pi --report --report-scope repo
+diffwarden --target uncommitted --reviewer fake --report --report-dir ./tmp/reports
+```
+
+Reports include the cwd, target mode, custom instructions for `custom:<text>` targets,
+reviewer sdk/transport/model metadata, per-reviewer elapsed time and findings, failure
+summaries, and precomputed finding counts. The default global store is under the user state directory;
+repo-scoped reports go under `.diffwarden/reports/`. Reports may contain review text that
+echoes source or diff content, so they are never written unless explicitly enabled by CLI
+or config. `--out` still writes one requested `ReviewArtifact`; `--report` appends durable
+history.
 
 ## Agent Skill
 
@@ -118,6 +137,7 @@ Implemented:
 - Custom instruction targets for repository-scoped reviews.
 - Fake reviewer for credential-free development.
 - Review parsing, rendering, validation, and aggregation.
+- Opt-in review history reports.
 - Project/user `diffwarden.config.json` discovery.
 - Reviewer sets and `sdk[:profile]` reviewer specs.
 - Cursor, Claude, Pi, and Droid Agent SDK adapters.
