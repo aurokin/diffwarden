@@ -13,6 +13,7 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "complexity": "tsx scripts/complexity.ts",
     "format": "biome format --write .",
+    "install:skill": "bash scripts/install-local-skill.sh",
     "live:doctor": "tsx scripts/live-doctor.ts",
     "lint": "biome check .",
     "metrics": "pnpm complexity && pnpm test:coverage",

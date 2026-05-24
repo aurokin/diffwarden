@@ -89,9 +89,25 @@ another repository:
 skills/diffwarden/
 ```
 
-This skill is for agents using Diffwarden, not for agents developing this repo. Install or
-copy that folder into your agent's skills directory according to the agent's skill-loading
-mechanism, then ask the agent to use `$diffwarden` for code review.
+This skill is for agents using Diffwarden, not for agents developing this repo. Consumers
+should install it with the Skills CLI so their agent-specific skill directories and lockfiles
+stay consistent:
+
+```bash
+npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex claude-code --full-depth
+```
+
+For local Diffwarden development, symlink the checkout skill into the local agent skill
+directories instead. This keeps skill edits live without reinstalling from a release:
+
+```bash
+pnpm install:skill
+```
+
+The local installer links `skills/diffwarden/` into `~/.agents/skills/diffwarden` and
+`~/.claude/skills/diffwarden`. If `~/code/custom_skills` exists, it also adds
+`diffwarden` to `.skills.local.json` `preserveGlobalSkillNames` so that repo's global sync
+does not remove the manually linked development skill.
 
 ## Current Status
 
