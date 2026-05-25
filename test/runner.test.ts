@@ -1,13 +1,11 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewAdapter } from "../src/adapters/types.js";
-import { resolveGitTarget } from "../src/core/git.js";
+import type { ResolvedDiff } from "../src/core/git.js";
 import { runReview, runReviewerPreflightReport } from "../src/core/runner.js";
 import { reviewArtifactSchema } from "../src/core/schema.js";
-import { parseTargetSpec } from "../src/core/target.js";
 
 let repo: string | undefined;
 
@@ -21,9 +19,8 @@ afterEach(() => {
 
 describe("runReview", () => {
   it("runs the fake reviewer and returns an artifact", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     const artifact = await runReview({
       cwd: repo,
@@ -41,8 +38,8 @@ describe("runReview", () => {
   });
 
   it("runs custom targets without diff-backed location validation", async () => {
-    repo = createRepo();
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("custom:Review auth paths"));
+    repo = createWorkspace();
+    const resolved = createCustomResolvedTarget(repo, "Review auth paths");
 
     const artifact = await runReview({
       cwd: repo,
@@ -59,9 +56,8 @@ describe("runReview", () => {
   });
 
   it("rejects implicit reviewer selection without config", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const piAdapter = createMockAdapter("pi");
 
     await expect(
@@ -81,9 +77,8 @@ describe("runReview", () => {
   });
 
   it("runs the Pi reviewer through the adapter registry", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const piAdapter = createMockAdapter("pi");
 
     const artifact = await runReview({
@@ -127,9 +122,8 @@ describe("runReview", () => {
   });
 
   it("runs CLI-only reviewers through the cli adapter registry key", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const codexAdapter = createMockAdapter("codex:cli");
 
     const artifact = await runReview({
@@ -170,9 +164,8 @@ describe("runReview", () => {
   });
 
   it("preserves Codex app-server transport in review and preflight artifacts", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const codexAppServerAdapter = createMockAdapter("codex:app-server");
     const config = {
       reviewers: [
@@ -215,9 +208,8 @@ describe("runReview", () => {
   });
 
   it("rejects reviewer profiles before adapter execution", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const piAdapter = createMockAdapter("pi");
 
     await expect(
@@ -237,9 +229,8 @@ describe("runReview", () => {
   });
 
   it("runs configured reviewer profiles through the matching adapter", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const piAdapter = createMockAdapter("pi");
 
     const artifact = await runReview({
@@ -281,9 +272,8 @@ describe("runReview", () => {
   });
 
   it("runs multiple reviewers and aggregates their artifacts", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const piAdapter = createMockAdapter("pi");
     const claudeAdapter = createMockAdapter("claude");
 
@@ -308,9 +298,8 @@ describe("runReview", () => {
   });
 
   it("deduplicates aggregate findings and records reviewer attribution", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const findingPath = path.join(repo, "tracked.txt");
 
     const artifact = await runReview({
@@ -328,9 +317,8 @@ describe("runReview", () => {
   });
 
   it("records reviewer attribution for single-reviewer top-level findings", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     const artifact = await runReview({
       cwd: repo,
@@ -349,9 +337,8 @@ describe("runReview", () => {
   });
 
   it("keeps non-identical same-location findings separate", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const findingPath = path.join(repo, "tracked.txt");
 
     const artifact = await runReview({
@@ -378,9 +365,8 @@ describe("runReview", () => {
   });
 
   it("deduplicates matching findings with different confidence scores", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const findingPath = path.join(repo, "tracked.txt");
 
     const artifact = await runReview({
@@ -404,9 +390,8 @@ describe("runReview", () => {
   });
 
   it("preflights every selected reviewer before running any reviewer", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const events: string[] = [];
     const piAdapter = createMockAdapter("pi", events);
     const claudeAdapter = createMockAdapter("claude", events);
@@ -425,9 +410,8 @@ describe("runReview", () => {
   });
 
   it("preserves unknown verdicts when aggregating reviewers", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     const artifact = await runReview({
       cwd: repo,
@@ -446,9 +430,8 @@ describe("runReview", () => {
   });
 
   it("returns partial multi-reviewer results when one reviewer fails", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     const artifact = await runReview({
       cwd: repo,
@@ -476,9 +459,8 @@ describe("runReview", () => {
   });
 
   it("fails partial multi-reviewer runs in strict mode", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     await expect(
       runReview({
@@ -499,9 +481,8 @@ describe("runReview", () => {
   });
 
   it("fails fallback reviewer output in strict mode", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     await expect(
       runReview({
@@ -520,9 +501,8 @@ describe("runReview", () => {
   });
 
   it("fails invalid reviewer finding locations in strict mode", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     await expect(
       runReview({
@@ -543,9 +523,8 @@ describe("runReview", () => {
   });
 
   it("preserves single-reviewer failure codes in strict mode", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     await expect(
       runReview({
@@ -562,9 +541,8 @@ describe("runReview", () => {
   });
 
   it("fails multi-reviewer runs when every reviewer fails", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     await expect(
       runReview({
@@ -584,9 +562,8 @@ describe("runReview", () => {
   });
 
   it("expands reviewer sets from config", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const piAdapter = createMockAdapter("pi");
     const claudeAdapter = createMockAdapter("claude");
 
@@ -616,9 +593,8 @@ describe("runReview", () => {
   });
 
   it("rejects model overrides for multiple reviewers", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     await expect(
       runReview({
@@ -634,9 +610,8 @@ describe("runReview", () => {
   });
 
   it("times out slow reviewer runs", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const piAdapter = createHangingRunAdapter("pi");
     vi.spyOn(Date, "now").mockReturnValue(0);
 
@@ -655,9 +630,8 @@ describe("runReview", () => {
   });
 
   it("times out slow reviewer preflights before running adapters", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const piAdapter = createHangingPreflightAdapter("pi");
 
     await expect(
@@ -676,9 +650,8 @@ describe("runReview", () => {
   });
 
   it("reports timeout errors even when adapters reject synchronously on abort", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     await expect(
       runReview({
@@ -694,9 +667,8 @@ describe("runReview", () => {
   });
 
   it("passes only the remaining timeout budget to reviewer runs after preflight", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const piAdapter = createTimeoutCaptureAdapter("pi");
     vi.spyOn(Date, "now")
       .mockReturnValueOnce(0)
@@ -720,9 +692,8 @@ describe("runReview", () => {
   });
 
   it("passes validated effort to single reviewers", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
     const piAdapter = createMockAdapter("pi");
 
     const artifact = await runReview({
@@ -741,9 +712,8 @@ describe("runReview", () => {
   });
 
   it("fails Pi reviews clearly when no auth is available", async () => {
-    repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
 
     await expect(
       runReview({
@@ -957,21 +927,43 @@ function timeoutMatch(): { code: "timeout"; exitCode: 3 } {
   };
 }
 
-function createRepo(): string {
+function createWorkspace(): string {
   const newRepo = mkdtempSync(path.join(tmpdir(), "diffwarden-"));
-  git(newRepo, ["init", "-b", "main"]);
-  git(newRepo, ["config", "user.email", "test@example.com"]);
-  git(newRepo, ["config", "user.name", "Test User"]);
-  writeFileSync(path.join(newRepo, "tracked.txt"), "initial\n");
-  git(newRepo, ["add", "tracked.txt"]);
-  git(newRepo, ["commit", "-m", "initial"]);
   return newRepo;
 }
 
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+function createResolvedTarget(repoRoot: string): ResolvedDiff {
+  return {
+    diff: [
+      "diff --git a/tracked.txt b/tracked.txt",
+      "index e79c5e8..0835e4f 100644",
+      "--- a/tracked.txt",
+      "+++ b/tracked.txt",
+      "@@ -1 +1 @@",
+      "-initial",
+      "+changed",
+    ].join("\n"),
+    target: {
+      kind: "uncommitted",
+      repo_root: repoRoot,
+      head_sha: "0000000000000000000000000000000000000000",
+      diff_command:
+        "git diff --staged && git diff && git ls-files --others --exclude-standard --exclude='.diffwarden/reports/**'",
+      changed_files: ["tracked.txt"],
+    },
+  };
+}
+
+function createCustomResolvedTarget(repoRoot: string, instructions: string): ResolvedDiff {
+  return {
+    diff: "",
+    target: {
+      kind: "custom",
+      repo_root: repoRoot,
+      head_sha: "0000000000000000000000000000000000000000",
+      instructions,
+      diff_command: "custom instructions",
+      changed_files: [],
+    },
+  };
 }

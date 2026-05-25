@@ -14,40 +14,59 @@ export type ResolvedDiff = {
   diff: string;
 };
 
-export async function resolveGitTarget(cwd: string, spec: ReviewTargetSpec): Promise<ResolvedDiff> {
-  const repoRoot = await getRepoRoot(cwd);
-  const headSha = await runGit(repoRoot, ["rev-parse", "HEAD"]);
+export type GitRunner = (
+  cwd: string,
+  args: string[],
+  allowedExitCodes?: number[],
+) => Promise<string>;
+
+export type ResolveGitTargetOptions = {
+  runGit?: GitRunner;
+};
+
+export async function resolveGitTarget(
+  cwd: string,
+  spec: ReviewTargetSpec,
+  options: ResolveGitTargetOptions = {},
+): Promise<ResolvedDiff> {
+  const git = options.runGit ?? runGit;
+  const repoRoot = await getRepoRoot(cwd, git);
+  const headSha = await git(repoRoot, ["rev-parse", "HEAD"]);
 
   if (spec.kind === "uncommitted") {
-    return resolveUncommittedTarget(repoRoot, headSha);
+    return resolveUncommittedTarget(repoRoot, headSha, git);
   }
 
   if (spec.kind === "base") {
-    return resolveBaseTarget(repoRoot, spec.branch, headSha);
+    return resolveBaseTarget(repoRoot, spec.branch, headSha, git);
   }
 
   if (spec.kind === "custom") {
     return resolveCustomTarget(repoRoot, headSha, spec.instructions);
   }
 
-  return resolveCommitTarget(repoRoot, spec.sha);
+  return resolveCommitTarget(repoRoot, spec.sha, git);
 }
 
-async function resolveUncommittedTarget(repoRoot: string, headSha: string): Promise<ResolvedDiff> {
+async function resolveUncommittedTarget(
+  repoRoot: string,
+  headSha: string,
+  git: GitRunner,
+): Promise<ResolvedDiff> {
   const [stagedDiff, unstagedDiff, untrackedText, changedText] = await Promise.all([
-    runGit(repoRoot, ["diff", "--staged"]),
-    runGit(repoRoot, ["diff"]),
-    runGit(repoRoot, [
+    git(repoRoot, ["diff", "--staged"]),
+    git(repoRoot, ["diff"]),
+    git(repoRoot, [
       "ls-files",
       "--others",
       "--exclude-standard",
       `--exclude=${repoLocalReportExclude}`,
     ]),
-    runGit(repoRoot, ["diff", "--name-only", "HEAD"]),
+    git(repoRoot, ["diff", "--name-only", "HEAD"]),
   ]);
   const untrackedFiles = lines(untrackedText);
   const untrackedDiffs = await Promise.all(
-    untrackedFiles.map((file) => diffUntrackedFile(repoRoot, file)),
+    untrackedFiles.map((file) => diffUntrackedFile(repoRoot, file, git)),
   );
   const changedFiles = uniqueSorted([...lines(changedText), ...untrackedFiles]);
   const diff = [stagedDiff, unstagedDiff, ...untrackedDiffs].filter(Boolean).join("\n");
@@ -68,11 +87,12 @@ async function resolveBaseTarget(
   repoRoot: string,
   branch: string,
   headSha: string,
+  git: GitRunner,
 ): Promise<ResolvedDiff> {
-  const mergeBase = await runGit(repoRoot, ["merge-base", "HEAD", branch]);
+  const mergeBase = await git(repoRoot, ["merge-base", "HEAD", branch]);
   const [diff, changedText] = await Promise.all([
-    runGit(repoRoot, ["diff", mergeBase, "HEAD"]),
-    runGit(repoRoot, ["diff", "--name-only", mergeBase, "HEAD"]),
+    git(repoRoot, ["diff", mergeBase, "HEAD"]),
+    git(repoRoot, ["diff", "--name-only", mergeBase, "HEAD"]),
   ]);
 
   return {
@@ -89,25 +109,22 @@ async function resolveBaseTarget(
   };
 }
 
-async function resolveCommitTarget(repoRoot: string, sha: string): Promise<ResolvedDiff> {
-  const commitSha = await runGit(repoRoot, ["rev-parse", sha]);
-  const [firstParent] = await commitParents(repoRoot, commitSha);
+async function resolveCommitTarget(
+  repoRoot: string,
+  sha: string,
+  git: GitRunner,
+): Promise<ResolvedDiff> {
+  const commitSha = await git(repoRoot, ["rev-parse", sha]);
+  const [firstParent] = await commitParents(repoRoot, commitSha, git);
   const [diff, changedText] =
     firstParent === undefined
       ? await Promise.all([
-          runGit(repoRoot, ["diff-tree", "--root", "--patch", "--no-commit-id", commitSha]),
-          runGit(repoRoot, [
-            "diff-tree",
-            "--root",
-            "-r",
-            "--name-only",
-            "--no-commit-id",
-            commitSha,
-          ]),
+          git(repoRoot, ["diff-tree", "--root", "--patch", "--no-commit-id", commitSha]),
+          git(repoRoot, ["diff-tree", "--root", "-r", "--name-only", "--no-commit-id", commitSha]),
         ])
       : await Promise.all([
-          runGit(repoRoot, ["diff", firstParent, commitSha]),
-          runGit(repoRoot, ["diff", "--name-only", firstParent, commitSha]),
+          git(repoRoot, ["diff", firstParent, commitSha]),
+          git(repoRoot, ["diff", "--name-only", firstParent, commitSha]),
         ]);
 
   return {
@@ -143,22 +160,26 @@ function resolveCustomTarget(
   };
 }
 
-async function commitParents(repoRoot: string, commitSha: string): Promise<string[]> {
-  const parentLine = await runGit(repoRoot, ["rev-list", "--parents", "-n", "1", commitSha]);
+async function commitParents(
+  repoRoot: string,
+  commitSha: string,
+  git: GitRunner,
+): Promise<string[]> {
+  const parentLine = await git(repoRoot, ["rev-list", "--parents", "-n", "1", commitSha]);
   const [_commit, ...parents] = parentLine.split(/\s+/).filter(Boolean);
   return parents;
 }
 
-async function getRepoRoot(cwd: string): Promise<string> {
+async function getRepoRoot(cwd: string, git: GitRunner): Promise<string> {
   try {
-    return await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+    return await git(cwd, ["rev-parse", "--show-toplevel"]);
   } catch {
     throw invalidCli(`Not a git repository: ${cwd}`);
   }
 }
 
-async function diffUntrackedFile(repoRoot: string, file: string): Promise<string> {
-  return runGit(
+async function diffUntrackedFile(repoRoot: string, file: string, git: GitRunner): Promise<string> {
+  return git(
     repoRoot,
     ["diff", "--no-index", "--", "/dev/null", path.join(repoRoot, file)],
     [0, 1],

@@ -9,16 +9,31 @@ Use the numbers to decide whether a future threshold would improve confidence.
 pnpm check
 ```
 
-Runs Biome linting, strict TypeScript type checking, and the default Vitest suite. The
-default `pnpm test`, `pnpm test:coverage`, and `pnpm test:e2e` commands force
-`INTEGRATION_TEST_ON=0`, so inherited shell environment cannot accidentally trigger live
-model calls.
+Runs Biome linting, strict TypeScript type checking, and the low-churn unit Vitest suite.
+The default `pnpm test`, `pnpm test:unit`, `pnpm test:coverage`, and `pnpm test:e2e` commands
+force `INTEGRATION_TEST_ON=0`, so inherited shell environment cannot accidentally trigger
+live model calls.
 
-The default Vitest config runs test files serially with one worker. Several suites create
-temporary Git repositories and short-lived child processes; on macOS, parallelizing those tests
-can amplify `syspolicyd`/`trustd` executable validation work enough to affect the whole
-machine. Keep the default gate low-churn unless CI provides an isolated runner where the
-extra parallelism is worth it.
+The default unit suite excludes tests that intentionally spawn fake reviewer executables or
+create real Git repositories. Those process-heavy paths are still covered by explicit suites
+listed below.
+
+## Test Tiers
+
+```bash
+pnpm test:unit
+pnpm test:process
+pnpm test:git
+pnpm test:full
+```
+
+`test:unit` is the default local loop and avoids real Git subprocesses, fake CLI launches, and
+model calls. `test:process` covers fake CLI/app-server process contracts. `test:git` covers
+real Git target-resolution behavior. `test:full` runs all three tiers in sequence.
+
+Process and Git suites run test files serially with one worker. Several tests create temporary
+Git repositories or short-lived child processes; on macOS, parallelizing those tests can amplify
+`syspolicyd`/`trustd` executable validation work enough to affect the whole machine.
 
 ## Coverage
 
@@ -26,7 +41,7 @@ extra parallelism is worth it.
 pnpm test:coverage
 ```
 
-Runs the default Vitest suite with V8 coverage reporting. Reports are written to `coverage/`
+Runs the low-churn unit Vitest suite with V8 coverage reporting. Reports are written to `coverage/`
 with terminal text, JSON summary, and HTML output. No coverage thresholds are enforced.
 
 ## Complexity
@@ -52,7 +67,8 @@ JSON output, and CLI error handling.
 ## Live Smoke Tests
 
 Live tests are opt-in because they require local tools, may require credentials, and may make
-real model requests.
+real model requests. Live test scripts require both `INTEGRATION_TEST_ON=1` from the script and
+`DIFFWARDEN_ALLOW_MODEL_SPEND=1` from the caller.
 
 Check local tool discovery first:
 
@@ -63,26 +79,26 @@ pnpm live:doctor
 Run SDK smoke tests:
 
 ```bash
-pnpm test:live:sdk
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk
 ```
 
 Run CLI transport smoke tests:
 
 ```bash
-pnpm test:live:cli
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:cli
 ```
 
 Run built-binary e2e smoke tests for selected reviewers:
 
 ```bash
-DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
-DIFFWARDEN_LIVE_E2E_REVIEWERS=droid DIFFWARDEN_LIVE_DROID_EFFORT=low pnpm test:live:e2e
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 DIFFWARDEN_LIVE_E2E_REVIEWERS=droid DIFFWARDEN_LIVE_DROID_EFFORT=low pnpm test:live:e2e
 ```
 
 Run all live suites:
 
 ```bash
-pnpm test:live
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live
 ```
 
 Use `INTEGRATION_DISABLE=cursor,claude,pi,droid,codex` to skip specific SDKs or CLIs during live
