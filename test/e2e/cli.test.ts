@@ -1,5 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -210,6 +211,83 @@ describe("diffwarden CLI e2e", () => {
     });
   });
 
+  it("writes report provenance for a review run", async () => {
+    const repo = createRepo();
+    const reportDir = path.join(repo, "reports");
+    const packageJson = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8"));
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const expectedDiff = git(repo, ["diff"]);
+
+    const result = await runDiffwarden(repo, [
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--format",
+      "json",
+      "--strict",
+      "--fail-on-findings",
+      "P2",
+      "--report",
+      "--report-dir",
+      reportDir,
+      "--report-mode",
+      "metadata",
+    ]);
+    const artifact = JSON.parse(result.stdout);
+    const report = readSingleJsonReport(reportDir);
+
+    expect(artifact.target.changed_files).toEqual(["tracked.txt"]);
+    expect(report).toMatchObject({
+      report_schema_version: 3,
+      provenance: {
+        diffwarden: {
+          version: packageJson.version,
+        },
+        invocation: {
+          target: "uncommitted",
+          reviewers: ["fake"],
+          strict: true,
+          fail_on_findings: "P2",
+          format: "json",
+        },
+        reviewer_selection: {
+          requested_reviewers: ["fake"],
+          resolved_reviewers: ["fake"],
+        },
+        target: {
+          diff_sha256: sha256(expectedDiff),
+          diff_bytes: Buffer.byteLength(expectedDiff),
+          patch_persisted: false,
+        },
+      },
+      invocation: {
+        cwd: repo,
+        reporting: {
+          scope: "custom-dir",
+          mode: "metadata",
+        },
+      },
+      reviewers: [
+        expect.objectContaining({
+          id: "fake",
+          engine: "fake",
+          status: "success",
+          adapter_metadata: {
+            captureMode: "native-structured",
+            readonlyCapability: "enforced",
+          },
+          preflight_metadata: {
+            readonlyCapability: "enforced",
+          },
+        }),
+      ],
+    });
+    expect(report).not.toHaveProperty("artifact");
+  });
+
   it("validates report options before resolving reviewers", async () => {
     const repo = createRepo();
 
@@ -354,6 +432,30 @@ function isExecError(error: unknown): error is { code: number; stdout: string; s
     typeof error.stdout === "string" &&
     typeof error.stderr === "string"
   );
+}
+
+function readSingleJsonReport(dir: string): Record<string, unknown> {
+  const paths = findJsonReports(dir);
+  expect(paths).toHaveLength(1);
+  return JSON.parse(readFileSync(paths[0] ?? "", "utf8"));
+}
+
+function findJsonReports(dir: string): string[] {
+  if (!existsSync(dir)) {
+    return [];
+  }
+
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      return findJsonReports(entryPath);
+    }
+    return entry.isFile() && entry.name.endsWith(".json") ? [entryPath] : [];
+  });
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function mkdtemp(prefix: string): string {

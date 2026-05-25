@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -48,9 +48,10 @@ export type ReviewReportFinding =
     };
 
 export type ReviewReport = {
-  report_schema_version: 2;
+  report_schema_version: 3;
   run_id: string;
   created_at: string;
+  provenance: ReviewReportProvenance;
   invocation: {
     cwd: string;
     target: ReviewReportTarget;
@@ -79,6 +80,37 @@ export type ReviewReportTarget = Omit<ReviewTargetResolved, "instructions"> & {
   custom_instructions?: string;
 };
 
+export type ReviewReportProvenance = {
+  diffwarden: {
+    version: string;
+  };
+  invocation: {
+    target?: string;
+    reviewers?: string[];
+    reviewer_set?: string;
+    model?: string;
+    effort?: string;
+    timeout_seconds?: number;
+    strict: boolean;
+    fail_on_findings?: string;
+    format?: "markdown" | "json";
+  };
+  config?: {
+    path: string;
+    sha256: string;
+  };
+  reviewer_selection: {
+    reviewer_set?: string;
+    requested_reviewers?: string[];
+    resolved_reviewers: string[];
+  };
+  target: {
+    diff_sha256?: string;
+    diff_bytes?: number;
+    patch_persisted: false;
+  };
+};
+
 export type ReviewReportReviewer = {
   id: string;
   engine: ReviewReviewerArtifact["engine"];
@@ -89,15 +121,37 @@ export type ReviewReportReviewer = {
   effort?: string;
   status: "success" | "failed";
   elapsed_ms?: number;
+  usage?: unknown;
+  adapter_metadata?: NonNullable<ReviewReviewerArtifact["adapter_metadata"]>;
+  preflight_metadata?: NonNullable<NonNullable<ReviewReviewerArtifact["preflight"]>["metadata"]>;
   finding_count: number;
   finding_counts_by_priority: FindingCountsByPriority;
   findings: ReviewReportFinding[];
   error?: NonNullable<ReviewReviewerArtifact["error"]>;
 };
 
+export type ReviewReportProvenanceInput = {
+  diffwardenVersion?: string;
+  targetSpec?: string;
+  reviewers?: string[];
+  reviewerSet?: string;
+  model?: string;
+  effort?: string;
+  timeoutSeconds?: number;
+  strict?: boolean;
+  failOnFindings?: string;
+  format?: "markdown" | "json";
+  config?: {
+    path: string;
+    sha256: string;
+  };
+  diff?: string;
+};
+
 export type WriteReviewReportOptions = {
   artifact: ReviewArtifact;
   reporting: ResolvedReportingOptions;
+  provenance?: ReviewReportProvenanceInput;
   now?: Date;
   runId?: string;
 };
@@ -167,6 +221,7 @@ export async function writeReviewReport(
   const report = createReviewReport({
     artifact: options.artifact,
     reporting: options.reporting,
+    ...(options.provenance !== undefined ? { provenance: options.provenance } : {}),
     now,
     runId,
   });
@@ -190,6 +245,7 @@ export async function writeReviewReport(
 export function createReviewReport(options: {
   artifact: ReviewArtifact;
   reporting: Pick<ResolvedReportingOptions, "scope" | "mode">;
+  provenance?: ReviewReportProvenanceInput;
   now?: Date;
   runId?: string;
 }): ReviewReport {
@@ -202,9 +258,10 @@ export function createReviewReport(options: {
     reportFinding(finding, options.reporting.mode),
   );
   const report: ReviewReport = {
-    report_schema_version: 2,
+    report_schema_version: 3,
     run_id: runId,
     created_at: createdAt,
+    provenance: reportProvenance(options.artifact, options.provenance),
     invocation: {
       cwd: options.artifact.cwd,
       target: reportTarget(options.artifact.target),
@@ -251,10 +308,56 @@ function createReviewerReport(
     ...(reviewer.effort !== undefined ? { effort: reviewer.effort } : {}),
     status: reviewer.status === "failed" ? "failed" : "success",
     ...(reviewer.timing_ms !== undefined ? { elapsed_ms: reviewer.timing_ms } : {}),
+    ...(reviewer.usage !== undefined ? { usage: reviewer.usage } : {}),
+    ...(reviewer.adapter_metadata !== undefined
+      ? { adapter_metadata: reviewer.adapter_metadata }
+      : {}),
+    ...(reviewer.preflight?.metadata !== undefined
+      ? { preflight_metadata: reviewer.preflight.metadata }
+      : {}),
     finding_count: findings.length,
     finding_counts_by_priority: countFindingsByPriority(findings),
     findings,
     ...(reviewer.error !== undefined ? { error: reviewer.error } : {}),
+  };
+}
+
+function reportProvenance(
+  artifact: ReviewArtifact,
+  input: ReviewReportProvenanceInput | undefined,
+): ReviewReportProvenance {
+  const diff = artifact.target.kind === "custom" ? undefined : input?.diff;
+
+  return {
+    diffwarden: {
+      version: input?.diffwardenVersion ?? "unknown",
+    },
+    invocation: {
+      ...(input?.targetSpec !== undefined ? { target: input.targetSpec } : {}),
+      ...(input?.reviewers !== undefined ? { reviewers: input.reviewers } : {}),
+      ...(input?.reviewerSet !== undefined ? { reviewer_set: input.reviewerSet } : {}),
+      ...(input?.model !== undefined ? { model: input.model } : {}),
+      ...(input?.effort !== undefined ? { effort: input.effort } : {}),
+      ...(input?.timeoutSeconds !== undefined ? { timeout_seconds: input.timeoutSeconds } : {}),
+      strict: input?.strict === true,
+      ...(input?.failOnFindings !== undefined ? { fail_on_findings: input.failOnFindings } : {}),
+      ...(input?.format !== undefined ? { format: input.format } : {}),
+    },
+    ...(input?.config !== undefined ? { config: input.config } : {}),
+    reviewer_selection: {
+      ...(input?.reviewerSet !== undefined ? { reviewer_set: input.reviewerSet } : {}),
+      ...(input?.reviewers !== undefined ? { requested_reviewers: input.reviewers } : {}),
+      resolved_reviewers: (artifact.reviewers ?? []).map((reviewer) => reviewer.id),
+    },
+    target: {
+      ...(diff !== undefined
+        ? {
+            diff_sha256: sha256(diff),
+            diff_bytes: Buffer.byteLength(diff),
+          }
+        : {}),
+      patch_persisted: false,
+    },
   };
 }
 
@@ -336,4 +439,8 @@ function userStateDir(env: NodeJS.ProcessEnv, homeDir: string = homedir()): stri
 
 function safeTimestamp(date: Date): string {
   return date.toISOString().replaceAll(":", "-");
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }

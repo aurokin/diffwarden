@@ -92,12 +92,16 @@ diffwarden --target uncommitted --reviewer fake --report --report-dir ./tmp/repo
 ```
 
 Reports include the cwd, target mode, custom instructions for `custom:<text>` targets,
-reviewer engine/transport/model metadata, per-reviewer elapsed time and findings, failure
-summaries, and precomputed finding counts. The default global store is under the user state directory;
-repo-scoped reports go under `.diffwarden/reports/`. Reports may contain review text that
-echoes source or diff content, so they are never written unless explicitly enabled by CLI
-or config. `--out` still writes one requested `ReviewArtifact`; `--report` appends durable
-history.
+Diffwarden version, invocation options, config path/hash when a config is loaded, requested
+and resolved reviewers, reviewer engine/transport/model metadata, adapter/preflight metadata,
+adapter usage data when available, per-reviewer elapsed time and findings, failure summaries,
+and precomputed finding counts. Diff-backed reports store a stable SHA-256 hash and byte count
+for the reviewed patch; the patch text itself is not persisted in report provenance.
+
+The default global store is under the user state directory; repo-scoped reports go under
+`.diffwarden/reports/`. Reports may contain review text that echoes source or diff content,
+so they are never written unless explicitly enabled by CLI or config. `--out` still writes one
+requested `ReviewArtifact`; `--report` appends durable history.
 
 ## Agent Skill
 

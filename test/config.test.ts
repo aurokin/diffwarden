@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,6 +26,9 @@ describe("loadDiffwardenConfig", () => {
     const loaded = await loadDiffwardenConfig({ cwd: nested, repoRoot: root });
 
     expect(loaded?.path).toBe(path.join(root, "diffwarden.config.json"));
+    expect(loaded?.sha256).toBe(
+      sha256(readFileSync(path.join(root, "diffwarden.config.json"), "utf8")),
+    );
     expect(loaded?.config.reviewers?.[0]).toMatchObject({
       id: "pi-openrouter-high",
       sdk: "pi",
@@ -249,4 +253,8 @@ describe("initDiffwardenConfig", () => {
 
 function writeConfig(dir: string, value: unknown): void {
   writeFileSync(path.join(dir, "diffwarden.config.json"), `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }

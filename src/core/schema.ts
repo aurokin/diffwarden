@@ -229,6 +229,7 @@ const reviewReviewerArtifactBaseSchema = z.object({
   result: reviewArtifactResultSchema.optional(),
   raw_text: z.string().optional(),
   preflight: adapterPreflightResultSchema.optional(),
+  usage: z.unknown().optional(),
   adapter_metadata: z
     .record(z.string(), z.unknown())
     .and(

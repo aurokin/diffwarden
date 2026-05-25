@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -121,6 +122,7 @@ export type DiffwardenConfig = z.infer<typeof diffwardenConfigSchema>;
 
 export type LoadedDiffwardenConfig = {
   path: string;
+  sha256: string;
   config: DiffwardenConfig;
 };
 
@@ -165,6 +167,7 @@ export async function loadDiffwardenConfig(
 
   return {
     path: configPath,
+    sha256: sha256(raw),
     config: parsed.data,
   };
 }
@@ -278,4 +281,8 @@ function isCliOnlyReviewerSdk(sdk: string): boolean {
 
 function normalizeTransport(transport: z.infer<typeof transportSchema>): "sdk" | "cli" {
   return transport === "native" ? "sdk" : transport;
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }

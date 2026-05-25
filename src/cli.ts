@@ -100,6 +100,14 @@ program
         envOptions,
         allowEnvReviewerSelection: loadedConfig !== undefined,
       });
+      const provenanceReviewerSet =
+        reviewerOptions.reviewerSet ??
+        (reviewerOptions.reviewers === undefined
+          ? loadedConfig?.config.defaultReviewerSet
+          : undefined);
+      const model = options.model ?? envOptions.model;
+      const effort = options.effort ?? envOptions.effort;
+      const timeoutSeconds = cliTimeoutSeconds ?? envOptions.timeoutSeconds;
       const reportingOptions = resolveReportingOptions({
         cwd: options.cwd,
         repoRoot: resolved.target.repo_root,
@@ -115,21 +123,9 @@ program
         cwd: options.cwd,
         resolved,
         ...reviewerOptions,
-        ...(options.model !== undefined
-          ? { model: options.model }
-          : envOptions.model !== undefined
-            ? { model: envOptions.model }
-            : {}),
-        ...(options.effort !== undefined
-          ? { effort: options.effort }
-          : envOptions.effort !== undefined
-            ? { effort: envOptions.effort }
-            : {}),
-        ...(cliTimeoutSeconds !== undefined
-          ? { timeoutSeconds: cliTimeoutSeconds }
-          : envOptions.timeoutSeconds !== undefined
-            ? { timeoutSeconds: envOptions.timeoutSeconds }
-            : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(effort !== undefined ? { effort } : {}),
+        ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
         ...(options.strict === true ? { strict: true } : {}),
         ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
       });
@@ -147,6 +143,24 @@ program
       await writeReviewReport({
         artifact,
         reporting: reportingOptions,
+        provenance: {
+          diffwardenVersion: version,
+          targetSpec: options.target,
+          ...reviewerOptions,
+          ...(provenanceReviewerSet !== undefined ? { reviewerSet: provenanceReviewerSet } : {}),
+          ...(model !== undefined ? { model } : {}),
+          ...(effort !== undefined ? { effort } : {}),
+          ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+          strict: options.strict === true,
+          ...(options.failOnFindings !== undefined
+            ? { failOnFindings: options.failOnFindings }
+            : {}),
+          format: options.format,
+          ...(loadedConfig !== undefined
+            ? { config: { path: loadedConfig.path, sha256: loadedConfig.sha256 } }
+            : {}),
+          diff: resolved.diff,
+        },
       });
 
       if (

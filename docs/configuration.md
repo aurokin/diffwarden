@@ -109,6 +109,31 @@ CLI flags take precedence over config, including `--no-report` for disabling a c
 report on one run. `--out` writes one explicit `ReviewArtifact` file; `--report` writes
 date-partitioned history records for later external analysis.
 
+### Report Provenance
+
+Report records use `report_schema_version: 3`. Every report includes a `provenance` block
+intended to make a run reproducible without persisting more patch content than necessary:
+
+- `diffwarden.version`: the Diffwarden CLI version that wrote the report.
+- `invocation`: the requested target, reviewers or reviewer set, model, effort, timeout,
+  strict mode, finding gate, and output format when those options were supplied.
+- `config`: the loaded config path and SHA-256 of the config file contents when a config file
+  was used. The report does not embed config contents.
+- `reviewer_selection`: the requested reviewer specs or reviewer set plus the resolved reviewer
+  ids that actually ran.
+- `target`: for diff-backed targets, SHA-256 and byte count of the reviewed patch. Reports do
+  not persist the patch text as provenance, so `patch_persisted` is currently always `false`.
+
+Reviewer entries preserve adapter output metadata, preflight metadata, and adapter usage data
+when the adapter provides them. Adapter and executable version data are therefore best-effort:
+SDK adapters record SDK/version details where they already discover them, while CLI adapters do
+not run extra `--version` probes solely for reporting.
+
+Privacy mode affects review content, not run provenance. `full` reports include the full
+`ReviewArtifact`, which can contain source-adjacent review text. `metadata` reports omit the
+artifact and finding bodies while retaining titles, locations, priorities, confidence scores,
+counts, provenance, usage data, and adapter/preflight metadata.
+
 ## Model And Effort
 
 Model selection is a base CLI option via `--model`.

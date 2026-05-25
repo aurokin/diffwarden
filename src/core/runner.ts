@@ -350,6 +350,10 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
     reviewerArtifact.adapter_metadata = output.metadata;
   }
 
+  if (output.usage !== undefined) {
+    reviewerArtifact.usage = output.usage;
+  }
+
   return reviewerArtifact;
 }
 

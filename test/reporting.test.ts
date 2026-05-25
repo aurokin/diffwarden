@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -97,14 +98,54 @@ describe("createReviewReport", () => {
         scope: "custom-dir",
         mode: "full",
       },
+      provenance: {
+        diffwardenVersion: "0.2.4",
+        targetSpec: "custom:Review auth paths",
+        reviewers: ["pi-default", "codex", "claude-cli"],
+        model: "anthropic/claude-sonnet",
+        timeoutSeconds: 300,
+        strict: true,
+        failOnFindings: "P2",
+        format: "json",
+        config: {
+          path: "/repo/diffwarden.config.json",
+          sha256: "config-sha",
+        },
+        diff: "diff --git a/auth.ts b/auth.ts\n",
+      },
       now: new Date("2026-05-24T18:42:31.123Z"),
       runId: "run-1",
     });
 
     expect(report).toMatchObject({
-      report_schema_version: 2,
+      report_schema_version: 3,
       run_id: "run-1",
       created_at: "2026-05-24T18:42:31.123Z",
+      provenance: {
+        diffwarden: {
+          version: "0.2.4",
+        },
+        invocation: {
+          target: "custom:Review auth paths",
+          reviewers: ["pi-default", "codex", "claude-cli"],
+          model: "anthropic/claude-sonnet",
+          timeout_seconds: 300,
+          strict: true,
+          fail_on_findings: "P2",
+          format: "json",
+        },
+        config: {
+          path: "/repo/diffwarden.config.json",
+          sha256: "config-sha",
+        },
+        reviewer_selection: {
+          requested_reviewers: ["pi-default", "codex", "claude-cli"],
+          resolved_reviewers: ["pi-default", "codex", "claude-cli"],
+        },
+        target: {
+          patch_persisted: false,
+        },
+      },
       invocation: {
         cwd: "/repo/packages/app",
         target: {
@@ -139,6 +180,16 @@ describe("createReviewReport", () => {
       engine: "pi",
       transport: "native",
       elapsed_ms: 700,
+      usage: {
+        inputTokens: 10,
+        outputTokens: 3,
+      },
+      adapter_metadata: {
+        sdkVersion: "pi-sdk-test",
+      },
+      preflight_metadata: {
+        readonlyCapability: "tool-restricted",
+      },
       finding_count: 1,
     });
     expect(report.reviewers[1]).toMatchObject({
@@ -170,6 +221,7 @@ describe("createReviewReport", () => {
     });
 
     expect(report.artifact).toBeUndefined();
+    expect(report.provenance.target.patch_persisted).toBe(false);
     expect(report.reviewers[0]?.findings[0]).toEqual({
       title: "Auth bypass",
       confidence_score: 0.91,
@@ -223,6 +275,19 @@ function reviewArtifact(): ReviewArtifact {
         transport: "native",
         status: "success",
         model: "anthropic/claude-sonnet",
+        preflight: {
+          checks: [{ name: "mock", status: "passed" }],
+          metadata: {
+            readonlyCapability: "tool-restricted",
+          },
+        },
+        usage: {
+          inputTokens: 10,
+          outputTokens: 3,
+        },
+        adapter_metadata: {
+          sdkVersion: "pi-sdk-test",
+        },
         result: {
           findings: [
             {
@@ -345,4 +410,8 @@ function validation(): ReviewArtifact["validation"] {
     valid_locations: true,
     invalid_locations: [],
   };
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
