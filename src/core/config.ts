@@ -4,13 +4,14 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { getTransportCapability } from "../adapters/capabilities.js";
 import { invalidConfig } from "./errors.js";
 import { reviewerSdkSchema } from "./schema.js";
 
 const configFileName = "diffwarden.config.json";
 const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 const effortSchema = z.enum(effortValues);
-const transportSchema = z.enum(["native", "sdk", "cli"]);
+const transportSchema = z.enum(["native", "sdk", "cli", "app-server"]);
 const reportingScopeSchema = z.enum(["global", "repo"]);
 const reportingModeSchema = z.enum(["full", "metadata"]);
 const configuredReviewerEngineSchema = reviewerSdkSchema.exclude(["fake"]);
@@ -99,7 +100,21 @@ export const diffwardenConfigSchema = z
       if (reviewer.transport === "sdk" && isCliOnlyReviewerSdk(reviewer.sdk)) {
         ctx.addIssue({
           code: "custom",
-          message: `Reviewer ${reviewer.id} must use CLI transport for engine: ${reviewer.sdk}`,
+          message:
+            reviewer.sdk === "codex"
+              ? `Reviewer ${reviewer.id} must use CLI transport or app-server transport for engine: ${reviewer.sdk}`
+              : `Reviewer ${reviewer.id} must use CLI transport for engine: ${reviewer.sdk}`,
+          path: ["reviewers", index, "transport"],
+        });
+      }
+
+      if (
+        reviewer.transport !== undefined &&
+        getTransportCapability(reviewer.sdk, reviewer.transport)?.supported !== true
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          message: `Reviewer ${reviewer.id} does not support ${reviewer.transport} transport for engine: ${reviewer.sdk}`,
           path: ["reviewers", index, "transport"],
         });
       }
@@ -279,7 +294,9 @@ function isCliOnlyReviewerSdk(sdk: string): boolean {
   );
 }
 
-function normalizeTransport(transport: z.infer<typeof transportSchema>): "sdk" | "cli" {
+function normalizeTransport(
+  transport: z.infer<typeof transportSchema>,
+): "sdk" | "cli" | "app-server" {
   return transport === "native" ? "sdk" : transport;
 }
 

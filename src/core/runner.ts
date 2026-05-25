@@ -1,10 +1,15 @@
 import { claudeAdapter } from "../adapters/claude.js";
 import { createCliAdapter } from "../adapters/cli.js";
+import { createCodexAppServerAdapter } from "../adapters/codex-app-server.js";
 import { cursorAdapter } from "../adapters/cursor.js";
 import { droidAdapter } from "../adapters/droid.js";
 import { fakeAdapter } from "../adapters/fake.js";
 import { piAdapter } from "../adapters/pi.js";
-import type { ReviewAdapter, ReviewReviewerConfig } from "../adapters/types.js";
+import type {
+  ReviewAdapter,
+  ReviewAdapterPrepareResult,
+  ReviewReviewerConfig,
+} from "../adapters/types.js";
 import type { DiffwardenConfig } from "./config.js";
 import { parseChangedLineRanges } from "./diff.js";
 import {
@@ -53,7 +58,7 @@ export type ReviewerPreflightArtifact = {
   status: "passed" | "failed";
   profile?: string;
   provider?: string;
-  transport?: "native" | "cli";
+  transport?: "native" | "cli" | "app-server";
   model?: string;
   effort?: string;
   preflight?: Awaited<ReturnType<NonNullable<ReviewAdapter["preflight"]>>>;
@@ -491,6 +496,7 @@ async function runReviewerOutcome(options: {
       reviewer: context.reviewer,
       adapter: context.adapter,
       ...(context.preflight !== undefined ? { preflight: context.preflight } : {}),
+      ...(context.runContext !== undefined ? { runContext: context.runContext } : {}),
       ...(context.remainingTimeoutMs !== undefined
         ? { remainingTimeoutMs: context.remainingTimeoutMs }
         : {}),
@@ -518,6 +524,7 @@ type SingleReviewerOptions = {
   reviewer: ReviewReviewerConfig;
   adapter: ReviewAdapter;
   preflight?: Awaited<ReturnType<NonNullable<ReviewAdapter["preflight"]>>>;
+  runContext?: unknown;
   remainingTimeoutMs?: number;
   prompt: string;
   changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
@@ -538,6 +545,7 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
     signal: abortController.signal,
     readonly: true,
     env: options.env,
+    ...(options.runContext !== undefined ? { runContext: options.runContext } : {}),
   };
   const output = await withTimeout(
     () => options.adapter.run(adapterInput),
@@ -594,6 +602,7 @@ type ReviewerContext = {
   reviewer: ReviewReviewerConfig;
   adapter: ReviewAdapter;
   preflight?: Awaited<ReturnType<NonNullable<ReviewAdapter["preflight"]>>>;
+  runContext?: unknown;
   remainingTimeoutMs?: number;
 };
 
@@ -606,24 +615,33 @@ async function preflightReviewer(options: {
   const adapter = getAdapter(options.reviewer, options.adapters);
   const abortController = new AbortController();
   const start = Date.now();
-  const preflightAdapter = adapter.preflight;
-  const preflight =
-    preflightAdapter === undefined
-      ? undefined
-      : await withTimeout(
-          () =>
-            preflightAdapter({
-              cwd: options.cwd,
-              reviewer: options.reviewer,
-              signal: abortController.signal,
-              readonly: true,
-              env: options.env,
-            }),
+  const preflightInput = {
+    cwd: options.cwd,
+    reviewer: options.reviewer,
+    signal: abortController.signal,
+    readonly: true,
+    env: options.env,
+  };
+  const prepared: ReviewAdapterPrepareResult =
+    adapter.prepare !== undefined
+      ? await withTimeout(
+          () => adapter.prepare?.(preflightInput) ?? Promise.resolve({}),
           options.reviewer.timeoutMs,
           abortController,
           options.reviewer.id,
           "preflight",
-        );
+        )
+      : adapter.preflight === undefined
+        ? {}
+        : await withTimeout(
+            () =>
+              adapter.preflight?.(preflightInput).then((preflight) => ({ preflight })) ??
+              Promise.resolve({}),
+            options.reviewer.timeoutMs,
+            abortController,
+            options.reviewer.id,
+            "preflight",
+          );
   const remainingTimeoutMs =
     options.reviewer.timeoutMs === undefined
       ? undefined
@@ -632,7 +650,8 @@ async function preflightReviewer(options: {
   return {
     reviewer: options.reviewer,
     adapter,
-    ...(preflight !== undefined ? { preflight } : {}),
+    ...(prepared.preflight !== undefined ? { preflight: prepared.preflight } : {}),
+    ...(prepared.runContext !== undefined ? { runContext: prepared.runContext } : {}),
     ...(remainingTimeoutMs !== undefined ? { remainingTimeoutMs } : {}),
   };
 }
@@ -930,6 +949,13 @@ function getAdapter(
     return createCliAdapter(reviewer.sdk);
   }
 
+  if (reviewer.transport === "app-server") {
+    if (reviewer.sdk !== "codex") {
+      throw invalidCli(`${reviewer.sdk} app-server transport is not supported`);
+    }
+    return createCodexAppServerAdapter();
+  }
+
   if (reviewer.sdk === "fake") {
     return fakeAdapter;
   }
@@ -959,10 +985,14 @@ function reviewerAdapterKey(reviewer: ReviewReviewerConfig): string {
 
 function reviewerArtifactTransport(
   reviewer: ReviewReviewerConfig,
-): { transport: "native" | "cli" } | Record<string, never> {
+): { transport: "native" | "cli" | "app-server" } | Record<string, never> {
   if (reviewer.sdk === "fake" && reviewer.transport === undefined) {
     return {};
   }
 
-  return { transport: reviewer.transport === "cli" ? "cli" : "native" };
+  if (reviewer.transport === "cli" || reviewer.transport === "app-server") {
+    return { transport: reviewer.transport };
+  }
+
+  return { transport: "native" };
 }

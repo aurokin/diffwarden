@@ -131,6 +131,50 @@ describe("loadDiffwardenConfig", () => {
     });
   });
 
+  it("loads Codex app-server transport configuration", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [
+        {
+          id: "codex-app-server",
+          sdk: "codex",
+          transport: "app-server",
+          cliOptions: {
+            executable: "/opt/homebrew/bin/codex",
+          },
+        },
+      ],
+    });
+
+    const loaded = await loadDiffwardenConfig({ cwd: root, repoRoot: root });
+
+    expect(loaded?.config.reviewers?.[0]).toMatchObject({
+      id: "codex-app-server",
+      sdk: "codex",
+      transport: "app-server",
+      cliOptions: {
+        executable: "/opt/homebrew/bin/codex",
+      },
+    });
+  });
+
+  it("rejects app-server transport for non-Codex reviewers", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [
+        {
+          id: "claude-app-server",
+          engine: "claude",
+          transport: "app-server",
+        },
+      ],
+    });
+
+    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toThrow(
+      "does not support app-server transport for engine: claude",
+    );
+  });
+
   it("loads canonical engine and native transport configuration", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {

@@ -15,6 +15,7 @@ import {
   reviewerFailed,
 } from "../core/errors.js";
 import { reviewResultJsonSchema } from "../core/schema.js";
+import { resolveExecutable } from "./cli-process.js";
 import { droidSessionTag } from "./droid-session.js";
 import {
   effortResolutionMetadata,
@@ -46,6 +47,11 @@ type DroidAdapterDependencies = {
   ) => Promise<string>;
 };
 
+type DroidRunContext = {
+  kind: "droid";
+  resolvedExecutable: string;
+};
+
 const defaultDroidAdapterDependencies: DroidAdapterDependencies = {
   loadSdk: loadDroidSdk,
   checkExecutable: checkDroidExecutable,
@@ -57,77 +63,15 @@ export function createDroidAdapter(
   return {
     name: "droid",
     async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
-      const sdk = await dependencies.loadSdk();
-      const executable = droidExecutable(input.reviewer);
-      const resolvedExecutable = await dependencies.checkExecutable(
-        executable,
-        droidProcessEnv(input.env),
-        input.signal,
-      );
-      const effort = droidEffort(input.reviewer.effort);
-      const machineId = droidMachineId(input.reviewer);
-
-      return {
-        checks: [
-          {
-            name: "sdk",
-            status: "passed",
-            detail: `${droidPackageName} loaded successfully.`,
-          },
-          {
-            name: "executable",
-            status: "passed",
-            detail: `Using ${resolvedExecutable}.`,
-          },
-          {
-            name: "auth",
-            status: hasFactoryApiKey(input.env) ? "passed" : "warning",
-            detail: hasFactoryApiKey(input.env)
-              ? "FACTORY_API_KEY is present."
-              : "FACTORY_API_KEY is absent; local Droid auth may still work.",
-          },
-          {
-            name: "readonly",
-            status: "passed",
-            detail: "Droid runs in spec interaction mode for read-only review operations.",
-          },
-          {
-            name: "model",
-            status: input.reviewer.model === undefined ? "skipped" : "passed",
-            detail:
-              input.reviewer.model === undefined
-                ? "Using Droid's default model."
-                : `Passing model override to Droid: ${input.reviewer.model}.`,
-          },
-          {
-            name: "effort",
-            status: effort === undefined ? "skipped" : "passed",
-            detail:
-              effort === undefined
-                ? "No effort override was requested."
-                : `Passing reasoning effort to Droid: ${effort}.`,
-          },
-          {
-            name: "machine",
-            status: machineId === undefined ? "skipped" : "passed",
-            detail:
-              machineId === undefined
-                ? "Using Droid's default machine selection."
-                : `Passing Droid machine override: ${machineId}.`,
-          },
-        ],
-        metadata: sdkPreflightMetadata("droid", {
-          executable: resolvedExecutable,
-          ...(input.reviewer.model !== undefined ? { model: input.reviewer.model } : {}),
-          ...(effort !== undefined ? { effort } : {}),
-          ...(machineId !== undefined ? { machineId } : {}),
-          sdkVersion: sdk.SDK_VERSION,
-        }),
-      };
+      return (await prepareDroidAdapter(dependencies, input)).preflight;
+    },
+    async prepare(input: ReviewAdapterPreflightInput) {
+      return prepareDroidAdapter(dependencies, input);
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
       const sdk = await dependencies.loadSdk();
-      const executable = droidExecutable(input.reviewer);
+      const executable =
+        droidRunContext(input.runContext)?.resolvedExecutable ?? droidExecutable(input.reviewer);
       const effort = droidEffort(input.reviewer.effort);
       const machineId = droidMachineId(input.reviewer);
       let resolvedSettings: ResolvedDroidSettings | undefined;
@@ -212,6 +156,100 @@ export function createDroidAdapter(
   };
 }
 
+async function prepareDroidAdapter(
+  dependencies: DroidAdapterDependencies,
+  input: ReviewAdapterPreflightInput,
+): Promise<{ preflight: ReviewAdapterPreflightResult; runContext: DroidRunContext }> {
+  const sdk = await dependencies.loadSdk();
+  const executable = droidExecutable(input.reviewer);
+  const resolvedExecutable = await dependencies.checkExecutable(
+    executable,
+    droidProcessEnv(input.env),
+    input.signal,
+  );
+  const effort = droidEffort(input.reviewer.effort);
+  const machineId = droidMachineId(input.reviewer);
+
+  return {
+    preflight: {
+      checks: [
+        {
+          name: "sdk",
+          status: "passed",
+          detail: `${droidPackageName} loaded successfully.`,
+        },
+        {
+          name: "executable",
+          status: "passed",
+          detail: `Using ${resolvedExecutable}.`,
+        },
+        {
+          name: "auth",
+          status: hasFactoryApiKey(input.env) ? "passed" : "warning",
+          detail: hasFactoryApiKey(input.env)
+            ? "FACTORY_API_KEY is present."
+            : "FACTORY_API_KEY is absent; local Droid auth may still work.",
+        },
+        {
+          name: "readonly",
+          status: "passed",
+          detail: "Droid runs in spec interaction mode for read-only review operations.",
+        },
+        {
+          name: "model",
+          status: input.reviewer.model === undefined ? "skipped" : "passed",
+          detail:
+            input.reviewer.model === undefined
+              ? "Using Droid's default model."
+              : `Passing model override to Droid: ${input.reviewer.model}.`,
+        },
+        {
+          name: "effort",
+          status: effort === undefined ? "skipped" : "passed",
+          detail:
+            effort === undefined
+              ? "No effort override was requested."
+              : `Passing reasoning effort to Droid: ${effort}.`,
+        },
+        {
+          name: "machine",
+          status: machineId === undefined ? "skipped" : "passed",
+          detail:
+            machineId === undefined
+              ? "Using Droid's default machine selection."
+              : `Passing Droid machine override: ${machineId}.`,
+        },
+      ],
+      metadata: sdkPreflightMetadata("droid", {
+        executable: resolvedExecutable,
+        ...(input.reviewer.model !== undefined ? { model: input.reviewer.model } : {}),
+        ...(effort !== undefined ? { effort } : {}),
+        ...(machineId !== undefined ? { machineId } : {}),
+        sdkVersion: sdk.SDK_VERSION,
+      }),
+    },
+    runContext: {
+      kind: "droid",
+      resolvedExecutable,
+    },
+  };
+}
+
+function droidRunContext(value: unknown): DroidRunContext | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("kind" in value) ||
+    value.kind !== "droid" ||
+    !("resolvedExecutable" in value) ||
+    typeof value.resolvedExecutable !== "string"
+  ) {
+    return undefined;
+  }
+
+  return value as DroidRunContext;
+}
+
 export const droidAdapter = createDroidAdapter();
 
 async function loadDroidSdk(): Promise<DroidSdk> {
@@ -227,12 +265,17 @@ async function checkDroidExecutable(
   env: NodeJS.ProcessEnv | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string> {
+  if (signal?.aborted) {
+    throw reviewerFailed("Droid executable check aborted");
+  }
+
+  const resolvedExecutable = await resolveExecutable(executable, env);
   try {
-    await execFileAsync(executable, ["--version"], { env, signal });
-    return executable;
+    await execFileAsync(resolvedExecutable, ["--version"], { env, signal });
+    return resolvedExecutable;
   } catch (error) {
     if (isNodeErrorWithCode(error, "ENOENT")) {
-      throw missingRequirement(`Droid executable not found: ${executable}`);
+      throw missingRequirement(`Droid executable not found: ${resolvedExecutable}`);
     }
     throw reviewerFailed(`Droid executable check failed: ${errorMessage(error)}`);
   }

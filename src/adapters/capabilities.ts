@@ -148,6 +148,15 @@ const reviewerCapabilityDefinitions = {
         captureMode: "native-structured",
         readonlyCapability: "enforced",
       },
+      "app-server": {
+        transport: "app-server",
+        supported: true,
+        defaultExecutable: "codex",
+        supportsModel: true,
+        supportsEffort: true,
+        captureMode: "native-structured",
+        readonlyCapability: "enforced",
+      },
     },
   },
   gemini: {
@@ -258,17 +267,21 @@ export function validateReviewerCapabilityOverrides(
   reviewer: ReviewReviewerConfig,
 ): ReviewReviewerConfig {
   const transport = reviewer.transport ?? "sdk";
-  if (transport !== "cli") {
+  if (transport !== "cli" && transport !== "app-server") {
     return reviewer;
   }
 
   const capability = getTransportCapability(reviewer.sdk, transport);
 
-  if (capability?.supportsModel !== true && reviewer.model !== undefined) {
+  if (capability === undefined || !capability.supported) {
+    throw invalidCli(`${reviewer.sdk} ${transport} transport is not supported`);
+  }
+
+  if (capability.supportsModel !== true && reviewer.model !== undefined) {
     throw invalidCli(`${reviewer.sdk} CLI transport does not support per-run model overrides`);
   }
 
-  if (capability?.supportsEffort !== true && reviewer.effort !== undefined) {
+  if (capability.supportsEffort !== true && reviewer.effort !== undefined) {
     throw invalidCli(`${reviewer.sdk} CLI transport does not support per-run effort overrides`);
   }
 

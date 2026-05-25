@@ -14,6 +14,12 @@ default `pnpm test`, `pnpm test:coverage`, and `pnpm test:e2e` commands force
 `INTEGRATION_TEST_ON=0`, so inherited shell environment cannot accidentally trigger live
 model calls.
 
+The default Vitest config runs test files serially with one worker. Several suites create
+temporary Git repositories and short-lived child processes; on macOS, parallelizing those tests
+can amplify `syspolicyd`/`trustd` executable validation work enough to affect the whole
+machine. Keep the default gate low-churn unless CI provides an isolated runner where the
+extra parallelism is worth it.
+
 ## Coverage
 
 ```bash

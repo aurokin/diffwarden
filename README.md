@@ -18,7 +18,7 @@ Install from the GitHub source release or a local checkout:
 ```bash
 git clone https://github.com/aurokin/diffwarden.git
 cd diffwarden
-git checkout v0.2.5
+git checkout v0.2.6
 pnpm install
 pnpm build
 pnpm link --global
@@ -195,6 +195,7 @@ Implemented:
 - Project/user `diffwarden.config.json` discovery.
 - Reviewer sets and `engine[:profile]` reviewer specs.
 - Cursor, Claude, Pi, and Droid Agent SDK adapters.
+- Experimental Codex app-server transport with ephemeral read-only threads.
 - Thin CLI transport adapters for Codex, Gemini, OpenCode, Grok, Antigravity, and CLI
   variants of Cursor, Claude, Pi, and Droid.
 
@@ -214,10 +215,11 @@ Read from top to bottom until you have enough detail:
 4. [`docs/configuration.md`](./docs/configuration.md) - config files, reviewer sets, and
    environment defaults.
 5. [`docs/adapters.md`](./docs/adapters.md) - SDK and CLI reviewer adapter behavior.
-6. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
+6. [`docs/macos.md`](./docs/macos.md) - macOS executable trust and performance triage.
+7. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
    commands.
-7. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
-8. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
+8. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
+9. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
 
 ## Design Principles
 

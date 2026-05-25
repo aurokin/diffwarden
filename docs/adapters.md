@@ -23,6 +23,20 @@ CLI-only reviewers use `transport: "cli"` automatically:
 - `grok`
 - `antigravity`
 
+Codex also has an experimental opt-in app-server transport:
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "codex-app-server",
+      "engine": "codex",
+      "transport": "app-server"
+    }
+  ]
+}
+```
+
 SDK-backed families can also opt into CLI transport through config.
 
 ## Model And Effort Metadata
@@ -47,6 +61,32 @@ CLI transports report deterministic values that Diffwarden passes on the command
 `resolvedModel` is set only when a model override is passed, and `resolvedEffort` reflects
 the CLI-native effort value after public-effort mapping. CLI default models remain omitted
 until an executable exposes stable machine-readable runtime metadata.
+
+The Codex app-server transport follows the same metadata convention. It additionally records
+`transport: "app-server"`, `ephemeral: true`, and `execEnabled: true` because command
+execution is intentionally still available in the first experimental version.
+
+## Codex App Server
+
+```bash
+diffwarden --target uncommitted --reviewer codex-app-server
+```
+
+The Codex app-server path is configured through a named reviewer with
+`transport: "app-server"`. It spawns `codex app-server --listen stdio://`, creates a
+temporary `CODEX_HOME` for each review, symlinks or copies the user's Codex `auth.json`,
+writes restrictive temporary config, starts an ephemeral read-only thread, disables web
+search, and requests JSON-schema turn output.
+
+The auth source defaults to `$CODEX_HOME`, then `$HOME/.codex`. Set
+`DIFFWARDEN_CODEX_AUTH_HOME` to point at a different Codex auth directory without changing
+the app-server child environment.
+
+Command execution is currently left enabled for this experimental transport so Codex can use
+its normal repository inspection path. Diffwarden sets approval policy to `never`, uses a
+read-only sandbox policy, denies approval escalation requests, and exposes this fact as
+`execEnabled: true` in preflight and adapter metadata. A later hardening pass can explore
+disabling shell/unified exec once the minimum required file-read surface is proven.
 
 ## Cursor SDK
 

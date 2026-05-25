@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewAdapter } from "../src/adapters/types.js";
 import { resolveGitTarget } from "../src/core/git.js";
-import { runReview } from "../src/core/runner.js";
+import { runReview, runReviewerPreflightReport } from "../src/core/runner.js";
 import { reviewArtifactSchema } from "../src/core/schema.js";
 import { parseTargetSpec } from "../src/core/target.js";
 
@@ -167,6 +167,51 @@ describe("runReview", () => {
         },
       },
     ]);
+  });
+
+  it("preserves Codex app-server transport in review and preflight artifacts", async () => {
+    repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
+    const codexAppServerAdapter = createMockAdapter("codex:app-server");
+    const config = {
+      reviewers: [
+        {
+          id: "codex-app-server",
+          sdk: "codex" as const,
+          transport: "app-server" as const,
+        },
+      ],
+    };
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "codex-app-server",
+      config,
+      adapters: {
+        "codex:app-server": codexAppServerAdapter,
+      },
+    });
+    const preflight = await runReviewerPreflightReport({
+      cwd: repo,
+      reviewer: "codex-app-server",
+      config,
+      adapters: {
+        "codex:app-server": codexAppServerAdapter,
+      },
+    });
+
+    expect(artifact.reviewers?.[0]).toMatchObject({
+      id: "codex-app-server",
+      engine: "codex",
+      transport: "app-server",
+    });
+    expect(preflight.reviewers[0]).toMatchObject({
+      id: "codex-app-server",
+      engine: "codex",
+      transport: "app-server",
+    });
   });
 
   it("rejects reviewer profiles before adapter execution", async () => {

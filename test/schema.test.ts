@@ -87,6 +87,28 @@ describe("reviewArtifactSchema", () => {
       ],
     });
   });
+
+  it("accepts app-server as a v2 artifact transport", () => {
+    const parsed = reviewArtifactSchema.parse({
+      schema_version: 2,
+      engine: "codex",
+      reviewers: [
+        {
+          id: "codex-app-server",
+          engine: "codex",
+          transport: "app-server",
+          result: reviewResult(),
+          validation: validation(),
+        },
+      ],
+      cwd: "/repo",
+      target: target(),
+      result: reviewResult(),
+      validation: validation(),
+    });
+
+    expect(parsed.reviewers?.[0]?.transport).toBe("app-server");
+  });
 });
 
 function reviewResult() {

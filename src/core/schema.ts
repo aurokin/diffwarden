@@ -216,7 +216,7 @@ export const reviewerErrorSchema = z.object({
   exit_code: z.number().int().optional(),
 });
 
-const artifactTransportSchema = z.enum(["native", "cli"]);
+const artifactTransportSchema = z.enum(["native", "cli", "app-server"]);
 const legacyArtifactTransportSchema = z.enum(["sdk", "cli"]);
 
 const reviewReviewerArtifactBaseSchema = z.object({
@@ -340,7 +340,7 @@ export const reviewArtifactSchema = z
 
 function artifactTransport(
   transport: z.infer<typeof legacyArtifactTransportSchema>,
-): "native" | "cli" {
+): "native" | "cli" | "app-server" {
   return transport === "sdk" ? "native" : transport;
 }
 

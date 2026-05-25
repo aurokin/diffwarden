@@ -663,10 +663,7 @@ if (engine === "codex") {
 }
 
 async function waitForInvocation(harness: ReturnType<typeof createHarness>): Promise<void> {
-  // ~4s of patience: a freshly spawned Node subprocess can take well over a
-  // second to write its invocation file when the machine is saturated by
-  // parallel test workers. Stays under the default 5s test timeout.
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
     try {
       harness.readInvocation();
       return;
