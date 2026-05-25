@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { collectJsonLinesText, normalizeJsonLikeAdapterOutput } from "../core/adapter-output.js";
 import { reviewResultJsonSchema, reviewResultStrictJsonSchema } from "../core/schema.js";
+import { claudeCliEnv, resolveClaudeRuntime } from "./claude.js";
 import {
   claudeCliEffort,
   cliExecutable,
@@ -96,10 +97,17 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         JSON.stringify(reviewResultJsonSchema),
       ];
       pushModelAndEffort(args, input.reviewer, claudeCliEffort);
+      const executable = cliExecutable(input.reviewer, defaultCliExecutable("claude"));
+      const runtime = await resolveClaudeRuntime(input, executable);
+      const env = claudeCliEnv(runtime);
 
       return {
-        executable: cliExecutable(input.reviewer, defaultCliExecutable("claude")),
+        executable,
         args,
+        ...(env !== undefined ? { env } : {}),
+        ...(runtime.authMode === "claude-code"
+          ? { unsetEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] }
+          : {}),
         stdin: input.prompt,
         captureMode: "native-structured",
       };

@@ -2,7 +2,11 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { claudeAdapter, createClaudeAdapter } from "../src/adapters/claude.js";
+import {
+  claudeAdapter,
+  createClaudeAdapter,
+  resolveClaudeRuntime,
+} from "../src/adapters/claude.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
 import { isIntegrationDisabled } from "./integration.js";
 import {
@@ -86,7 +90,9 @@ describe("claudeAdapter", () => {
   it("preflights Claude Code auth without requiring an API key", async () => {
     const { adapter } = createMockClaudePreflightAdapter([{ value: "sonnet" }], {
       authMode: "claude-code",
+      authPreference: "auto",
       executable: "claude",
+      env: { PATH: "" },
     });
 
     const preflight = await adapter.preflight?.({
@@ -105,6 +111,97 @@ describe("claudeAdapter", () => {
 
     expect(preflight?.metadata?.authMode).toBe("claude-code");
     expect(preflight?.metadata?.executable).toBe("claude");
+  });
+
+  it("prefers Claude Code subscription auth over ANTHROPIC_API_KEY in auto mode", async () => {
+    const fakeBin = createEnvSensitiveFakeClaudeExecutable();
+    const { adapter, calls } = createMockClaudePreflightAdapterWithRuntime([{ value: "sonnet" }]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "sonnet",
+        readonly: true,
+      },
+      readonly: true,
+      env: {
+        ANTHROPIC_API_KEY: "test-key",
+        ANTHROPIC_AUTH_TOKEN: "test-token",
+        PATH: fakeBin,
+      },
+    });
+
+    expect(preflight?.metadata).toMatchObject({
+      authMode: "claude-code",
+      authPreference: "auto",
+      authMethod: "claude.ai",
+      apiProvider: "firstParty",
+      subscriptionType: "max",
+      executable: "claude",
+    });
+    expect(calls[0]?.options?.pathToClaudeCodeExecutable).toBe("claude");
+    expect(calls[0]?.options?.env).not.toHaveProperty("ANTHROPIC_API_KEY");
+    expect(calls[0]?.options?.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+  });
+
+  it("can force Claude API key auth when Claude Code auth is available", async () => {
+    const fakeBin = createEnvSensitiveFakeClaudeExecutable();
+    const { adapter, calls } = createMockClaudePreflightAdapterWithRuntime([{ value: "sonnet" }]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude-api-key",
+        sdk: "claude",
+        model: "sonnet",
+        readonly: true,
+        sdkOptions: { authMode: "api-key" },
+      },
+      readonly: true,
+      env: {
+        ANTHROPIC_API_KEY: "test-key",
+        PATH: fakeBin,
+      },
+    });
+
+    expect(preflight?.metadata).toMatchObject({
+      authMode: "api-key",
+      authPreference: "api-key",
+    });
+    expect(calls[0]?.options?.pathToClaudeCodeExecutable).toBeUndefined();
+    expect(calls[0]?.options?.env).toMatchObject({ ANTHROPIC_API_KEY: "test-key" });
+  });
+
+  it("falls back to process env auth when adapter env is omitted", async () => {
+    const fakeBin = createFakeClaudeExecutable({ loggedIn: false });
+    const originalApiKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "process-test-key";
+    try {
+      const runtime = await resolveClaudeRuntime(
+        {
+          reviewer: {
+            id: "claude",
+            sdk: "claude",
+            model: "sonnet",
+            readonly: true,
+          },
+        },
+        path.join(fakeBin, "claude"),
+      );
+
+      expect(runtime).toMatchObject({
+        authMode: "api-key",
+        authPreference: "auto",
+      });
+    } finally {
+      if (originalApiKey === undefined) {
+        Reflect.deleteProperty(process.env, "ANTHROPIC_API_KEY");
+      } else {
+        process.env.ANTHROPIC_API_KEY = originalApiKey;
+      }
+    }
   });
 
   it("preflights Claude model availability through the SDK model catalog", async () => {
@@ -247,6 +344,45 @@ describe("claudeAdapter", () => {
     await expect(claudeAdapter.run(input({ env: { PATH: "" } }))).rejects.toMatchObject({
       code: "missing_auth",
       exitCode: 3,
+    });
+  });
+
+  it("runs Claude Code auth with API credentials removed from the SDK environment", async () => {
+    const { adapter, calls } = createMockClaudeRuntimeAdapter(
+      {
+        authMode: "claude-code",
+        authPreference: "auto",
+        executable: "claude",
+        env: { PATH: "/fake/bin" },
+        subscriptionType: "max",
+      },
+      [
+        {
+          type: "result",
+          subtype: "success",
+          structured_output: validReview(),
+          duration_ms: 12,
+          session_id: "structured-session",
+        },
+      ],
+    );
+
+    const output = await adapter.run(
+      input({
+        env: {
+          ANTHROPIC_API_KEY: "test-key",
+          ANTHROPIC_AUTH_TOKEN: "test-token",
+          PATH: "/fake/bin",
+        },
+      }),
+    );
+
+    expect(calls[0]?.options?.pathToClaudeCodeExecutable).toBe("claude");
+    expect(calls[0]?.options?.env).toEqual({ PATH: "/fake/bin" });
+    expect(output.metadata).toMatchObject({
+      authMode: "claude-code",
+      authPreference: "auto",
+      subscriptionType: "max",
     });
   });
 
@@ -452,7 +588,7 @@ function createMockClaudeAdapter(results: MockClaudeResult[]) {
       return { query };
     },
     async resolveRuntime() {
-      return { authMode: "api-key" };
+      return { authMode: "api-key", authPreference: "auto" };
     },
   });
 
@@ -461,8 +597,17 @@ function createMockClaudeAdapter(results: MockClaudeResult[]) {
 
 function createMockClaudePreflightAdapter(
   models: MockClaudeModel[],
-  runtime: { authMode: "api-key" } | { authMode: "claude-code"; executable: string } = {
+  runtime:
+    | { authMode: "api-key"; authPreference: "auto" | "api-key" | "claude-code" }
+    | {
+        authMode: "claude-code";
+        authPreference: "auto" | "api-key" | "claude-code";
+        executable: string;
+        env: NodeJS.ProcessEnv;
+        subscriptionType?: string;
+      } = {
     authMode: "api-key",
+    authPreference: "auto",
   },
 ) {
   const calls: MockClaudeQueryCall[] = [];
@@ -490,6 +635,66 @@ function createMockClaudePreflightAdapter(
   });
 
   return { adapter, calls, closeCalls: () => closed };
+}
+
+function createMockClaudePreflightAdapterWithRuntime(models: MockClaudeModel[]) {
+  const calls: MockClaudeQueryCall[] = [];
+  let closed = 0;
+  const query = (params: MockClaudeQueryCall) => {
+    calls.push(params);
+    return {
+      async *[Symbol.asyncIterator]() {},
+      async supportedModels() {
+        return models;
+      },
+      close() {
+        closed += 1;
+      },
+    };
+  };
+
+  const adapter = createClaudeAdapter({
+    async loadSdk() {
+      return { query };
+    },
+    resolveRuntime: resolveClaudeRuntime,
+  });
+
+  return { adapter, calls, closeCalls: () => closed };
+}
+
+function createMockClaudeRuntimeAdapter(
+  runtime:
+    | { authMode: "api-key"; authPreference: "auto" | "api-key" | "claude-code" }
+    | {
+        authMode: "claude-code";
+        authPreference: "auto" | "api-key" | "claude-code";
+        executable: string;
+        env: NodeJS.ProcessEnv;
+        subscriptionType?: string;
+      },
+  results: MockClaudeResult[],
+) {
+  const pendingResults = [...results];
+  const calls: MockClaudeQueryCall[] = [];
+  const query = async function* (params: MockClaudeQueryCall) {
+    calls.push(params);
+    const result = pendingResults.shift();
+    if (result !== undefined) {
+      yield result;
+    }
+  };
+
+  const adapter = createClaudeAdapter({
+    async loadSdk() {
+      return { query };
+    },
+    async resolveRuntime() {
+      return runtime;
+    },
+  });
+
+  return { adapter, calls };
 }
 
 function validReviewText(): string {
@@ -542,6 +747,27 @@ function createFakeClaudeExecutable(options: { loggedIn: boolean }): string {
     `#!/bin/sh
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
   echo '{"loggedIn":${options.loggedIn ? "true" : "false"}}'
+  exit 0
+fi
+echo '2.1.143 (Claude Code)'
+`,
+  );
+  chmodSync(executable, 0o755);
+  return tempDir;
+}
+
+function createEnvSensitiveFakeClaudeExecutable(): string {
+  tempDir = mkdtempSync(path.join(tmpdir(), "diffwarden-claude-"));
+  const executable = path.join(tempDir, "claude");
+  writeFileSync(
+    executable,
+    `#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  if [ -n "$ANTHROPIC_API_KEY" ]; then
+    echo '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","apiKeySource":"ANTHROPIC_API_KEY"}'
+  else
+    echo '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"max"}'
+  fi
   exit 0
 fi
 echo '2.1.143 (Claude Code)'

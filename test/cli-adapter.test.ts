@@ -123,6 +123,45 @@ describe("createCliAdapter", () => {
     }
   });
 
+  it("prefers Claude Code auth for Claude CLI runs and strips API credentials", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, { model: "test-model" });
+
+    await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        ANTHROPIC_API_KEY: "test-key",
+        ANTHROPIC_AUTH_TOKEN: "test-token",
+      },
+    });
+    const invocation = harness.readInvocation();
+
+    expect(invocation.env).not.toHaveProperty("ANTHROPIC_API_KEY");
+    expect(invocation.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+  });
+
+  it("can force Claude API key auth for Claude CLI runs", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, {
+      model: "test-model",
+      sdkOptions: { authMode: "api-key" },
+    });
+
+    await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        ANTHROPIC_API_KEY: "test-key",
+      },
+    });
+    const invocation = harness.readInvocation();
+
+    expect(invocation.env).toMatchObject({ ANTHROPIC_API_KEY: "test-key" });
+  });
+
   it.each([
     ["opencode", "prompt-only"],
     ["pi", "tool-restricted"],
@@ -414,10 +453,20 @@ function fakeCliScript(engine: CliEngine): string {
 const fs = require("node:fs");
 const engine = process.env.DIFFWARDEN_FAKE_CLI;
 const invocationPath = process.env.DIFFWARDEN_INVOCATION_PATH;
+if (engine === "claude" && process.argv[2] === "auth" && process.argv[3] === "status") {
+  if (process.env.ANTHROPIC_API_KEY) {
+    process.stdout.write(JSON.stringify({ loggedIn: true, apiKeySource: "ANTHROPIC_API_KEY" }));
+  } else {
+    process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "max" }));
+  }
+  process.exit(0);
+}
 const stdin = fs.readFileSync(0, "utf8");
 fs.writeFileSync(invocationPath, JSON.stringify({
   args: process.argv.slice(2),
   env: {
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
     OPENCODE_PERMISSION: process.env.OPENCODE_PERMISSION,
   },
   pid: process.pid,

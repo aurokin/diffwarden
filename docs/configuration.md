@@ -227,3 +227,34 @@ Run the configured Droid CLI profile through the normal CLI:
 ```bash
 diffwarden --target base:main --reviewer droid-cli --model claude-opus-4-7 --effort high
 ```
+
+## Claude Auth Mode
+
+Claude reviewers default to `sdkOptions.authMode: "auto"` for both SDK and CLI transports.
+Auto mode prefers a logged-in Claude Code account over `ANTHROPIC_API_KEY` and removes
+Anthropic API credentials from the child environment when Claude Code auth is selected. This
+keeps reviewer sets from silently consuming API credits when a local Claude Code subscription
+is available.
+
+Use `claude-code` or `api-key` to make the choice explicit:
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "claude-subscription",
+      "engine": "claude",
+      "sdkOptions": {
+        "authMode": "claude-code"
+      }
+    },
+    {
+      "id": "claude-api-key",
+      "engine": "claude",
+      "sdkOptions": {
+        "authMode": "api-key"
+      }
+    }
+  ]
+}
+```

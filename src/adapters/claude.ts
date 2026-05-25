@@ -32,7 +32,9 @@ const execFileAsync = promisify(execFile);
 
 type ClaudeAdapterDependencies = {
   loadSdk: () => Promise<ClaudeSdk>;
-  resolveRuntime: (env: NodeJS.ProcessEnv | undefined) => Promise<ClaudeRuntime>;
+  resolveRuntime: (
+    input: Pick<ReviewAdapterInput | ReviewAdapterPreflightInput, "env" | "reviewer">,
+  ) => Promise<ClaudeRuntime>;
 };
 
 const defaultClaudeAdapterDependencies: ClaudeAdapterDependencies = {
@@ -47,7 +49,7 @@ export function createClaudeAdapter(
     name: "claude",
     async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
       const sdk = await dependencies.loadSdk();
-      const runtime = await dependencies.resolveRuntime(input.env);
+      const runtime = await dependencies.resolveRuntime(input);
       const model = input.reviewer.model ?? defaultClaudeModel;
       const modelPreflight = await preflightClaudeModel({
         query: sdk.query,
@@ -64,7 +66,7 @@ export function createClaudeAdapter(
             detail:
               runtime.authMode === "api-key"
                 ? "ANTHROPIC_API_KEY is present."
-                : "Claude Code executable reports authenticated local auth.",
+                : claudeCodeAuthDetail(runtime),
           },
           {
             name: "sdk",
@@ -96,13 +98,19 @@ export function createClaudeAdapter(
             : {}),
           ...claudeEffortMetadata(input.reviewer.effort),
           authMode: runtime.authMode,
+          authPreference: runtime.authPreference,
+          authMethod: runtime.authMethod,
+          apiProvider: runtime.apiProvider,
+          subscriptionType: runtime.subscriptionType,
+          tokenSource: runtime.tokenSource,
+          apiKeySource: runtime.apiKeySource,
           executable: runtime.executable,
         }),
       };
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
       const { query } = await dependencies.loadSdk();
-      const runtime = await dependencies.resolveRuntime(input.env);
+      const runtime = await dependencies.resolveRuntime(input);
 
       try {
         const structuredResult = await runClaudeQuery({
@@ -296,8 +304,9 @@ function buildClaudeModelPreflightOptions(
     queryOptions.abortController = abortController;
   }
 
-  if (input.env !== undefined) {
-    queryOptions.env = input.env;
+  const env = claudeQueryEnv(input.env, runtime);
+  if (env !== undefined) {
+    queryOptions.env = env;
   }
 
   if (runtime.executable !== undefined) {
@@ -341,12 +350,40 @@ function assertClaudeEffortSupported(
 type ClaudeRuntime =
   | {
       authMode: "api-key";
+      authPreference: ClaudeAuthPreference;
       executable?: undefined;
+      env?: undefined;
+      authMethod?: undefined;
+      apiProvider?: undefined;
+      subscriptionType?: undefined;
+      tokenSource?: undefined;
+      apiKeySource?: undefined;
     }
   | {
       authMode: "claude-code";
+      authPreference: ClaudeAuthPreference;
       executable: string;
+      env: NodeJS.ProcessEnv;
+      authMethod?: string;
+      apiProvider?: string;
+      subscriptionType?: string;
+      tokenSource?: string;
+      apiKeySource?: string;
     };
+
+type ClaudeAuthPreference = "auto" | "api-key" | "claude-code";
+
+type ClaudeAuthStatus = {
+  loggedIn?: unknown;
+  authMethod?: unknown;
+  apiProvider?: unknown;
+  email?: unknown;
+  orgId?: unknown;
+  orgName?: unknown;
+  subscriptionType?: unknown;
+  tokenSource?: unknown;
+  apiKeySource?: unknown;
+};
 
 type ClaudeSdkMessage =
   | {
@@ -425,8 +462,9 @@ function buildClaudeQueryOptions(
     };
   }
 
-  if (options.input.env !== undefined) {
-    queryOptions.env = options.input.env;
+  const env = claudeQueryEnv(options.input.env, options.runtime);
+  if (env !== undefined) {
+    queryOptions.env = env;
   }
 
   if (options.runtime.executable !== undefined) {
@@ -510,6 +548,12 @@ function claudeOutputMetadata(options: {
       options.result.total_cost_usd,
     ),
     authMode: options.runtime.authMode,
+    authPreference: options.runtime.authPreference,
+    authMethod: options.runtime.authMethod,
+    apiProvider: options.runtime.apiProvider,
+    subscriptionType: options.runtime.subscriptionType,
+    tokenSource: options.runtime.tokenSource,
+    apiKeySource: options.runtime.apiKeySource,
     executable: options.runtime.executable,
   });
 
@@ -616,18 +660,48 @@ async function loadClaudeSdk(): Promise<ClaudeSdk> {
   }
 }
 
-async function resolveClaudeRuntime(env: NodeJS.ProcessEnv | undefined): Promise<ClaudeRuntime> {
-  const apiKey = env?.ANTHROPIC_API_KEY?.trim();
-  if (apiKey) {
+export async function resolveClaudeRuntime(
+  input: Pick<ReviewAdapterInput | ReviewAdapterPreflightInput, "env" | "reviewer">,
+  executable = defaultClaudeExecutable,
+): Promise<ClaudeRuntime> {
+  const env = input.env;
+  const effectiveEnv = env ?? process.env;
+  const authPreference = claudeAuthPreference(input.reviewer);
+  const apiKey = effectiveEnv.ANTHROPIC_API_KEY?.trim();
+
+  if (authPreference === "api-key") {
+    if (!apiKey) {
+      throw missingAuth("Missing Claude API key: set ANTHROPIC_API_KEY");
+    }
     return {
       authMode: "api-key",
+      authPreference,
     };
   }
 
-  if (await hasClaudeCodeAuth(env)) {
+  const claudeCodeEnv = withoutAnthropicApiCredentials(env);
+  const claudeCodeStatus = await getClaudeCodeAuthStatus(claudeCodeEnv, executable);
+
+  if (isLoggedInClaudeStatus(claudeCodeStatus)) {
     return {
       authMode: "claude-code",
-      executable: defaultClaudeExecutable,
+      authPreference,
+      executable,
+      env: claudeCodeEnv,
+      ...claudeCodeStatusMetadata(claudeCodeStatus),
+    };
+  }
+
+  if (authPreference === "claude-code") {
+    throw missingAuth(
+      'Missing Claude Code auth: install Claude Code and log in, or set sdkOptions.authMode to "api-key"',
+    );
+  }
+
+  if (apiKey) {
+    return {
+      authMode: "api-key",
+      authPreference,
     };
   }
 
@@ -636,7 +710,10 @@ async function resolveClaudeRuntime(env: NodeJS.ProcessEnv | undefined): Promise
   );
 }
 
-async function hasClaudeCodeAuth(env: NodeJS.ProcessEnv | undefined): Promise<boolean> {
+async function getClaudeCodeAuthStatus(
+  env: NodeJS.ProcessEnv | undefined,
+  executable: string,
+): Promise<ClaudeAuthStatus | undefined> {
   try {
     const options: { env?: NodeJS.ProcessEnv; timeout: number } = {
       timeout: 5_000,
@@ -646,24 +723,95 @@ async function hasClaudeCodeAuth(env: NodeJS.ProcessEnv | undefined): Promise<bo
       options.env = env;
     }
 
-    const { stdout } = await execFileAsync(
-      defaultClaudeExecutable,
-      ["auth", "status", "--json"],
-      options,
-    );
-    return isLoggedInClaudeStatus(stdout);
+    const { stdout } = await execFileAsync(executable, ["auth", "status", "--json"], options);
+    return parseClaudeAuthStatus(stdout);
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-function isLoggedInClaudeStatus(stdout: string): boolean {
+function parseClaudeAuthStatus(stdout: string): ClaudeAuthStatus | undefined {
   try {
-    const status = JSON.parse(stdout) as { loggedIn?: unknown };
-    return status.loggedIn === true;
+    return JSON.parse(stdout) as ClaudeAuthStatus;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+function isLoggedInClaudeStatus(status: ClaudeAuthStatus | undefined): status is ClaudeAuthStatus {
+  return status?.loggedIn === true;
+}
+
+function withoutAnthropicApiCredentials(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env ?? process.env).filter(
+      ([key]) => key !== "ANTHROPIC_API_KEY" && key !== "ANTHROPIC_AUTH_TOKEN",
+    ),
+  );
+}
+
+function claudeQueryEnv(
+  inputEnv: NodeJS.ProcessEnv | undefined,
+  runtime: ClaudeRuntime,
+): NodeJS.ProcessEnv | undefined {
+  if (runtime.authMode === "claude-code") {
+    return runtime.env;
+  }
+
+  return inputEnv;
+}
+
+export function claudeCliEnv(runtime: ClaudeRuntime): NodeJS.ProcessEnv | undefined {
+  if (runtime.authMode === "api-key") {
+    return undefined;
+  }
+
+  return runtime.env;
+}
+
+function claudeAuthPreference(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+): ClaudeAuthPreference {
+  const value = reviewer.sdkOptions?.authMode;
+  if (value === undefined || value === "auto") {
+    return "auto";
+  }
+
+  if (value === "api-key" || value === "claude-code") {
+    return value;
+  }
+
+  throw new DiffwardenError(
+    "invalid_config",
+    `Claude sdkOptions.authMode must be one of auto, api-key, or claude-code: ${String(value)}`,
+    2,
+  );
+}
+
+function claudeCodeStatusMetadata(status: ClaudeAuthStatus): {
+  authMethod?: string;
+  apiProvider?: string;
+  subscriptionType?: string;
+  tokenSource?: string;
+  apiKeySource?: string;
+} {
+  return {
+    ...(typeof status.authMethod === "string" ? { authMethod: status.authMethod } : {}),
+    ...(typeof status.apiProvider === "string" ? { apiProvider: status.apiProvider } : {}),
+    ...(typeof status.subscriptionType === "string"
+      ? { subscriptionType: status.subscriptionType }
+      : {}),
+    ...(typeof status.tokenSource === "string" ? { tokenSource: status.tokenSource } : {}),
+    ...(typeof status.apiKeySource === "string" ? { apiKeySource: status.apiKeySource } : {}),
+  };
+}
+
+function claudeCodeAuthDetail(
+  runtime: Extract<ClaudeRuntime, { authMode: "claude-code" }>,
+): string {
+  const subscription =
+    runtime.subscriptionType === undefined ? "" : ` (${runtime.subscriptionType} subscription)`;
+  return `Claude Code executable reports authenticated local auth${subscription}.`;
 }
 
 function isClaudeResultMessage(message: ClaudeSdkMessage): message is ClaudeResultMessage {

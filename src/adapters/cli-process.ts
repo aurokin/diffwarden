@@ -17,6 +17,9 @@ export async function runCli(
     ...(input.env ?? process.env),
     ...invocation.env,
   };
+  for (const key of invocation.unsetEnv ?? []) {
+    Reflect.deleteProperty(env, key);
+  }
   const executable = await resolveExecutable(invocation.executable, env);
 
   return await new Promise((resolve, reject) => {

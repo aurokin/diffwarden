@@ -7,6 +7,7 @@ export type CliInvocation = {
   args: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  unsetEnv?: string[];
   stdin?: string;
   outputPath?: string;
   captureMode: NonNullable<ReviewAdapterOutput["metadata"]>["captureMode"];

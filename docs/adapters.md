@@ -75,8 +75,8 @@ zsh -lic 'pnpm test:live:sdk'
 diffwarden --target uncommitted --reviewer claude
 ```
 
-The Claude adapter can use either `ANTHROPIC_API_KEY` or a locally authenticated Claude Code
-executable.
+The Claude adapter can use either a locally authenticated Claude Code executable or
+`ANTHROPIC_API_KEY`.
 
 ```bash
 ANTHROPIC_API_KEY=... pnpm dev -- --target uncommitted --reviewer claude
@@ -84,9 +84,37 @@ pnpm dev -- --target uncommitted --reviewer claude
 ```
 
 The adapter uses `@anthropic-ai/claude-agent-sdk` with built-in tools disabled, isolated
-setting sources, and native JSON Schema output. If no API key is present and
-`claude auth status --json` reports a logged-in account, the SDK is pointed at the local
-`claude` executable so Claude Code auth can be reused.
+setting sources, and native JSON Schema output. In the default `auto` auth mode, Diffwarden
+checks `claude auth status --json` with Anthropic API credentials removed from the child
+environment. If that reports a logged-in Claude Code account, the SDK is pointed at the
+local `claude` executable and API credentials are removed from the SDK process environment
+so Claude Code auth is reused deliberately. If Claude Code auth is unavailable, Diffwarden
+falls back to `ANTHROPIC_API_KEY`.
+
+Force a specific Claude SDK auth path with reviewer `sdkOptions.authMode`:
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "claude-subscription",
+      "engine": "claude",
+      "sdkOptions": {
+        "authMode": "claude-code"
+      }
+    },
+    {
+      "id": "claude-api-key",
+      "engine": "claude",
+      "sdkOptions": {
+        "authMode": "api-key"
+      }
+    }
+  ]
+}
+```
+
+Valid values are `auto`, `claude-code`, and `api-key`.
 
 Live smoke test:
 
@@ -174,6 +202,11 @@ SDK-backed families, including Droid, can use `transport: "cli"` from config.
 `cliOptions.executable` can point at non-standard installs, such as local `pi`, `droid`, or
 `agy` binaries. CLI auth is delegated to the underlying executable, so live runs require each
 tool to be logged in or configured through its own environment variables.
+
+Claude CLI transport uses the same `sdkOptions.authMode` values as the Claude SDK adapter.
+In `auto` mode, Diffwarden checks the selected Claude executable for logged-in Claude Code
+auth with Anthropic API credentials removed, then removes those credentials from the actual
+`claude -p` run when local Claude Code auth is available.
 
 Capability metadata is conservative. OpenCode, Grok, Antigravity, and Cursor CLI paths
 currently report prompt-only read-only behavior when hard enforcement is not proven.
