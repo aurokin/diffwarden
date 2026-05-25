@@ -163,9 +163,9 @@ cursor:fast                       Named Cursor reviewer profile or model config.
 
 Candidate reviewer-spec grammars:
 
-1. Recommended: `sdk[:profile]`, for example `pi`, `claude`, `cursor`, `pi:openrouter-high`, `cursor:fast`. The suffix is always a named config profile, not an inline model or provider expression. This keeps parsing simple, avoids shell-escaping problems, and pushes provider-heavy options into `diffwarden.config.json`.
-2. Direct model shorthand: `sdk/model`, for example `claude/sonnet` or `pi/anthropic/claude-sonnet`. This is concise for single-reviewer use but becomes ambiguous for provider-qualified model IDs that already contain `/`.
-3. Query-string style: `sdk?model=sonnet&effort=high`. This is expressive but awkward in shells and too much like exposing adapter internals as the public contract.
+1. Recommended: `engine[:profile]`, for example `pi`, `claude`, `cursor`, `pi:openrouter-high`, `cursor:fast`. The suffix is always a named config profile, not an inline model or provider expression. This keeps parsing simple, avoids shell-escaping problems, and pushes provider-heavy options into `diffwarden.config.json`.
+2. Direct model shorthand: `engine/model`, for example `claude/sonnet` or `pi/anthropic/claude-sonnet`. This is concise for single-reviewer use but becomes ambiguous for provider-qualified model IDs that already contain `/`.
+3. Query-string style: `engine?model=sonnet&effort=high`. This is expressive but awkward in shells and too much like exposing adapter internals as the public contract.
 
 Use option 1 for v1. Model and effort still have first-class single-reviewer flags through `--model` and `--effort`; profile suffixes are for reusable named reviewer configs.
 
@@ -178,7 +178,7 @@ Model, effort, provider, and SDK-specific options should be handled in two layer
 
 Avoid turning the main CLI into a generic SDK option transport. Provider API keys, base URLs, OpenRouter/OpenCode-style provider selection, effort mappings, executable paths, and SDK-specific options should live in config profiles and be passed to adapters as structured reviewer config.
 
-Configured reviewers may set `transport: "cli"` to opt an SDK-backed family into the direct executable adapter. CLI-only families default to `transport: "cli"`. `cliOptions.executable` can point at non-standard installs without changing the public reviewer spec.
+Configured reviewers use `transport: "native"` by default for SDK-backed families and may set `transport: "cli"` to opt into the direct executable adapter. CLI-only families default to `transport: "cli"`. `cliOptions.executable` can point at non-standard installs without changing the public reviewer spec.
 
 ### 5.3 Model and effort selection
 
@@ -283,7 +283,7 @@ export type ReviewError = {
       | "validation_failed";
     message: string;
     reviewer_id?: string;
-    sdk?: "cursor" | "claude" | "pi" | "droid" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
+    engine?: "cursor" | "claude" | "pi" | "droid" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
     hint?: string;
   };
 };
@@ -336,8 +336,8 @@ The CLI should wrap model output with local metadata.
 
 ```ts
 export type ReviewArtifact = {
-  schema_version: 1;
-  sdk?: "cursor" | "claude" | "pi" | "droid" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
+  schema_version: 2;
+  engine?: "cursor" | "claude" | "pi" | "droid" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
   reviewers?: ReviewReviewerArtifact[];
   cwd: string;
   target: ReviewTargetResolved;
@@ -348,12 +348,13 @@ export type ReviewArtifact = {
 };
 ```
 
-For single-reviewer runs, `sdk` and `result` are enough for simple consumers. For multi-reviewer runs, `reviewers` contains each individual reviewer result and `result` is the merged or selected summary used for rendering.
+For single-reviewer runs, `engine` and `result` are enough for simple consumers. For multi-reviewer runs, `reviewers` contains each individual reviewer result and `result` is the merged or selected summary used for rendering.
 
 ```ts
 export type ReviewReviewerArtifact = {
   id: string;
-  sdk: "cursor" | "claude" | "pi" | "droid" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
+  engine: "cursor" | "claude" | "pi" | "droid" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
+  transport?: "native" | "cli";
   profile?: string;
   provider?: string;
   model?: string;
@@ -368,7 +369,7 @@ export type ReviewReviewerArtifact = {
 
 ### 7.4 ReviewReviewerConfig
 
-Reviewer config is the internal representation produced from CLI flags, environment variables, and config files.
+Reviewer config is the internal representation produced from CLI flags, environment variables, and config files. Public config files use `engine`; legacy `sdk` is accepted and normalized internally for compatibility.
 
 ```ts
 export type ReviewReviewerConfig = {
@@ -949,27 +950,27 @@ If no config exists, exit `2` with a message explaining where to create one. The
   "reviewers": [
     {
       "id": "pi",
-      "sdk": "pi",
+      "engine": "pi",
       "model": "claude-sonnet-4-20250514",
       "effort": "medium"
     },
     {
       "id": "cursor-fast",
-      "sdk": "cursor",
+      "engine": "cursor",
       "model": "composer-2.5",
       "modelCatalog": ["composer-2.5"],
       "effort": "medium"
     },
     {
       "id": "claude-deep",
-      "sdk": "claude",
+      "engine": "claude",
       "model": "sonnet",
       "modelCatalog": ["sonnet", "opus"],
       "effort": "high"
     },
     {
       "id": "pi-openrouter-high",
-      "sdk": "pi",
+      "engine": "pi",
       "profile": "openrouter-high",
       "provider": "openrouter",
       "model": "anthropic/claude-sonnet",
@@ -1199,7 +1200,7 @@ Deliverables:
 
 Resolved design decisions:
 
-- Reviewer spec grammar: use `sdk[:profile]` for v1. Inline model/provider expressions are deferred.
+- Reviewer spec grammar: use `engine[:profile]` for v1. Inline model/provider expressions are deferred.
 - Public effort mappings: Pi clamps through model metadata, Claude maps to native effort/thinking controls, and Cursor records effort as ignored until the SDK exposes a concrete control.
 - Multi-reviewer deduplication: exact file, exact line range, exact priority, and normalized-title match only. Do not fuzzy-merge findings in v1.
 - Adapter shape: adapters run SDKs and capture output; core code owns prompt assembly, parsing, validation, rendering, and aggregation.
@@ -1208,7 +1209,7 @@ Resolved design decisions:
 - Config file name is `diffwarden.config.json`.
 - Config is required for real SDK runs and should be discovered through project config, then XDG user config.
 - `diffwarden init` creates the user-level config.
-- `ReviewArtifact.schema_version` is locked at `1`; breaking artifact changes require a future schema version.
+- `ReviewArtifact.schema_version` is `2`; v1 `sdk` and `transport: "sdk"` artifacts are normalized to `engine` and `transport: "native"` when parsed.
 - Live integration tests are gated by `INTEGRATION_TEST_ON` with `INTEGRATION_DISABLE` as an SDK/CLI denylist.
 - License: MIT.
 - Package manager/tooling: `pnpm`, `tsx`, `vitest`, `zod`, strict TypeScript, formatting, linting, and complexity enforcement from the first scaffold.

@@ -36,7 +36,7 @@ SDK-backed reviewers can opt into CLI transport from config:
   "reviewers": [
     {
       "id": "claude-cli",
-      "sdk": "claude",
+      "engine": "claude",
       "transport": "cli"
     }
   ]

@@ -3,8 +3,8 @@ import { renderMarkdown } from "../src/core/render.js";
 import type { ReviewArtifact, ReviewArtifactFinding } from "../src/core/schema.js";
 
 const artifact: ReviewArtifact = {
-  schema_version: 1,
-  sdk: "fake",
+  schema_version: 2,
+  engine: "fake",
   cwd: "/repo",
   target: {
     kind: "uncommitted",
@@ -55,17 +55,19 @@ describe("renderMarkdown", () => {
   it("renders multi-reviewer engine labels", () => {
     const markdown = renderMarkdown({
       ...artifact,
-      sdk: undefined,
+      engine: undefined,
       reviewers: [
         {
           id: "pi",
-          sdk: "pi",
+          engine: "pi",
+          transport: "native",
           result: artifact.result,
           validation: artifact.validation,
         },
         {
           id: "claude-deep",
-          sdk: "claude",
+          engine: "claude",
+          transport: "native",
           result: artifact.result,
           validation: artifact.validation,
         },
@@ -104,18 +106,20 @@ describe("renderMarkdown", () => {
     const markdown = renderMarkdown(
       {
         ...artifact,
-        sdk: undefined,
+        engine: undefined,
         reviewers: [
           {
             id: "pi",
-            sdk: "pi",
+            engine: "pi",
+            transport: "native",
             status: "success",
             result: artifact.result,
             validation: artifact.validation,
           },
           {
             id: "claude",
-            sdk: "claude",
+            engine: "claude",
+            transport: "native",
             status: "failed",
             error: {
               code: "missing_auth",

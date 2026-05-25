@@ -92,7 +92,7 @@ diffwarden --target uncommitted --reviewer fake --report --report-dir ./tmp/repo
 ```
 
 Reports include the cwd, target mode, custom instructions for `custom:<text>` targets,
-reviewer sdk/transport/model metadata, per-reviewer elapsed time and findings, failure
+reviewer engine/transport/model metadata, per-reviewer elapsed time and findings, failure
 summaries, and precomputed finding counts. The default global store is under the user state directory;
 repo-scoped reports go under `.diffwarden/reports/`. Reports may contain review text that
 echoes source or diff content, so they are never written unless explicitly enabled by CLI
@@ -139,7 +139,7 @@ Implemented:
 - Review parsing, rendering, validation, and aggregation.
 - Opt-in review history reports.
 - Project/user `diffwarden.config.json` discovery.
-- Reviewer sets and `sdk[:profile]` reviewer specs.
+- Reviewer sets and `engine[:profile]` reviewer specs.
 - Cursor, Claude, Pi, and Droid Agent SDK adapters.
 - Thin CLI transport adapters for Codex, Gemini, OpenCode, Grok, Antigravity, and CLI
   variants of Cursor, Claude, Pi, and Droid.

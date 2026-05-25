@@ -39,6 +39,11 @@ diffwarden --target base:main --reviewer-set 2
 When no `--reviewer` or `--reviewer-set` is provided, config must define
 `defaultReviewerSet`.
 
+Configured reviewers use `engine` for the reviewer family (`claude`, `pi`, `codex`, etc.).
+Legacy configs that still use `sdk` continue to load and are normalized internally.
+Use `transport: "native"` for the SDK-backed path when you want to be explicit, or
+`transport: "cli"` for executable-backed runs.
+
 ## Environment Defaults
 
 CLI flags take precedence over environment defaults.
@@ -131,7 +136,7 @@ while leaving the public CLI surface unchanged.
   "reviewers": [
     {
       "id": "pi-openrouter-high",
-      "sdk": "pi",
+      "engine": "pi",
       "profile": "openrouter-high",
       "provider": "openrouter",
       "model": "anthropic/claude-sonnet",
@@ -159,7 +164,7 @@ history matters.
   "reviewers": [
     {
       "id": "claude-cli",
-      "sdk": "claude",
+      "engine": "claude",
       "transport": "cli",
       "model": "sonnet",
       "effort": "high",
@@ -169,15 +174,16 @@ history matters.
     },
     {
       "id": "droid-cli",
-      "sdk": "droid",
+      "engine": "droid",
       "transport": "cli",
       "cliOptions": {
         "executable": "/Users/auro/.local/bin/droid"
       }
     },
     {
-      "id": "droid-sdk-local-computer",
-      "sdk": "droid",
+      "id": "droid-native-local-computer",
+      "engine": "droid",
+      "transport": "native",
       "sdkOptions": {
         "machineId": "YOUR_DROID_COMPUTER_ID"
       }

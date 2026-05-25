@@ -37,7 +37,7 @@ describe("live diffwarden CLI e2e", () => {
     expect(parsed.reviewers).toEqual([
       {
         id: "live-droid",
-        sdk: "droid",
+        engine: "droid",
         transport: "cli",
         provider: "factory",
         model: "claude-opus-4-7",
@@ -98,7 +98,7 @@ function liveE2eConfigJson(reviewers: string[], env: NodeJS.ProcessEnv = process
     const executable = liveEnv(reviewer, "EXECUTABLE", env);
     return {
       id: liveReviewerId(reviewer),
-      sdk: reviewer,
+      engine: reviewer,
       transport: "cli",
       ...optionalString("provider", liveEnv(reviewer, "PROVIDER", env)),
       ...optionalString("model", liveEnv(reviewer, "MODEL", env)),

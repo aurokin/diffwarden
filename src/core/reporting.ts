@@ -48,7 +48,7 @@ export type ReviewReportFinding =
     };
 
 export type ReviewReport = {
-  report_schema_version: 1;
+  report_schema_version: 2;
   run_id: string;
   created_at: string;
   invocation: {
@@ -81,7 +81,7 @@ export type ReviewReportTarget = Omit<ReviewTargetResolved, "instructions"> & {
 
 export type ReviewReportReviewer = {
   id: string;
-  sdk: ReviewReviewerArtifact["sdk"];
+  engine: ReviewReviewerArtifact["engine"];
   transport?: NonNullable<ReviewReviewerArtifact["transport"]>;
   profile?: string;
   provider?: string;
@@ -202,7 +202,7 @@ export function createReviewReport(options: {
     reportFinding(finding, options.reporting.mode),
   );
   const report: ReviewReport = {
-    report_schema_version: 1,
+    report_schema_version: 2,
     run_id: runId,
     created_at: createdAt,
     invocation: {
@@ -243,7 +243,7 @@ function createReviewerReport(
 
   return {
     id: reviewer.id,
-    sdk: reviewer.sdk,
+    engine: reviewer.engine,
     ...(reviewer.transport !== undefined ? { transport: reviewer.transport } : {}),
     ...(reviewer.profile !== undefined ? { profile: reviewer.profile } : {}),
     ...(reviewer.provider !== undefined ? { provider: reviewer.provider } : {}),

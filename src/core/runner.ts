@@ -46,11 +46,11 @@ export type RunReviewOptions = {
 
 export type ReviewerPreflightArtifact = {
   id: string;
-  sdk: ReviewReviewerConfig["sdk"];
+  engine: ReviewReviewerConfig["sdk"];
   status: "passed" | "failed";
   profile?: string;
   provider?: string;
-  transport?: ReviewReviewerConfig["transport"];
+  transport?: "native" | "cli";
   model?: string;
   effort?: string;
   preflight?: Awaited<ReturnType<NonNullable<ReviewAdapter["preflight"]>>>;
@@ -59,7 +59,7 @@ export type ReviewerPreflightArtifact = {
 };
 
 export type ReviewerPreflightReport = {
-  schema_version: 1;
+  schema_version: 2;
   cwd: string;
   reviewers: ReviewerPreflightArtifact[];
   timing_ms: number;
@@ -136,9 +136,9 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
   }
 
   return {
-    schema_version: 1,
+    schema_version: 2,
     ...(reviewerArtifacts.length === 1 && successfulReviewerArtifacts.length === 1
-      ? { sdk: successfulReviewerArtifacts[0]?.sdk }
+      ? { engine: successfulReviewerArtifacts[0]?.engine }
       : {}),
     reviewers: reviewerArtifacts,
     cwd: options.cwd,
@@ -184,7 +184,7 @@ export async function runReviewerPreflightReport(
   );
 
   return {
-    schema_version: 1,
+    schema_version: 2,
     cwd: options.cwd,
     reviewers: artifacts,
     timing_ms: Date.now() - started,
@@ -326,9 +326,9 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
   const timingMs = Date.now() - start;
   const reviewerArtifact: ReviewReviewerArtifact = {
     id: options.reviewer.id,
-    sdk: options.reviewer.sdk,
+    engine: options.reviewer.sdk,
     status: "success",
-    ...(options.reviewer.transport ? { transport: options.reviewer.transport } : {}),
+    ...reviewerArtifactTransport(options.reviewer),
     ...(options.reviewer.profile ? { profile: options.reviewer.profile } : {}),
     ...(options.reviewer.provider ? { provider: options.reviewer.provider } : {}),
     ...(options.reviewer.model ? { model: options.reviewer.model } : {}),
@@ -411,9 +411,9 @@ async function runSingleReviewerPreflight(options: {
     const context = await preflightReviewer(options);
     return {
       id: context.reviewer.id,
-      sdk: context.reviewer.sdk,
+      engine: context.reviewer.sdk,
       status: "passed",
-      ...(context.reviewer.transport ? { transport: context.reviewer.transport } : {}),
+      ...reviewerArtifactTransport(context.reviewer),
       ...(context.reviewer.profile ? { profile: context.reviewer.profile } : {}),
       ...(context.reviewer.provider ? { provider: context.reviewer.provider } : {}),
       ...(context.reviewer.model ? { model: context.reviewer.model } : {}),
@@ -424,9 +424,9 @@ async function runSingleReviewerPreflight(options: {
   } catch (error) {
     return {
       id: options.reviewer.id,
-      sdk: options.reviewer.sdk,
+      engine: options.reviewer.sdk,
       status: "failed",
-      ...(options.reviewer.transport ? { transport: options.reviewer.transport } : {}),
+      ...reviewerArtifactTransport(options.reviewer),
       ...(options.reviewer.profile ? { profile: options.reviewer.profile } : {}),
       ...(options.reviewer.provider ? { provider: options.reviewer.provider } : {}),
       ...(options.reviewer.model ? { model: options.reviewer.model } : {}),
@@ -445,9 +445,9 @@ function createFailedReviewerArtifact(
 ): FailedReviewerArtifact {
   return {
     id: reviewer.id,
-    sdk: reviewer.sdk,
+    engine: reviewer.sdk,
     status: "failed",
-    ...(reviewer.transport ? { transport: reviewer.transport } : {}),
+    ...reviewerArtifactTransport(reviewer),
     ...(reviewer.profile ? { profile: reviewer.profile } : {}),
     ...(reviewer.provider ? { provider: reviewer.provider } : {}),
     ...(reviewer.model ? { model: reviewer.model } : {}),
@@ -718,4 +718,14 @@ function getAdapter(
 
 function reviewerAdapterKey(reviewer: ReviewReviewerConfig): string {
   return `${reviewer.sdk}:${reviewer.transport ?? "sdk"}`;
+}
+
+function reviewerArtifactTransport(
+  reviewer: ReviewReviewerConfig,
+): { transport: "native" | "cli" } | Record<string, never> {
+  if (reviewer.sdk === "fake" && reviewer.transport === undefined) {
+    return {};
+  }
+
+  return { transport: reviewer.transport === "cli" ? "cli" : "native" };
 }

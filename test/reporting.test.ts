@@ -102,7 +102,7 @@ describe("createReviewReport", () => {
     });
 
     expect(report).toMatchObject({
-      report_schema_version: 1,
+      report_schema_version: 2,
       run_id: "run-1",
       created_at: "2026-05-24T18:42:31.123Z",
       invocation: {
@@ -136,20 +136,20 @@ describe("createReviewReport", () => {
     });
     expect(report.reviewers[0]).toMatchObject({
       id: "pi-default",
-      sdk: "pi",
-      transport: "sdk",
+      engine: "pi",
+      transport: "native",
       elapsed_ms: 700,
       finding_count: 1,
     });
     expect(report.reviewers[1]).toMatchObject({
       id: "codex",
-      sdk: "codex",
+      engine: "codex",
       transport: "cli",
       finding_count: 1,
     });
     expect(report.reviewers[2]).toMatchObject({
       id: "claude-cli",
-      sdk: "claude",
+      engine: "claude",
       transport: "cli",
       status: "failed",
       error: {
@@ -215,12 +215,12 @@ describe("writeReviewReport", () => {
 
 function reviewArtifact(): ReviewArtifact {
   return {
-    schema_version: 1,
+    schema_version: 2,
     reviewers: [
       {
         id: "pi-default",
-        sdk: "pi",
-        transport: "sdk",
+        engine: "pi",
+        transport: "native",
         status: "success",
         model: "anthropic/claude-sonnet",
         result: {
@@ -248,7 +248,7 @@ function reviewArtifact(): ReviewArtifact {
       },
       {
         id: "codex",
-        sdk: "codex",
+        engine: "codex",
         transport: "cli",
         status: "success",
         result: {
@@ -276,7 +276,7 @@ function reviewArtifact(): ReviewArtifact {
       },
       {
         id: "claude-cli",
-        sdk: "claude",
+        engine: "claude",
         transport: "cli",
         status: "failed",
         error: {

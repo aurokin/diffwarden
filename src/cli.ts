@@ -258,7 +258,7 @@ function renderPreflightMarkdown(report: ReviewerPreflightReport): string {
 
   for (const reviewer of report.reviewers) {
     lines.push(`## ${reviewer.id}`, "");
-    lines.push(`- Engine: ${reviewer.sdk}`);
+    lines.push(`- Engine: ${reviewer.engine}`);
     lines.push(`- Status: ${reviewer.status}`);
     if (reviewer.model !== undefined) {
       lines.push(`- Model: ${reviewer.model}`);

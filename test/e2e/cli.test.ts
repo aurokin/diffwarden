@@ -68,7 +68,7 @@ describe("diffwarden CLI e2e", () => {
     ]);
     const artifact = JSON.parse(result.stdout);
 
-    expect(artifact.sdk).toBe("fake");
+    expect(artifact.engine).toBe("fake");
     expect(artifact.target.kind).toBe("base");
     expect(artifact.target.base_ref).toBe("main");
     expect(artifact.target.changed_files).toEqual(["tracked.txt"]);
@@ -274,7 +274,7 @@ describe("diffwarden CLI e2e", () => {
     expect(report.reviewers).toHaveLength(1);
     expect(report.reviewers[0]).toMatchObject({
       id: "fake",
-      sdk: "fake",
+      engine: "fake",
       status: "passed",
       preflight: {
         checks: expect.arrayContaining([

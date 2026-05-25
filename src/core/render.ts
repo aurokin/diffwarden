@@ -39,8 +39,8 @@ function renderWarnings(artifact: ReviewArtifact): string {
 }
 
 function renderEngine(artifact: ReviewArtifact): string {
-  if (artifact.sdk !== undefined) {
-    return artifact.sdk;
+  if (artifact.engine !== undefined) {
+    return artifact.engine;
   }
 
   if (artifact.reviewers !== undefined && artifact.reviewers.length > 1) {

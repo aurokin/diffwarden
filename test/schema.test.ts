@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { reviewResultJsonSchema, reviewResultStrictJsonSchema } from "../src/core/schema.js";
+import {
+  reviewArtifactSchema,
+  reviewResultJsonSchema,
+  reviewResultStrictJsonSchema,
+} from "../src/core/schema.js";
 
 describe("reviewResultJsonSchema", () => {
   it("describes the normalized review result contract", () => {
@@ -50,3 +54,65 @@ describe("reviewResultJsonSchema", () => {
     );
   });
 });
+
+describe("reviewArtifactSchema", () => {
+  it("normalizes v1 sdk artifacts to v2 engine artifacts", () => {
+    const parsed = reviewArtifactSchema.parse({
+      schema_version: 1,
+      sdk: "pi",
+      reviewers: [
+        {
+          id: "pi-default",
+          sdk: "pi",
+          transport: "sdk",
+          result: reviewResult(),
+          validation: validation(),
+        },
+      ],
+      cwd: "/repo",
+      target: target(),
+      result: reviewResult(),
+      validation: validation(),
+    });
+
+    expect(parsed).toMatchObject({
+      schema_version: 2,
+      engine: "pi",
+      reviewers: [
+        {
+          id: "pi-default",
+          engine: "pi",
+          transport: "native",
+        },
+      ],
+    });
+  });
+});
+
+function reviewResult() {
+  return {
+    findings: [],
+    overall_correctness: "patch is correct",
+    overall_explanation: "No issues.",
+    overall_confidence_score: 0.8,
+  };
+}
+
+function validation() {
+  return {
+    parse_mode: "strict-json",
+    valid_schema: true,
+    findings_overlap_diff: true,
+    valid_locations: true,
+    invalid_locations: [],
+  };
+}
+
+function target() {
+  return {
+    kind: "uncommitted",
+    repo_root: "/repo",
+    diff_command: "git diff",
+    changed_files: [],
+  };
+}

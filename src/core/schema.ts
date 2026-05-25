@@ -216,31 +216,56 @@ export const reviewerErrorSchema = z.object({
   exit_code: z.number().int().optional(),
 });
 
+const artifactTransportSchema = z.enum(["native", "cli"]);
+const legacyArtifactTransportSchema = z.enum(["sdk", "cli"]);
+
+const reviewReviewerArtifactBaseSchema = z.object({
+  id: z.string(),
+  status: z.enum(["success", "failed"]).optional(),
+  profile: z.string().optional(),
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  effort: z.string().optional(),
+  result: reviewArtifactResultSchema.optional(),
+  raw_text: z.string().optional(),
+  preflight: adapterPreflightResultSchema.optional(),
+  adapter_metadata: z
+    .record(z.string(), z.unknown())
+    .and(
+      z.object({
+        captureMode: z.enum(["native-structured", "tool-call", "text"]).optional(),
+        readonlyCapability: z.enum(["enforced", "tool-restricted", "prompt-only"]).optional(),
+      }),
+    )
+    .optional(),
+  validation: reviewValidationSchema.optional(),
+  error: reviewerErrorSchema.optional(),
+  timing_ms: z.number().nonnegative().optional(),
+});
+
+const reviewReviewerArtifactV2Schema = reviewReviewerArtifactBaseSchema.extend({
+  engine: reviewerSdkSchema,
+  transport: artifactTransportSchema.optional(),
+});
+
+const reviewReviewerArtifactV1Schema = reviewReviewerArtifactBaseSchema.extend({
+  sdk: reviewerSdkSchema,
+  transport: legacyArtifactTransportSchema.optional(),
+});
+
 export const reviewReviewerArtifactSchema = z
-  .object({
-    id: z.string(),
-    sdk: reviewerSdkSchema,
-    transport: z.enum(["sdk", "cli"]).optional(),
-    status: z.enum(["success", "failed"]).optional(),
-    profile: z.string().optional(),
-    provider: z.string().optional(),
-    model: z.string().optional(),
-    effort: z.string().optional(),
-    result: reviewArtifactResultSchema.optional(),
-    raw_text: z.string().optional(),
-    preflight: adapterPreflightResultSchema.optional(),
-    adapter_metadata: z
-      .record(z.string(), z.unknown())
-      .and(
-        z.object({
-          captureMode: z.enum(["native-structured", "tool-call", "text"]).optional(),
-          readonlyCapability: z.enum(["enforced", "tool-restricted", "prompt-only"]).optional(),
-        }),
-      )
-      .optional(),
-    validation: reviewValidationSchema.optional(),
-    error: reviewerErrorSchema.optional(),
-    timing_ms: z.number().nonnegative().optional(),
+  .union([reviewReviewerArtifactV2Schema, reviewReviewerArtifactV1Schema])
+  .transform((artifact) => {
+    if ("engine" in artifact) {
+      return artifact;
+    }
+
+    const { sdk, transport, ...rest } = artifact;
+    return {
+      ...rest,
+      engine: sdk,
+      ...(transport !== undefined ? { transport: artifactTransport(transport) } : {}),
+    };
   })
   .superRefine((artifact, context) => {
     if (artifact.status === "failed") {
@@ -271,7 +296,20 @@ export const reviewReviewerArtifactSchema = z
     }
   });
 
-export const reviewArtifactSchema = z.object({
+const reviewArtifactV2Schema = z.object({
+  schema_version: z.literal(2),
+  engine: reviewerSdkSchema.optional(),
+  reviewers: z.array(reviewReviewerArtifactSchema).optional(),
+  cwd: z.string(),
+  target: reviewTargetResolvedSchema,
+  result: reviewArtifactResultSchema,
+  raw_text: z.string().optional(),
+  validation: reviewValidationSchema,
+  warnings: z.array(z.string()).optional(),
+  timing_ms: z.number().nonnegative().optional(),
+});
+
+const reviewArtifactV1Schema = z.object({
   schema_version: z.literal(1),
   sdk: reviewerSdkSchema.optional(),
   reviewers: z.array(reviewReviewerArtifactSchema).optional(),
@@ -283,6 +321,27 @@ export const reviewArtifactSchema = z.object({
   warnings: z.array(z.string()).optional(),
   timing_ms: z.number().nonnegative().optional(),
 });
+
+export const reviewArtifactSchema = z
+  .union([reviewArtifactV2Schema, reviewArtifactV1Schema])
+  .transform((artifact) => {
+    if ("engine" in artifact || artifact.schema_version === 2) {
+      return artifact;
+    }
+
+    const { sdk, ...rest } = artifact;
+    return {
+      ...rest,
+      schema_version: 2 as const,
+      ...(sdk !== undefined ? { engine: sdk } : {}),
+    };
+  });
+
+function artifactTransport(
+  transport: z.infer<typeof legacyArtifactTransportSchema>,
+): "native" | "cli" {
+  return transport === "sdk" ? "native" : transport;
+}
 
 export type ReviewPriority = z.infer<typeof reviewPrioritySchema>;
 export type OverallCorrectness = z.infer<typeof overallCorrectnessSchema>;

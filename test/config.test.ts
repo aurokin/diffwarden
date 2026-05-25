@@ -63,6 +63,17 @@ describe("loadDiffwardenConfig", () => {
     });
   });
 
+  it("rejects reviewers without an engine", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [{ id: "bad" }],
+    });
+
+    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toThrow(
+      "Reviewer must define engine",
+    );
+  });
+
   it("rejects duplicate sdk/profile reviewer entries", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {
@@ -113,6 +124,27 @@ describe("loadDiffwardenConfig", () => {
       cliOptions: {
         executable: "/opt/homebrew/bin/codex",
       },
+    });
+  });
+
+  it("loads canonical engine and native transport configuration", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [
+        {
+          id: "claude-native",
+          engine: "claude",
+          transport: "native",
+        },
+      ],
+    });
+
+    const loaded = await loadDiffwardenConfig({ cwd: root, repoRoot: root });
+
+    expect(loaded?.config.reviewers?.[0]).toEqual({
+      id: "claude-native",
+      sdk: "claude",
+      transport: "sdk",
     });
   });
 
@@ -181,6 +213,7 @@ describe("initDiffwardenConfig", () => {
     expect(loaded?.config.defaultReviewerSet).toBe("1");
     expect(loaded?.config.reviewerSets).toEqual({ "1": ["pi-default"] });
     expect(loaded?.config.reviewers).toEqual([{ id: "pi-default", sdk: "pi" }]);
+    expect(readFileSync(configPath, "utf8")).toContain('"engine": "pi"');
   });
 
   it("refuses to overwrite an existing user config", async () => {

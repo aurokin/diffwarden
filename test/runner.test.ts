@@ -31,8 +31,8 @@ describe("runReview", () => {
       reviewer: "fake",
     });
 
-    expect(artifact.sdk).toBe("fake");
-    expect(artifact.schema_version).toBe(1);
+    expect(artifact.engine).toBe("fake");
+    expect(artifact.schema_version).toBe(2);
     expect(() => reviewArtifactSchema.parse(artifact)).not.toThrow();
     expect(artifact.reviewers?.[0]?.preflight?.metadata?.readonlyCapability).toBe("enforced");
     expect(artifact.reviewers?.[0]?.adapter_metadata?.captureMode).toBe("native-structured");
@@ -96,8 +96,9 @@ describe("runReview", () => {
       },
     });
 
-    expect(artifact.sdk).toBe("pi");
-    expect(artifact.reviewers?.[0]?.sdk).toBe("pi");
+    expect(artifact.engine).toBe("pi");
+    expect(artifact.reviewers?.[0]?.engine).toBe("pi");
+    expect(artifact.reviewers?.[0]?.transport).toBe("native");
     expect(artifact.reviewers?.[0]?.model).toBe("anthropic/claude-sonnet-4-5");
     expect(artifact.reviewers?.[0]?.preflight?.metadata?.readonlyCapability).toBe(
       "tool-restricted",
@@ -140,10 +141,11 @@ describe("runReview", () => {
       },
     });
 
-    expect(artifact.sdk).toBe("codex");
+    expect(artifact.engine).toBe("codex");
     expect(artifact.reviewers?.[0]).toMatchObject({
       id: "codex",
-      sdk: "codex",
+      engine: "codex",
+      transport: "cli",
     });
     expect(codexAdapter.calls).toEqual([
       {
@@ -217,7 +219,8 @@ describe("runReview", () => {
 
     expect(artifact.reviewers?.[0]).toMatchObject({
       id: "pi-openrouter-high",
-      sdk: "pi",
+      engine: "pi",
+      transport: "native",
       profile: "openrouter-high",
       provider: "openrouter",
       model: "anthropic/claude-sonnet",
@@ -249,9 +252,9 @@ describe("runReview", () => {
       },
     });
 
-    expect(artifact.sdk).toBeUndefined();
+    expect(artifact.engine).toBeUndefined();
     expect(artifact.reviewers).toHaveLength(2);
-    expect(artifact.reviewers?.map((reviewer) => reviewer.sdk)).toEqual(["pi", "claude"]);
+    expect(artifact.reviewers?.map((reviewer) => reviewer.engine)).toEqual(["pi", "claude"]);
     expect(artifact.result.overall_correctness).toBe("patch is correct");
     expect(artifact.result.overall_explanation).toContain("pi: Mock pi review passed.");
     expect(artifact.result.overall_explanation).toContain("claude: Mock claude review passed.");

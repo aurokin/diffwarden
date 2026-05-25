@@ -9,14 +9,16 @@ import { reviewerSdkSchema } from "./schema.js";
 const configFileName = "diffwarden.config.json";
 const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 const effortSchema = z.enum(effortValues);
-const transportSchema = z.enum(["sdk", "cli"]);
+const transportSchema = z.enum(["native", "sdk", "cli"]);
 const reportingScopeSchema = z.enum(["global", "repo"]);
 const reportingModeSchema = z.enum(["full", "metadata"]);
+const configuredReviewerEngineSchema = reviewerSdkSchema.exclude(["fake"]);
 
 const reviewerConfigSchema = z
   .object({
     id: z.string().min(1),
-    sdk: reviewerSdkSchema.exclude(["fake"]),
+    engine: configuredReviewerEngineSchema.optional(),
+    sdk: configuredReviewerEngineSchema.optional(),
     transport: transportSchema.optional(),
     profile: z.string().min(1).optional(),
     provider: z.string().min(1).optional(),
@@ -30,7 +32,37 @@ const reviewerConfigSchema = z
     providerOptions: z.record(z.string(), z.unknown()).optional(),
     sdkOptions: z.record(z.string(), z.unknown()).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((reviewer, ctx) => {
+    if (reviewer.engine === undefined && reviewer.sdk === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Reviewer must define engine",
+        path: ["engine"],
+      });
+    }
+
+    if (
+      reviewer.engine !== undefined &&
+      reviewer.sdk !== undefined &&
+      reviewer.engine !== reviewer.sdk
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Reviewer engine and legacy sdk must match when both are provided",
+        path: ["engine"],
+      });
+    }
+  })
+  .transform((reviewer) => {
+    const { engine, sdk, transport, ...rest } = reviewer;
+    const normalizedSdk = engine ?? sdk ?? "pi";
+    return {
+      ...rest,
+      sdk: normalizedSdk,
+      ...(transport !== undefined ? { transport: normalizeTransport(transport) } : {}),
+    };
+  });
 
 export const diffwardenConfigSchema = z
   .object({
@@ -66,7 +98,7 @@ export const diffwardenConfigSchema = z
       if (reviewer.transport === "sdk" && isCliOnlyReviewerSdk(reviewer.sdk)) {
         ctx.addIssue({
           code: "custom",
-          message: `Reviewer ${reviewer.id} must use CLI transport for sdk: ${reviewer.sdk}`,
+          message: `Reviewer ${reviewer.id} must use CLI transport for engine: ${reviewer.sdk}`,
           path: ["reviewers", index, "transport"],
         });
       }
@@ -188,7 +220,7 @@ function starterConfigJson(): string {
       reviewers: [
         {
           id: "pi-default",
-          sdk: "pi",
+          engine: "pi",
         },
       ],
       readonly: true,
@@ -242,4 +274,8 @@ function isCliOnlyReviewerSdk(sdk: string): boolean {
     sdk === "grok" ||
     sdk === "antigravity"
   );
+}
+
+function normalizeTransport(transport: z.infer<typeof transportSchema>): "sdk" | "cli" {
+  return transport === "native" ? "sdk" : transport;
 }

@@ -110,7 +110,7 @@ Prefer Droid's CLI transport for routine reviews. It follows the current `droid 
 surface, uses read-only spec mode by default, and keeps Diffwarden on the same runtime path
 as the installed Droid CLI.
 
-The Droid SDK adapter remains available through `--reviewer droid` or configured SDK
+The Droid SDK adapter remains available through `--reviewer droid` or configured native
 profiles. It uses `@factory/droid-sdk`, requests native JSON Schema output, and runs in
 Droid's spec interaction mode for read-only review behavior. Treat this path as
 experimental if Factory UI session history matters, because SDK runs still appear in Droid
