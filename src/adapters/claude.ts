@@ -37,6 +37,11 @@ type ClaudeAdapterDependencies = {
   ) => Promise<ClaudeRuntime>;
 };
 
+type ClaudeRunContext = {
+  kind: "claude";
+  runtime: ClaudeRuntime;
+};
+
 const defaultClaudeAdapterDependencies: ClaudeAdapterDependencies = {
   loadSdk: loadClaudeSdk,
   resolveRuntime: resolveClaudeRuntime,
@@ -48,69 +53,15 @@ export function createClaudeAdapter(
   return {
     name: "claude",
     async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
-      const sdk = await dependencies.loadSdk();
-      const runtime = await dependencies.resolveRuntime(input);
-      const model = input.reviewer.model ?? defaultClaudeModel;
-      const modelPreflight = await preflightClaudeModel({
-        query: sdk.query,
-        input,
-        runtime,
-        model,
-      });
-
-      return {
-        checks: [
-          {
-            name: "auth",
-            status: "passed",
-            detail:
-              runtime.authMode === "api-key"
-                ? "ANTHROPIC_API_KEY is present."
-                : claudeCodeAuthDetail(runtime),
-          },
-          {
-            name: "sdk",
-            status: "passed",
-            detail: "@anthropic-ai/claude-agent-sdk loaded successfully.",
-          },
-          {
-            name: "model",
-            status: "passed",
-            detail: `Claude model is available: ${modelPreflight.model.value}.`,
-          },
-          {
-            name: "readonly",
-            status: "passed",
-            detail: "Claude built-in tools are disabled for this adapter path.",
-          },
-        ],
-        metadata: sdkPreflightMetadata("claude", {
-          model: modelPreflight.model.value,
-          ...claudeModelResolutionMetadata(input.reviewer, modelPreflight.model.value),
-          ...(modelPreflight.model.displayName !== undefined
-            ? { modelDisplayName: modelPreflight.model.displayName }
-            : {}),
-          ...(modelPreflight.model.supportsEffort !== undefined
-            ? { supportsEffort: modelPreflight.model.supportsEffort }
-            : {}),
-          ...(modelPreflight.model.supportedEffortLevels !== undefined
-            ? { supportedEffortLevels: modelPreflight.model.supportedEffortLevels }
-            : {}),
-          ...claudeEffortMetadata(input.reviewer.effort),
-          authMode: runtime.authMode,
-          authPreference: runtime.authPreference,
-          authMethod: runtime.authMethod,
-          apiProvider: runtime.apiProvider,
-          subscriptionType: runtime.subscriptionType,
-          tokenSource: runtime.tokenSource,
-          apiKeySource: runtime.apiKeySource,
-          executable: runtime.executable,
-        }),
-      };
+      return (await prepareClaudeAdapter(dependencies, input)).preflight;
+    },
+    async prepare(input: ReviewAdapterPreflightInput) {
+      return prepareClaudeAdapter(dependencies, input);
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
       const { query } = await dependencies.loadSdk();
-      const runtime = await dependencies.resolveRuntime(input);
+      const runtime =
+        claudeRunContext(input.runContext)?.runtime ?? (await dependencies.resolveRuntime(input));
 
       try {
         const structuredResult = await runClaudeQuery({
@@ -186,6 +137,91 @@ export function createClaudeAdapter(
       }
     },
   };
+}
+
+async function prepareClaudeAdapter(
+  dependencies: ClaudeAdapterDependencies,
+  input: ReviewAdapterPreflightInput,
+): Promise<{ preflight: ReviewAdapterPreflightResult; runContext: ClaudeRunContext }> {
+  const sdk = await dependencies.loadSdk();
+  const runtime = await dependencies.resolveRuntime(input);
+  const model = input.reviewer.model ?? defaultClaudeModel;
+  const modelPreflight = await preflightClaudeModel({
+    query: sdk.query,
+    input,
+    runtime,
+    model,
+  });
+
+  return {
+    preflight: {
+      checks: [
+        {
+          name: "auth",
+          status: "passed",
+          detail:
+            runtime.authMode === "api-key"
+              ? "ANTHROPIC_API_KEY is present."
+              : claudeCodeAuthDetail(runtime),
+        },
+        {
+          name: "sdk",
+          status: "passed",
+          detail: "@anthropic-ai/claude-agent-sdk loaded successfully.",
+        },
+        {
+          name: "model",
+          status: "passed",
+          detail: `Claude model is available: ${modelPreflight.model.value}.`,
+        },
+        {
+          name: "readonly",
+          status: "passed",
+          detail: "Claude built-in tools are disabled for this adapter path.",
+        },
+      ],
+      metadata: sdkPreflightMetadata("claude", {
+        model: modelPreflight.model.value,
+        ...claudeModelResolutionMetadata(input.reviewer, modelPreflight.model.value),
+        ...(modelPreflight.model.displayName !== undefined
+          ? { modelDisplayName: modelPreflight.model.displayName }
+          : {}),
+        ...(modelPreflight.model.supportsEffort !== undefined
+          ? { supportsEffort: modelPreflight.model.supportsEffort }
+          : {}),
+        ...(modelPreflight.model.supportedEffortLevels !== undefined
+          ? { supportedEffortLevels: modelPreflight.model.supportedEffortLevels }
+          : {}),
+        ...claudeEffortMetadata(input.reviewer.effort),
+        authMode: runtime.authMode,
+        authPreference: runtime.authPreference,
+        authMethod: runtime.authMethod,
+        apiProvider: runtime.apiProvider,
+        subscriptionType: runtime.subscriptionType,
+        tokenSource: runtime.tokenSource,
+        apiKeySource: runtime.apiKeySource,
+        executable: runtime.executable,
+      }),
+    },
+    runContext: {
+      kind: "claude",
+      runtime,
+    },
+  };
+}
+
+function claudeRunContext(value: unknown): ClaudeRunContext | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("kind" in value) ||
+    value.kind !== "claude" ||
+    !("runtime" in value)
+  ) {
+    return undefined;
+  }
+
+  return value as ClaudeRunContext;
 }
 
 export const claudeAdapter = createClaudeAdapter();

@@ -20,7 +20,8 @@ export async function runCli(
   for (const key of invocation.unsetEnv ?? []) {
     Reflect.deleteProperty(env, key);
   }
-  const executable = await resolveExecutable(invocation.executable, env);
+  const executable =
+    invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
 
   return await new Promise((resolve, reject) => {
     let child: ChildProcessWithoutNullStreams;
@@ -32,7 +33,7 @@ export async function runCli(
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
-      reject(classifyCliStartError(invocation.executable, error));
+      reject(classifyCliStartError(executable, error));
       return;
     }
     const stdout: Buffer[] = [];
@@ -61,10 +62,10 @@ export async function runCli(
         clearTimeout(abortKillTimer);
       }
       if (isNodeErrorWithCode(error, "ENOENT")) {
-        rejectOnce(missingRequirement(`CLI executable not found: ${invocation.executable}`));
+        rejectOnce(missingRequirement(`CLI executable not found: ${executable}`));
         return;
       }
-      rejectOnce(classifyCliStartError(invocation.executable, error));
+      rejectOnce(classifyCliStartError(executable, error));
     });
     child.on("close", (code, signal) => {
       removeAbortListener();
@@ -174,10 +175,20 @@ function classifyCliStartError(executable: string, error: unknown): Error {
   }
 
   if (isNodeErrorWithCode(error, "ENOEXEC")) {
-    return missingRequirement(`CLI executable is not runnable: ${executable}`);
+    return missingRequirement(
+      `CLI executable is not runnable: ${executable}${macosStartHint(executable)}`,
+    );
   }
 
-  return reviewerFailed(`${executable} failed to start: ${errorMessage(error)}`);
+  if (isNodeErrorWithCode(error, "EPERM") || isNodeErrorWithCode(error, "EACCES")) {
+    return missingRequirement(
+      `CLI executable is not permitted to run: ${executable}${macosStartHint(executable)}`,
+    );
+  }
+
+  return reviewerFailed(
+    `${executable} failed to start: ${errorMessage(error)}${macosStartHint(executable)}`,
+  );
 }
 
 function classifyCliExit(executable: string, code: number | null, detail: string): Error {
@@ -233,4 +244,16 @@ function isNodeErrorWithCode(error: unknown, code: string): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function macosStartHint(executable: string): string {
+  if (process.platform !== "darwin") {
+    return "";
+  }
+
+  return `\nOn macOS this can be caused by Gatekeeper quarantine or an unsigned executable. Run: diffwarden macos doctor --path ${shellQuote(executable)}`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }

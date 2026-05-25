@@ -4,6 +4,7 @@ export type CliEngine = Exclude<ReviewReviewerConfig["sdk"], "fake">;
 
 export type CliInvocation = {
   executable: string;
+  resolvedExecutable?: string;
   args: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;

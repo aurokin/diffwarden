@@ -164,10 +164,11 @@ Read from top to bottom until you have enough detail:
 4. [`docs/configuration.md`](./docs/configuration.md) - config files, reviewer sets, and
    environment defaults.
 5. [`docs/adapters.md`](./docs/adapters.md) - SDK and CLI reviewer adapter behavior.
-6. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
+6. [`docs/macos.md`](./docs/macos.md) - macOS executable trust and performance triage.
+7. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
    commands.
-7. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
-8. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
+8. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
+9. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
 
 ## Design Principles
 

@@ -10,6 +10,7 @@ import {
 import { invalidCli } from "./core/errors.js";
 import { hasFindingAtOrAbovePriority, parseFindingFailureThreshold } from "./core/finding-gate.js";
 import { resolveGitTarget } from "./core/git.js";
+import { type MacosDoctorReport, runMacosDoctor } from "./core/macos.js";
 import { renderJson, renderMarkdown } from "./core/render.js";
 import { resolveReportingOptions, writeReviewReport } from "./core/reporting.js";
 import {
@@ -22,6 +23,7 @@ import { version } from "./version.js";
 
 const program = new Command();
 const collectReviewers = (value: string, previous: string[]): string[] => [...previous, value];
+const collectValues = (value: string, previous: string[]): string[] => [...previous, value];
 
 program
   .name("diffwarden")
@@ -254,6 +256,41 @@ program
     },
   );
 
+const macos = program.command("macos").description("Inspect macOS executable trust state.");
+
+macos
+  .command("doctor")
+  .description("Check quarantine, codesign, and Gatekeeper assessment for executables.")
+  .option("--path <path>", "executable path to inspect", collectValues, [])
+  .option(
+    "--executable <name>",
+    "executable name to resolve through PATH and inspect",
+    collectValues,
+    [],
+  )
+  .option("--json", "output machine-readable JSON")
+  .action(async (options: { path: string[]; executable: string[]; json?: boolean }) => {
+    if (options.path.length === 0 && options.executable.length === 0) {
+      throw invalidCli("Pass at least one --path or --executable value");
+    }
+
+    const report = await runMacosDoctor({
+      paths: options.path,
+      executables: options.executable,
+      env: process.env,
+    });
+
+    process.stdout.write(
+      options.json === true
+        ? `${JSON.stringify(report, null, 2)}\n`
+        : renderMacosDoctorMarkdown(report),
+    );
+
+    if (report.executables.some((executable) => executable.status === "failed")) {
+      process.exitCode = 1;
+    }
+  });
+
 try {
   await program.parseAsync(normalizeArgv(process.argv));
 } catch (error) {
@@ -290,6 +327,33 @@ function renderPreflightMarkdown(report: ReviewerPreflightReport): string {
       lines.push("", "| Check | Status | Detail |");
       lines.push("| --- | --- | --- |");
       for (const check of checks) {
+        lines.push(
+          `| ${escapeMarkdownTable(check.name)} | ${check.status} | ${escapeMarkdownTable(
+            check.detail ?? "",
+          )} |`,
+        );
+      }
+    }
+    lines.push("");
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function renderMacosDoctorMarkdown(report: MacosDoctorReport): string {
+  const lines = ["# Diffwarden macOS Doctor", "", `Platform: ${report.platform}`, ""];
+
+  for (const executable of report.executables) {
+    lines.push(`## ${executable.input}`, "");
+    lines.push(`- Status: ${executable.status}`);
+    if (executable.path !== undefined) {
+      lines.push(`- Path: ${executable.path}`);
+    }
+
+    if (executable.checks.length > 0) {
+      lines.push("", "| Check | Status | Detail |");
+      lines.push("| --- | --- | --- |");
+      for (const check of executable.checks) {
         lines.push(
           `| ${escapeMarkdownTable(check.name)} | ${check.status} | ${escapeMarkdownTable(
             check.detail ?? "",

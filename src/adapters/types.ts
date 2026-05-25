@@ -11,6 +11,7 @@ export type ReviewAdapterInput = {
   signal?: AbortSignal;
   readonly: boolean;
   env?: NodeJS.ProcessEnv;
+  runContext?: unknown;
 };
 
 export type ReviewReviewerConfig = {
@@ -77,8 +78,14 @@ export type ReviewAdapterPreflightResult = {
   };
 };
 
+export type ReviewAdapterPrepareResult = {
+  preflight?: ReviewAdapterPreflightResult;
+  runContext?: unknown;
+};
+
 export interface ReviewAdapter {
   name: string;
   preflight?(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult>;
+  prepare?(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPrepareResult>;
   run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput>;
 }

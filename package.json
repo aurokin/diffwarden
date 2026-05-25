@@ -16,6 +16,7 @@
     "install:skill": "bash scripts/install-local-skill.sh",
     "live:doctor": "tsx scripts/live-doctor.ts",
     "lint": "biome check .",
+    "macos:doctor": "tsx src/cli.ts macos doctor",
     "metrics": "pnpm complexity && pnpm test:coverage",
     "test": "INTEGRATION_TEST_ON=0 vitest run",
     "test:coverage": "INTEGRATION_TEST_ON=0 vitest run --coverage",

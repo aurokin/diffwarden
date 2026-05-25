@@ -27,64 +27,33 @@ import type {
   ReviewReviewerConfig,
 } from "./types.js";
 
+type CliRunContext = {
+  kind: "cli";
+  requestedExecutable: string;
+  resolvedExecutable: string;
+  path?: string;
+};
+
 export function createCliAdapter(engine: CliEngine): ReviewAdapter {
   const spec = cliSpecs[engine];
   const capability = cliCapability(engine);
   return {
     name: `${engine}:cli`,
     async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
-      validateSupportedCliOverrides(engine, input.reviewer);
-      const executable = cliExecutable(input.reviewer, capability.defaultExecutable);
-      const resolvedExecutable = await resolveExecutable(executable, input.env);
-      const metadata: ReviewAdapterPreflightResult["metadata"] = {
-        readonlyCapability: capability.readonlyCapability,
-        transport: "cli",
-        executable: resolvedExecutable,
-        ...cliSelectionMetadata(engine, input.reviewer),
-      };
-
-      return {
-        checks: [
-          {
-            name: "executable",
-            status: "passed",
-            detail: `Using ${resolvedExecutable}.`,
-          },
-          {
-            name: "readonly",
-            status: capability.readonlyCapability === "prompt-only" ? "warning" : "passed",
-            detail: readonlyDetail(capability.readonlyCapability),
-          },
-          {
-            name: "auth",
-            status: "skipped",
-            detail: "CLI authentication is delegated to the selected executable.",
-          },
-          {
-            name: "model",
-            status: input.reviewer.model === undefined ? "skipped" : "passed",
-            detail:
-              input.reviewer.model === undefined
-                ? "No model override was requested."
-                : `Passing model override to CLI: ${input.reviewer.model}.`,
-          },
-          {
-            name: "effort",
-            status: input.reviewer.effort === undefined ? "skipped" : "passed",
-            detail:
-              input.reviewer.effort === undefined
-                ? "No effort override was requested."
-                : `Passing effort override to CLI: ${input.reviewer.effort}.`,
-          },
-        ],
-        metadata,
-      };
+      return prepareCliAdapter(engine, capability, input).then((prepared) => prepared.preflight);
+    },
+    async prepare(input: ReviewAdapterPreflightInput) {
+      return prepareCliAdapter(engine, capability, input);
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
       validateSupportedCliOverrides(engine, input.reviewer);
       const tempDir = await mkdtemp(path.join(tmpdir(), "diffwarden-cli-"));
       try {
         const invocation = await spec.buildInvocation(input, tempDir);
+        const runContext = cliRunContext(input.runContext);
+        if (canUsePreparedExecutable(invocation.executable, input, runContext)) {
+          invocation.resolvedExecutable = runContext.resolvedExecutable;
+        }
         const result = await runCli(invocation, input);
         const output = await spec.parseOutput(result, invocation);
         output.metadata = {
@@ -100,6 +69,101 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
       }
     },
   };
+}
+
+async function prepareCliAdapter(
+  engine: CliEngine,
+  capability: ReturnType<typeof cliCapability>,
+  input: ReviewAdapterPreflightInput,
+): Promise<{ preflight: ReviewAdapterPreflightResult; runContext: CliRunContext }> {
+  validateSupportedCliOverrides(engine, input.reviewer);
+  const executable = cliExecutable(input.reviewer, capability.defaultExecutable);
+  const resolvedExecutable = await resolveExecutable(executable, input.env);
+  const metadata: ReviewAdapterPreflightResult["metadata"] = {
+    readonlyCapability: capability.readonlyCapability,
+    transport: "cli",
+    executable: resolvedExecutable,
+    ...cliSelectionMetadata(engine, input.reviewer),
+  };
+
+  return {
+    preflight: {
+      checks: [
+        {
+          name: "executable",
+          status: "passed",
+          detail: `Using ${resolvedExecutable}.`,
+        },
+        {
+          name: "readonly",
+          status: capability.readonlyCapability === "prompt-only" ? "warning" : "passed",
+          detail: readonlyDetail(capability.readonlyCapability),
+        },
+        {
+          name: "auth",
+          status: "skipped",
+          detail: "CLI authentication is delegated to the selected executable.",
+        },
+        {
+          name: "model",
+          status: input.reviewer.model === undefined ? "skipped" : "passed",
+          detail:
+            input.reviewer.model === undefined
+              ? "No model override was requested."
+              : `Passing model override to CLI: ${input.reviewer.model}.`,
+        },
+        {
+          name: "effort",
+          status: input.reviewer.effort === undefined ? "skipped" : "passed",
+          detail:
+            input.reviewer.effort === undefined
+              ? "No effort override was requested."
+              : `Passing effort override to CLI: ${input.reviewer.effort}.`,
+        },
+      ],
+      metadata,
+    },
+    runContext: {
+      kind: "cli",
+      requestedExecutable: executable,
+      resolvedExecutable,
+      ...pathContext(input.env),
+    },
+  };
+}
+
+function cliRunContext(value: unknown): CliRunContext | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("kind" in value) ||
+    value.kind !== "cli" ||
+    !("requestedExecutable" in value) ||
+    typeof value.requestedExecutable !== "string" ||
+    !("resolvedExecutable" in value) ||
+    typeof value.resolvedExecutable !== "string"
+  ) {
+    return undefined;
+  }
+
+  return value as CliRunContext;
+}
+
+function canUsePreparedExecutable(
+  executable: string,
+  input: ReviewAdapterInput,
+  runContext: CliRunContext | undefined,
+): runContext is CliRunContext {
+  return (
+    runContext !== undefined &&
+    runContext.requestedExecutable === executable &&
+    runContext.path === pathContext(input.env).path
+  );
+}
+
+function pathContext(env: NodeJS.ProcessEnv | undefined): { path?: string } {
+  const value = (env ?? process.env).PATH;
+  return value === undefined ? {} : { path: value };
 }
 
 function validateSupportedCliOverrides(engine: CliEngine, reviewer: ReviewReviewerConfig): void {
