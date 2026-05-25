@@ -186,6 +186,39 @@ while leaving the public CLI surface unchanged.
 }
 ```
 
+## Pi Shared CLI Auth Example
+
+By default the Pi SDK adapter uses isolated, in-memory auth and only sees provider
+credentials supplied through environment variables. Set `sdkOptions.authSource` to
+`"shared"` to reuse the Pi CLI's on-disk login (`auth.json`) instead, including OAuth
+logins such as `openai-codex`. This reads the same credentials the `pi` CLI uses and
+auto-refreshes OAuth tokens with file locking, without spawning the CLI.
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "pi-shared",
+      "engine": "pi",
+      "sdkOptions": {
+        "authSource": "shared"
+      }
+    }
+  ]
+}
+```
+
+`authSource` accepts `"isolated"` (default) or `"shared"`. With `"shared"` you may set an
+optional `sdkOptions.authPath` to point at a non-default `auth.json` (a leading `~` is
+expanded to the home directory); `authPath` is rejected unless `authSource` is `"shared"`.
+Environment-backed provider auth still composes on top of shared credentials.
+
+Note: `"shared"` reads real credentials and **writes to `auth.json` on disk**: the file (and
+its parent directory) is created empty if it does not yet exist, and the file is rewritten
+when an expired OAuth token is refreshed (the same behavior as the Pi CLI). This is the one
+way a review run touches state outside the repository; the default `"isolated"` mode never
+reads or writes `auth.json`.
+
 ## CLI Transport Example
 
 SDK-backed families can be configured to use a CLI transport.

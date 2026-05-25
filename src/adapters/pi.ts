@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import path from "node:path";
 import {
   buildStructuredReviewAdapterOutput,
   unwrapStructuredReview,
@@ -26,8 +28,10 @@ import type {
 
 const piPackageName = "@earendil-works/pi-coding-agent";
 const piThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const piAuthSources = ["isolated", "shared"] as const;
 
 type PiThinkingLevel = (typeof piThinkingLevels)[number];
+type PiAuthSource = (typeof piAuthSources)[number];
 
 type PiAdapterDependencies = {
   loadSdk: () => Promise<PiSdk>;
@@ -44,7 +48,11 @@ export function createPiAdapter(
     name: "pi",
     async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
       const sdk = await dependencies.loadSdk();
-      const { availableModels } = createPiRuntimeContext(sdk, input.env, input.reviewer);
+      const { availableModels, authOptions } = createPiRuntimeContext(
+        sdk,
+        input.env,
+        input.reviewer,
+      );
 
       if (!availableModels.length) {
         throw missingAuth("No authenticated Pi models are available for the Pi reviewer");
@@ -61,6 +69,7 @@ export function createPiAdapter(
         model: formatPiModel(selectedModel),
         ...piModelResolutionMetadata(input.reviewer, selectedModel),
         ...piProviderMetadata(input.reviewer),
+        ...piAuthMetadata(authOptions),
         ...piEffortMetadata(effort),
       });
 
@@ -74,7 +83,7 @@ export function createPiAdapter(
           {
             name: "auth",
             status: "passed",
-            detail: `${availableModels.length} Pi model(s) are available from environment-backed auth.`,
+            detail: piAuthCheckDetail(availableModels.length, authOptions),
           },
           {
             name: "model",
@@ -95,7 +104,7 @@ export function createPiAdapter(
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
       const sdk = await dependencies.loadSdk();
-      const { authStorage, modelRegistry, availableModels } = createPiRuntimeContext(
+      const { authStorage, modelRegistry, availableModels, authOptions } = createPiRuntimeContext(
         sdk,
         input.env,
         input.reviewer,
@@ -171,6 +180,7 @@ export function createPiAdapter(
         model: formatPiModel(selectedModel),
         ...piModelResolutionMetadata(input.reviewer, selectedModel),
         ...piProviderMetadata(input.reviewer),
+        ...piAuthMetadata(authOptions),
         ...piEffortMetadata(effort),
       });
 
@@ -190,6 +200,7 @@ export const piAdapter = createPiAdapter();
 
 type PiSdk = {
   AuthStorage: {
+    create?(authPath?: string): PiAuthStorage;
     inMemory(data?: Record<string, unknown>): PiAuthStorage;
   };
   ModelRegistry: {
@@ -287,10 +298,12 @@ function createPiRuntimeContext(
   authStorage: PiAuthStorage;
   modelRegistry: PiModelRegistry;
   availableModels: PiModel[];
+  authOptions: NormalizedPiAuthOptions;
 } {
   try {
     return withProcessEnvSync(env, () => {
-      const authStorage = sdk.AuthStorage.inMemory();
+      const authOptions = normalizePiAuthOptions(reviewer);
+      const authStorage = createPiAuthStorage(sdk, authOptions);
       const providerOptions = normalizePiProviderOptions(reviewer);
       const providerApiKey = materializeConfiguredProviderAuth(
         authStorage,
@@ -312,6 +325,7 @@ function createPiRuntimeContext(
         authStorage,
         modelRegistry,
         availableModels,
+        authOptions,
       };
     });
   } catch (error) {
@@ -416,6 +430,86 @@ function normalizePiProviderOptions(
     ...(baseUrlEnv !== undefined ? { baseUrlEnv } : {}),
     ...(providerProfile !== undefined ? { providerProfile } : {}),
   };
+}
+
+type NormalizedPiAuthOptions = {
+  source: PiAuthSource;
+  authPath?: string;
+};
+
+function normalizePiAuthOptions(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+): NormalizedPiAuthOptions {
+  const requestedSource = optionalStringOption(reviewer.sdkOptions, "authSource");
+  const authPath = optionalStringOption(reviewer.sdkOptions, "authPath");
+
+  if (requestedSource !== undefined && !isPiAuthSource(requestedSource)) {
+    throw invalidConfig(
+      `Pi authSource must be one of: ${piAuthSources.join(", ")} (got ${requestedSource})`,
+    );
+  }
+
+  const source: PiAuthSource = requestedSource ?? "isolated";
+
+  if (authPath !== undefined && source !== "shared") {
+    throw invalidConfig('Pi authPath requires sdkOptions.authSource "shared"');
+  }
+
+  return {
+    source,
+    ...(authPath !== undefined ? { authPath: expandHomePath(authPath) } : {}),
+  };
+}
+
+function createPiAuthStorage(sdk: PiSdk, authOptions: NormalizedPiAuthOptions): PiAuthStorage {
+  if (authOptions.source === "shared") {
+    if (sdk.AuthStorage.create === undefined) {
+      throw missingRequirement(
+        `${piPackageName} does not support shared CLI auth (AuthStorage.create); upgrade the package or use sdkOptions.authSource "isolated"`,
+      );
+    }
+    // AuthStorage.create touches disk: it reads auth.json and creates the file (and its
+    // parent dir) empty if absent, and rewrites it when refreshing an expired OAuth token.
+    // With no explicit authPath the SDK resolves the location from PI_CODING_AGENT_DIR/HOME,
+    // which it reads from process.env. This runs inside withProcessEnvSync, so the caller's
+    // env (full process.env for real runs) must carry those vars for the default path to
+    // match the Pi CLI's. An explicit (pre-expanded) authPath bypasses that resolution.
+    return sdk.AuthStorage.create(authOptions.authPath);
+  }
+
+  return sdk.AuthStorage.inMemory();
+}
+
+function piAuthMetadata(authOptions: NormalizedPiAuthOptions): Record<string, string> {
+  return {
+    authSource: authOptions.source,
+    ...(authOptions.authPath !== undefined ? { authPath: authOptions.authPath } : {}),
+  };
+}
+
+function piAuthCheckDetail(modelCount: number, authOptions: NormalizedPiAuthOptions): string {
+  if (authOptions.source === "shared") {
+    const location = authOptions.authPath ?? "default Pi CLI auth.json";
+    return `${modelCount} Pi model(s) are available from shared CLI auth (${location}).`;
+  }
+
+  return `${modelCount} Pi model(s) are available from environment-backed auth.`;
+}
+
+function isPiAuthSource(value: string): value is PiAuthSource {
+  return piAuthSources.some((source) => source === value);
+}
+
+function expandHomePath(filePath: string): string {
+  if (filePath === "~") {
+    return homedir();
+  }
+
+  if (filePath.startsWith("~/")) {
+    return path.join(homedir(), filePath.slice(2));
+  }
+
+  return filePath;
 }
 
 function optionalStringOption(

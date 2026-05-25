@@ -749,6 +749,7 @@ Findings:
 - Pi exposes `createAgentSession()` through `@earendil-works/pi-coding-agent`.
 - Model selection uses `getModel(...)` and `ModelRegistry`; `modelRegistry.find(...)` can include custom models, and `modelRegistry.getAvailable()` filters to models with valid credentials.
 - Auth resolution flows through `AuthStorage`: runtime overrides, stored `auth.json`, environment variables, then custom provider fallback.
+- `AuthStorage` offers `inMemory()` (isolated, env-only) and `create(authPath?)` (file-backed, reads the CLI's `auth.json`, auto-refreshes OAuth with file locking). The Pi adapter defaults to `inMemory()` and switches to `create(authPath?)` when a reviewer sets `sdkOptions.authSource: "shared"`, with optional `sdkOptions.authPath`. This shares the CLI login (including OAuth providers like `openai-codex`) without spawning the executable; the isolated default keeps tests credential-free.
 - Pi supports `thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`.
 - Pi computes supported thinking levels from model metadata. Non-reasoning models support only `off`; models with `thinkingLevelMap` can disable levels with `null` or map `xhigh` to provider-specific values such as `max`.
 - Pi exposes `clampThinkingLevel(model, level)`, which maps unsupported requested levels to the nearest supported level. `diffwarden` mirrors that behavior through the Pi adapter and records requested/effective effort values.

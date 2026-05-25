@@ -108,7 +108,7 @@ The adapter uses `@cursor/sdk`. That SDK currently depends on `sqlite3`, so
 Live smoke test:
 
 ```bash
-zsh -lic 'pnpm test:live:sdk'
+zsh -lic 'DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk'
 ```
 
 ## Claude SDK
@@ -161,7 +161,7 @@ Valid values are `auto`, `claude-code`, and `api-key`.
 Live smoke test:
 
 ```bash
-pnpm test:live:sdk
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk
 ```
 
 ## Pi SDK
@@ -174,6 +174,19 @@ The adapter loads `@earendil-works/pi-coding-agent`, checks environment-backed
 authenticated models, runs with a scoped model list, and captures structured output through
 a terminating `review_output` tool.
 
+By default the adapter builds an isolated, in-memory `AuthStorage` (`AuthStorage.inMemory()`)
+that only sees provider credentials from environment variables. Set
+`sdkOptions.authSource: "shared"` on the reviewer to use `AuthStorage.create(authPath?)`
+instead, which loads the Pi CLI's on-disk `auth.json` (including OAuth logins like
+`openai-codex`) and auto-refreshes OAuth tokens with file locking. This shares the CLI's
+credentials without spawning the `pi` executable, so it avoids macOS executable-trust
+prompts. `sdkOptions.authPath` overrides the default `auth.json` location (a leading `~` is
+expanded); it requires `authSource: "shared"`. Preflight and output metadata report the
+active `authSource` (and `authPath` when set). The default stays isolated to keep tests
+credential-free. Note that shared mode writes to `auth.json` on disk: it creates the file
+and its parent directory if absent, and rewrites the file when refreshing an expired OAuth
+token, so it is the one path where a review run mutates state outside the repository.
+
 The Pi path reports a tool-restricted read-only capability. It passes only `read`, `grep`,
 `find`, `ls`, and `review_output` as active tools, uses an extension-free resource loader,
 and keeps tests credential-free by default.
@@ -181,14 +194,14 @@ and keeps tests credential-free by default.
 Live smoke test:
 
 ```bash
-pnpm test:live:sdk
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk
 ```
 
 By default, the smoke test requests `anthropic/claude-sonnet-4-5`. Select another
 authenticated model with `PI_SMOKE_MODEL`.
 
 ```bash
-PI_SMOKE_MODEL=anthropic/claude-opus-4-5 pnpm test:live:sdk
+PI_SMOKE_MODEL=anthropic/claude-opus-4-5 DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk
 ```
 
 ## Droid
@@ -223,7 +236,7 @@ default review path.
 Live SDK smoke test:
 
 ```bash
-pnpm test:live:sdk
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk
 ```
 
 ## CLI Transports
@@ -278,7 +291,7 @@ INTEGRATION_DISABLE=cursor,claude,pi
 Restrict live CLI adapter tests to a subset with `DIFFWARDEN_LIVE_CLI`.
 
 ```bash
-DIFFWARDEN_LIVE_CLI=codex,claude,gemini pnpm test:live:cli
+DIFFWARDEN_LIVE_CLI=codex,claude,gemini DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:cli
 ```
 
 Override CLI executable paths with engine-specific variables when a binary is not on `PATH`.
@@ -293,12 +306,12 @@ DIFFWARDEN_LIVE_ANTIGRAVITY_EXECUTABLE=/Users/auro/.local/bin/agy
 Run built-binary e2e smoke tests against selected reviewers with:
 
 ```bash
-DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
 ```
 
 The e2e harness uses CLI transports through a temporary config file and honors the same
 per-reviewer live overrides as the CLI adapter harness:
 
 ```bash
-DIFFWARDEN_LIVE_E2E_REVIEWERS=droid DIFFWARDEN_LIVE_DROID_EFFORT=low pnpm test:live:e2e
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 DIFFWARDEN_LIVE_E2E_REVIEWERS=droid DIFFWARDEN_LIVE_DROID_EFFORT=low pnpm test:live:e2e
 ```
