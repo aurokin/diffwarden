@@ -43,8 +43,10 @@ Current SDK coverage:
 | Pi SDK | Reports the selected authenticated provider/model from Pi's model registry. | Reports the requested and clamped Pi thinking level. |
 | Droid SDK | Reads the effective spec-mode model from `session.initResult.settings`. | Reads the effective spec-mode reasoning effort from `session.initResult.settings`. |
 
-CLI transports may report requested values, but resolved model and effort support is
-best-effort until the underlying tools expose stable machine-readable runtime metadata.
+CLI transports report deterministic values that Diffwarden passes on the command line:
+`resolvedModel` is set only when a model override is passed, and `resolvedEffort` reflects
+the CLI-native effort value after public-effort mapping. CLI default models remain omitted
+until an executable exposes stable machine-readable runtime metadata.
 
 ## Cursor SDK
 
@@ -210,6 +212,13 @@ auth with Anthropic API credentials removed, then removes those credentials from
 
 Capability metadata is conservative. OpenCode, Grok, Antigravity, and Cursor CLI paths
 currently report prompt-only read-only behavior when hard enforcement is not proven.
+
+CLI model and effort metadata is deterministic rather than provider-observed. Diffwarden
+records requested and resolved fields for values it explicitly passes, including provider
+qualified model strings such as `openrouter/anthropic/claude-sonnet`. Effort mappings follow
+the invocation arguments: Claude maps `minimal` to `low` and `xhigh` to `max`; Droid and Grok
+map `minimal` to `low`; Codex, Pi, OpenCode, Gemini, and Cursor record exact requested values
+where those overrides are supported. Antigravity rejects model and effort overrides.
 
 ## Live Test Controls
 

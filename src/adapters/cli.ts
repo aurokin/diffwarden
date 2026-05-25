@@ -2,10 +2,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { invalidCli } from "../core/errors.js";
-import { cliCapability, cliExecutable } from "./cli-helpers.js";
+import {
+  claudeCliEffort,
+  cliCapability,
+  cliExecutable,
+  droidCliEffort,
+  grokCliEffort,
+  providerQualifiedModel,
+} from "./cli-helpers.js";
 import { resolveExecutable, runCli, trimForMetadata } from "./cli-process.js";
 import { cliSpecs } from "./cli-specs.js";
 import type { CliEngine } from "./cli-types.js";
+import {
+  type ResolutionSource,
+  effortResolutionMetadata,
+  modelResolutionMetadata,
+} from "./metadata.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -28,8 +40,7 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
         readonlyCapability: capability.readonlyCapability,
         transport: "cli",
         executable: resolvedExecutable,
-        ...(input.reviewer.model !== undefined ? { model: input.reviewer.model } : {}),
-        ...(input.reviewer.effort !== undefined ? { effort: input.reviewer.effort } : {}),
+        ...cliSelectionMetadata(engine, input.reviewer),
       };
 
       return {
@@ -78,6 +89,7 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
         const output = await spec.parseOutput(result, invocation);
         output.metadata = {
           ...output.metadata,
+          ...cliSelectionMetadata(engine, input.reviewer),
           transport: "cli",
           executable: result.executable,
           stderr: trimForMetadata(result.stderr),
@@ -98,6 +110,71 @@ function validateSupportedCliOverrides(engine: CliEngine, reviewer: ReviewReview
   if (!capability.supportsEffort && reviewer.effort !== undefined) {
     throw invalidCli(`${engine} CLI transport does not support per-run effort overrides`);
   }
+}
+
+function cliSelectionMetadata(
+  engine: CliEngine,
+  reviewer: ReviewReviewerConfig,
+): Record<string, string> {
+  const model = providerQualifiedModel(reviewer);
+  const effort = cliEffortResolution(engine, reviewer.effort);
+
+  return {
+    ...(reviewer.model !== undefined ? { model: reviewer.model } : {}),
+    ...(model !== undefined
+      ? modelResolutionMetadata({
+          requested: model,
+          resolved: model,
+          source: "requested",
+        })
+      : {}),
+    ...(reviewer.effort !== undefined ? { effort: reviewer.effort } : {}),
+    ...(effort !== undefined
+      ? effortResolutionMetadata({
+          requested: reviewer.effort,
+          resolved: effort.resolved,
+          source: effort.source,
+        })
+      : {}),
+  };
+}
+
+function cliEffortResolution(
+  engine: CliEngine,
+  effort: string | undefined,
+): { resolved?: string; source: ResolutionSource } | undefined {
+  if (effort === undefined) {
+    return undefined;
+  }
+
+  if (effort === "off" && cliOmitsOffEffort(engine)) {
+    return {
+      source: "adapter-selection",
+    };
+  }
+
+  const resolved = cliResolvedEffort(engine, effort);
+  return {
+    resolved,
+    source: resolved === effort ? "requested" : "adapter-selection",
+  };
+}
+
+function cliOmitsOffEffort(engine: CliEngine): boolean {
+  return ["claude", "codex", "droid", "grok", "opencode"].includes(engine);
+}
+
+function cliResolvedEffort(engine: CliEngine, effort: string): string {
+  if (engine === "claude") {
+    return effort === "off" ? "off" : claudeCliEffort(effort);
+  }
+  if (engine === "droid") {
+    return effort === "off" ? "off" : droidCliEffort(effort);
+  }
+  if (engine === "grok") {
+    return effort === "off" ? "off" : grokCliEffort(effort);
+  }
+  return effort;
 }
 
 function readonlyDetail(

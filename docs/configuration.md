@@ -129,10 +129,12 @@ when the adapter provides them. Adapter and executable version data are therefor
 SDK adapters record SDK/version details where they already discover them, while CLI adapters do
 not run extra `--version` probes solely for reporting.
 
-SDK adapter metadata may include `requestedModel`, `resolvedModel`,
-`modelResolutionSource`, `requestedEffort`, `resolvedEffort`, and
-`effortResolutionSource`. These fields preserve the requested config/CLI value separately from
-the runtime value Diffwarden can prove was selected.
+Adapter metadata may include `requestedModel`, `resolvedModel`, `modelResolutionSource`,
+`requestedEffort`, `resolvedEffort`, and `effortResolutionSource`. These fields preserve the
+requested config/CLI value separately from the value Diffwarden can prove was selected. SDK
+adapters prefer provider-observed values where available. CLI adapters report deterministic
+values that Diffwarden passes on the command line and omit default model resolution when the
+executable does not expose a stable machine-readable runtime value.
 
 Privacy mode affects review content, not run provenance. `full` reports include the full
 `ReviewArtifact`, which can contain source-adjacent review text. `metadata` reports omit the

@@ -20,7 +20,10 @@ describe("createCliAdapter", () => {
   it("runs Codex CLI through a read-only exec invocation and reads the structured output file", async () => {
     const harness = createHarness("codex");
     const adapter = createCliAdapter("codex");
-    const reviewer = createReviewer("codex", harness.executable);
+    const reviewer = createReviewer("codex", harness.executable, {
+      model: "gpt-test",
+      effort: "high",
+    });
 
     const preflight = await adapter.preflight?.({
       cwd: harness.cwd,
@@ -32,11 +35,34 @@ describe("createCliAdapter", () => {
     const invocation = harness.readInvocation();
 
     expect(preflight?.metadata?.readonlyCapability).toBe("enforced");
+    expect(preflight?.metadata).toMatchObject({
+      model: "gpt-test",
+      requestedModel: "gpt-test",
+      resolvedModel: "gpt-test",
+      modelResolutionSource: "requested",
+      effort: "high",
+      requestedEffort: "high",
+      resolvedEffort: "high",
+      effortResolutionSource: "requested",
+    });
     expect(output.structured).toMatchObject({
       overall_correctness: "patch is correct",
       overall_explanation: "codex ok",
     });
-    expect(output.metadata?.captureMode).toBe("native-structured");
+    expect(output.metadata).toMatchObject({
+      captureMode: "native-structured",
+      model: "gpt-test",
+      requestedModel: "gpt-test",
+      resolvedModel: "gpt-test",
+      modelResolutionSource: "requested",
+      effort: "high",
+      requestedEffort: "high",
+      resolvedEffort: "high",
+      effortResolutionSource: "requested",
+    });
+    expect(invocation.args).toContain("--model");
+    expect(invocation.args).toContain("gpt-test");
+    expect(invocation.args).toContain('model_reasoning_effort="high"');
     expect(invocation.args).toContain("exec");
     expect(invocation.args).toContain("--sandbox");
     expect(invocation.args).toContain("read-only");
@@ -69,6 +95,14 @@ describe("createCliAdapter", () => {
     const invocation = harness.readInvocation();
 
     expect(preflight?.metadata?.readonlyCapability).toBe(readonlyCapability);
+    if (engine !== "antigravity") {
+      expect(preflight?.metadata).toMatchObject({
+        model: "test-model",
+        requestedModel: "test-model",
+        resolvedModel: "test-model",
+        modelResolutionSource: "requested",
+      });
+    }
     if (engine === "claude") {
       expect(output.structured).toMatchObject({
         overall_explanation: "claude ok",
@@ -85,6 +119,12 @@ describe("createCliAdapter", () => {
     }
     if (engine !== "antigravity") {
       expect(invocation.args.join(" ")).toContain("test-model");
+      expect(output.metadata).toMatchObject({
+        model: "test-model",
+        requestedModel: "test-model",
+        resolvedModel: "test-model",
+        modelResolutionSource: "requested",
+      });
     }
     if (engine === "droid") {
       expect(invocation.args).toContain("exec");
@@ -181,6 +221,16 @@ describe("createCliAdapter", () => {
 
       expect(output.text).toBe(`${engine} first\n${engine} second`);
       expect(output.metadata?.readonlyCapability).toBe(readonlyCapability);
+      expect(output.metadata).toMatchObject({
+        model: "model",
+        requestedModel: "provider/model",
+        resolvedModel: "provider/model",
+        modelResolutionSource: "requested",
+        effort: "high",
+        requestedEffort: "high",
+        resolvedEffort: "high",
+        effortResolutionSource: "requested",
+      });
       expect(invocation.args.join(" ")).toContain("provider/model");
       if (engine === "opencode") {
         expect(invocation.args).toContain("--pure");
@@ -336,9 +386,15 @@ describe("createCliAdapter", () => {
       model: "anthropic/claude-sonnet",
     });
 
-    await adapter.run(createInput(reviewer, harness));
+    const output = await adapter.run(createInput(reviewer, harness));
 
     expect(harness.readInvocation().args).toContain("openrouter/anthropic/claude-sonnet");
+    expect(output.metadata).toMatchObject({
+      model: "anthropic/claude-sonnet",
+      requestedModel: "openrouter/anthropic/claude-sonnet",
+      resolvedModel: "openrouter/anthropic/claude-sonnet",
+      modelResolutionSource: "requested",
+    });
   });
 
   it("maps public effort values to Claude CLI native effort values", async () => {
@@ -346,13 +402,19 @@ describe("createCliAdapter", () => {
     const adapter = createCliAdapter("claude");
     const reviewer = createReviewer("claude", harness.executable, { effort: "minimal" });
 
-    await adapter.run(createInput(reviewer, harness));
+    const output = await adapter.run(createInput(reviewer, harness));
 
     const args = harness.readInvocation().args;
     expect(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2)).toEqual([
       "--effort",
       "low",
     ]);
+    expect(output.metadata).toMatchObject({
+      effort: "minimal",
+      requestedEffort: "minimal",
+      resolvedEffort: "low",
+      effortResolutionSource: "adapter-selection",
+    });
   });
 
   it("maps public effort values to Droid CLI native effort values", async () => {
@@ -360,7 +422,7 @@ describe("createCliAdapter", () => {
     const adapter = createCliAdapter("droid");
     const reviewer = createReviewer("droid", harness.executable, { effort: "minimal" });
 
-    await adapter.run(createInput(reviewer, harness));
+    const output = await adapter.run(createInput(reviewer, harness));
 
     const args = harness.readInvocation().args;
     expect(
@@ -369,6 +431,73 @@ describe("createCliAdapter", () => {
         args.indexOf("--spec-reasoning-effort") + 2,
       ),
     ).toEqual(["--spec-reasoning-effort", "low"]);
+    expect(output.metadata).toMatchObject({
+      effort: "minimal",
+      requestedEffort: "minimal",
+      resolvedEffort: "low",
+      effortResolutionSource: "adapter-selection",
+    });
+  });
+
+  it("maps public effort values to Grok CLI native effort values", async () => {
+    const harness = createHarness("grok");
+    const adapter = createCliAdapter("grok");
+    const reviewer = createReviewer("grok", harness.executable, { effort: "minimal" });
+
+    const output = await adapter.run(createInput(reviewer, harness));
+
+    const args = harness.readInvocation().args;
+    expect(
+      args.slice(args.indexOf("--reasoning-effort"), args.indexOf("--reasoning-effort") + 2),
+    ).toEqual(["--reasoning-effort", "low"]);
+    expect(output.metadata).toMatchObject({
+      effort: "minimal",
+      requestedEffort: "minimal",
+      resolvedEffort: "low",
+      effortResolutionSource: "adapter-selection",
+    });
+  });
+
+  it.each([
+    ["codex", "model_reasoning_effort"],
+    ["claude", "--effort"],
+    ["droid", "--spec-reasoning-effort"],
+    ["grok", "--reasoning-effort"],
+    ["opencode", "--variant"],
+  ] as const)("does not report omitted %s off effort as resolved", async (engine, omittedArg) => {
+    const harness = createHarness(engine);
+    const adapter = createCliAdapter(engine);
+    const reviewer = createReviewer(engine, harness.executable, { effort: "off" });
+
+    const output = await adapter.run(createInput(reviewer, harness));
+
+    expect(harness.readInvocation().args.join(" ")).not.toContain(omittedArg);
+    expect(output.metadata).toMatchObject({
+      effort: "off",
+      requestedEffort: "off",
+      effortResolutionSource: "adapter-selection",
+    });
+    expect(output.metadata).not.toHaveProperty("resolvedEffort");
+  });
+
+  it("reports Pi off effort as resolved because it is passed to the CLI", async () => {
+    const harness = createHarness("pi");
+    const adapter = createCliAdapter("pi");
+    const reviewer = createReviewer("pi", harness.executable, { effort: "off" });
+
+    const output = await adapter.run(createInput(reviewer, harness));
+
+    const args = harness.readInvocation().args;
+    expect(args.slice(args.indexOf("--thinking"), args.indexOf("--thinking") + 2)).toEqual([
+      "--thinking",
+      "off",
+    ]);
+    expect(output.metadata).toMatchObject({
+      effort: "off",
+      requestedEffort: "off",
+      resolvedEffort: "off",
+      effortResolutionSource: "requested",
+    });
   });
 
   it("rejects oversized Cursor prompts before spawning", async () => {
