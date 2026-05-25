@@ -2,26 +2,16 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["test/**/*.test.ts"],
-    exclude: [
-      "test/e2e/**/*.test.ts",
-      "test/live/**/*.test.ts",
+    include: [
       "test/adapter-contract.test.ts",
       "test/claude-adapter.test.ts",
       "test/cli-adapter.test.ts",
       "test/codex-app-server-adapter.test.ts",
-      "test/git.test.ts",
     ],
     fileParallelism: false,
     minWorkers: 1,
     maxWorkers: 1,
     testTimeout: 30_000,
-    coverage: {
-      provider: "v8",
-      reporter: ["text", "json-summary", "html"],
-      reportsDirectory: "coverage",
-      include: ["src/**/*.ts"],
-    },
     globals: true,
   },
 });

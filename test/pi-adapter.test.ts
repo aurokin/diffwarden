@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPiAdapter, piAdapter } from "../src/adapters/pi.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
@@ -61,6 +63,221 @@ describe("piAdapter", () => {
       model: "test/test-model",
       resolvedModel: "test/test-model",
       modelResolutionSource: "adapter-selection",
+    });
+  });
+
+  it("defaults to isolated in-memory auth storage", async () => {
+    const { adapter, calls } = createMockPiAdapter([{ provider: "test", id: "test-model" }]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: { id: "pi", sdk: "pi", readonly: true },
+      readonly: true,
+      env: {},
+    });
+
+    expect(calls.authStorageMode).toBe("inMemory");
+    expect(preflight?.metadata).toMatchObject({ authSource: "isolated" });
+    expect(preflight?.metadata).not.toHaveProperty("authPath");
+    expect(preflight?.checks.find((check) => check.name === "auth")?.detail).toContain(
+      "environment-backed auth",
+    );
+  });
+
+  it("uses shared CLI auth storage when authSource is shared", async () => {
+    const { adapter, calls } = createMockPiAdapter([{ provider: "openai-codex", id: "gpt-test" }]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "pi",
+        sdk: "pi",
+        readonly: true,
+        sdkOptions: { authSource: "shared" },
+      },
+      readonly: true,
+      env: {},
+    });
+
+    expect(calls.authStorageMode).toBe("create");
+    expect(calls.authStoragePath).toBeUndefined();
+    expect(preflight?.metadata).toMatchObject({ authSource: "shared" });
+    expect(preflight?.checks.find((check) => check.name === "auth")?.detail).toContain(
+      "shared CLI auth",
+    );
+  });
+
+  it("expands a leading ~ in the shared authPath and reports it", async () => {
+    const { adapter, calls } = createMockPiAdapter([{ provider: "openai-codex", id: "gpt-test" }]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "pi",
+        sdk: "pi",
+        readonly: true,
+        sdkOptions: { authSource: "shared", authPath: "~/.pi/agent/auth.json" },
+      },
+      readonly: true,
+      env: {},
+    });
+
+    const expectedPath = path.join(homedir(), ".pi/agent/auth.json");
+    expect(calls.authStorageMode).toBe("create");
+    expect(calls.authStoragePath).toBe(expectedPath);
+    expect(preflight?.metadata).toMatchObject({
+      authSource: "shared",
+      authPath: expectedPath,
+    });
+    expect(preflight?.checks.find((check) => check.name === "auth")?.detail).toContain(
+      expectedPath,
+    );
+  });
+
+  it("expands a bare ~ in the shared authPath to the home directory", async () => {
+    const { adapter, calls } = createMockPiAdapter([{ provider: "openai-codex", id: "gpt-test" }]);
+
+    await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "pi",
+        sdk: "pi",
+        readonly: true,
+        sdkOptions: { authSource: "shared", authPath: "~" },
+      },
+      readonly: true,
+      env: {},
+    });
+
+    expect(calls.authStoragePath).toBe(homedir());
+  });
+
+  it("passes a non-tilde shared authPath through verbatim", async () => {
+    const { adapter, calls } = createMockPiAdapter([{ provider: "openai-codex", id: "gpt-test" }]);
+
+    await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "pi",
+        sdk: "pi",
+        readonly: true,
+        sdkOptions: { authSource: "shared", authPath: "/tmp/custom/auth.json" },
+      },
+      readonly: true,
+      env: {},
+    });
+
+    expect(calls.authStoragePath).toBe("/tmp/custom/auth.json");
+  });
+
+  it("uses shared CLI auth storage on the run path and reports it in output metadata", async () => {
+    const { adapter, calls } = createMockPiAdapter([{ provider: "openai-codex", id: "gpt-test" }], {
+      async prompt({ tool }) {
+        await tool.execute("tool-call-1", validReview());
+      },
+    });
+
+    const output = await adapter.run(
+      input({
+        reviewer: {
+          id: "pi",
+          sdk: "pi",
+          readonly: true,
+          sdkOptions: { authSource: "shared" },
+        },
+      }),
+    );
+
+    expect(output.structured).toEqual(validReview());
+    expect(calls.authStorageMode).toBe("create");
+    expect(output.metadata).toMatchObject({ authSource: "shared" });
+  });
+
+  it("rejects an unknown authSource", async () => {
+    const { adapter } = createMockPiAdapter([{ provider: "test", id: "test-model" }]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "pi",
+          sdk: "pi",
+          readonly: true,
+          sdkOptions: { authSource: "wat" },
+        },
+        readonly: true,
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+      message: "Pi authSource must be one of: isolated, shared (got wat)",
+    });
+  });
+
+  it("rejects authPath without shared auth source", async () => {
+    const { adapter } = createMockPiAdapter([{ provider: "test", id: "test-model" }]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "pi",
+          sdk: "pi",
+          readonly: true,
+          sdkOptions: { authPath: "/tmp/auth.json" },
+        },
+        readonly: true,
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+      message: 'Pi authPath requires sdkOptions.authSource "shared"',
+    });
+  });
+
+  it("fails clearly when the Pi SDK cannot load shared CLI auth", async () => {
+    const adapter = createPiAdapter({
+      async loadSdk() {
+        return {
+          AuthStorage: {
+            inMemory() {
+              throw new Error("unexpected inMemory call");
+            },
+          },
+          ModelRegistry: {
+            inMemory() {
+              throw new Error("unexpected model registry call");
+            },
+          },
+          SessionManager: {
+            inMemory(cwd?: string) {
+              return { cwd };
+            },
+          },
+          async createAgentSession() {
+            throw new Error("unexpected session call");
+          },
+        };
+      },
+    });
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "pi",
+          sdk: "pi",
+          readonly: true,
+          sdkOptions: { authSource: "shared" },
+        },
+        readonly: true,
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      exitCode: 3,
     });
   });
 
@@ -685,6 +902,8 @@ function createMockPiAdapter(
       providerName: string;
       config: { baseUrl?: string; apiKey?: string };
     }>;
+    authStorageMode?: "create" | "inMemory";
+    authStoragePath?: string | undefined;
     authStorage: MockPiAuthStorage;
     modelRegistry: MockPiModelRegistry;
   } = {
@@ -709,7 +928,13 @@ function createMockPiAdapter(
     async loadSdk() {
       return {
         AuthStorage: {
+          create(authPath?: string) {
+            calls.authStorageMode = "create";
+            calls.authStoragePath = authPath;
+            return calls.authStorage;
+          },
           inMemory() {
+            calls.authStorageMode = "inMemory";
             return calls.authStorage;
           },
         },

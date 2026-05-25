@@ -10,8 +10,13 @@
 | Task | Command |
 | --- | --- |
 | Run default gate | `pnpm check` |
-| Run tests | `pnpm test` |
-| Run one test file | `pnpm vitest run path/to/file.test.ts` |
+| Run low-churn unit tests | `pnpm test` |
+| Run process-heavy tests | `pnpm test:process` |
+| Run real git tests | `pnpm test:git` |
+| Run full non-live tests | `pnpm test:full` |
+| Run one unit test file | `pnpm vitest run --config vitest.unit.config.ts path/to/file.test.ts` |
+| Run one process test file | `pnpm vitest run --config vitest.process.config.ts path/to/file.test.ts` |
+| Run one git test file | `pnpm vitest run --config vitest.git.config.ts path/to/file.test.ts` |
 | Typecheck | `pnpm typecheck` |
 | Lint | `pnpm lint` |
 | Build | `pnpm build` |
@@ -39,7 +44,8 @@
 - Adapters only run their engine and return text or structured output.
 - Prefer read-only behavior by default.
 - Keep tests credential-free by default.
-- Live SDK smoke tests must be opt-in through environment variables.
+- Live SDK smoke tests must be opt-in through environment variables, including `DIFFWARDEN_ALLOW_MODEL_SPEND=1`.
+- Keep the default test loop low-churn. Use `test:process`, `test:git`, `test:e2e`, and `test:live` only when the change needs those heavier paths.
 - Do not copy large chunks of upstream SDK docs into this repo.
 - Put version-sensitive SDK discoveries near the adapter code that depends on them.
 - If vendoring a prompt, schema, or fixture from upstream, include attribution and the upstream commit/package version.

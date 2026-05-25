@@ -2,12 +2,11 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["test/live/**/*.test.ts", "test/*-adapter.test.ts"],
+    include: ["test/git.test.ts"],
     fileParallelism: false,
     minWorkers: 1,
     maxWorkers: 1,
-    testTimeout: 120_000,
-    setupFiles: ["test/live/spend-guard.setup.ts"],
+    testTimeout: 30_000,
     globals: true,
   },
 });
