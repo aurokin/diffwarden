@@ -25,6 +25,27 @@ CLI-only reviewers use `transport: "cli"` automatically:
 
 SDK-backed families can also opt into CLI transport through config.
 
+## Model And Effort Metadata
+
+Adapters keep the legacy `model` and `effort` metadata fields and also report explicit
+resolution fields when the runtime exposes enough information:
+
+- `requestedModel` / `requestedEffort`: the value from config or CLI flags.
+- `resolvedModel` / `resolvedEffort`: the effective value Diffwarden can prove was selected.
+- `modelResolutionSource` / `effortResolutionSource`: where that resolution came from.
+
+Current SDK coverage:
+
+| Adapter | Model resolution | Effort resolution |
+| --- | --- | --- |
+| Cursor SDK | Preflight resolves aliases through `Cursor.models.list`; run output prefers the SDK result model. | Requested effort is reported as unsupported because the SDK path does not expose an effort control. |
+| Claude SDK | Reports the model Diffwarden passes to the SDK, using `sonnet` when no override is configured. | Maps public effort values to Claude native effort or disabled thinking. |
+| Pi SDK | Reports the selected authenticated provider/model from Pi's model registry. | Reports the requested and clamped Pi thinking level. |
+| Droid SDK | Reads the effective spec-mode model from `session.initResult.settings`. | Reads the effective spec-mode reasoning effort from `session.initResult.settings`. |
+
+CLI transports may report requested values, but resolved model and effort support is
+best-effort until the underlying tools expose stable machine-readable runtime metadata.
+
 ## Cursor SDK
 
 ```bash
@@ -111,11 +132,12 @@ surface, uses read-only spec mode by default, and keeps Diffwarden on the same r
 as the installed Droid CLI.
 
 The Droid SDK adapter remains available through `--reviewer droid` or configured native
-profiles. It uses `@factory/droid-sdk`, requests native JSON Schema output, and runs in
-Droid's spec interaction mode for read-only review behavior. Treat this path as
+profiles. It uses `@factory/droid-sdk`, creates a session, reads resolved model and effort
+settings from the session init result, streams a prompt with native JSON Schema output, and
+runs in Droid's spec interaction mode for read-only review behavior. Treat this path as
 experimental if Factory UI session history matters, because SDK runs still appear in Droid
-session history and may be grouped differently from CLI-created Droid Computer sessions.
-Set `FACTORY_API_KEY` or use local Droid auth supported by the installed CLI.
+session history and may be grouped differently from CLI-created Droid Computer sessions. Set
+`FACTORY_API_KEY` or use local Droid auth supported by the installed CLI.
 
 Set `sdkOptions.machineId` on a Droid reviewer to target a specific Droid Computer. For live
 SDK smoke tests, set `DIFFWARDEN_LIVE_DROID_MACHINE_ID` to the ID from

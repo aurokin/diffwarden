@@ -10,7 +10,12 @@ import {
   reviewerFailed,
 } from "../core/errors.js";
 import { type ReviewResult, reviewResultJsonSchema } from "../core/schema.js";
-import { sdkOutputMetadata, sdkPreflightMetadata } from "./metadata.js";
+import {
+  effortResolutionMetadata,
+  modelResolutionMetadata,
+  sdkOutputMetadata,
+  sdkPreflightMetadata,
+} from "./metadata.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -54,6 +59,7 @@ export function createPiAdapter(
       const metadata: ReviewAdapterPreflightResult["metadata"] = sdkPreflightMetadata("pi", {
         availableModelCount: availableModels.length,
         model: formatPiModel(selectedModel),
+        ...piModelResolutionMetadata(input.reviewer, selectedModel),
         ...piProviderMetadata(input.reviewer),
         ...piEffortMetadata(effort),
       });
@@ -162,6 +168,8 @@ export function createPiAdapter(
 
       const metadata: ReviewAdapterOutput["metadata"] = sdkOutputMetadata("pi", {
         availableModelCount: availableModels.length,
+        model: formatPiModel(selectedModel),
+        ...piModelResolutionMetadata(input.reviewer, selectedModel),
         ...piProviderMetadata(input.reviewer),
         ...piEffortMetadata(effort),
       });
@@ -506,6 +514,17 @@ function piProviderMetadata(
   };
 }
 
+function piModelResolutionMetadata(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+  selectedModel: PiModel,
+): Record<string, string> {
+  return modelResolutionMetadata({
+    requested: reviewer.model,
+    resolved: formatPiModel(selectedModel),
+    source: reviewer.model === undefined ? "adapter-selection" : "requested",
+  });
+}
+
 function resolvePiEffort(
   model: PiModel,
   requestedEffort: string | undefined,
@@ -539,7 +558,11 @@ function piEffortMetadata(effort: {
 
   return {
     effort: effort.effective ?? effort.requested,
-    requestedEffort: effort.requested,
+    ...effortResolutionMetadata({
+      requested: effort.requested,
+      resolved: effort.effective ?? effort.requested,
+      source: "adapter-selection",
+    }),
     ...(effort.effective !== undefined ? { effectiveEffort: effort.effective } : {}),
     ...(effort.supported !== undefined ? { supportedEfforts: effort.supported } : {}),
   };

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { reviewerSdkValues } from "../src/adapters/capabilities.js";
-import { sdkOutputMetadata, sdkPreflightMetadata } from "../src/adapters/metadata.js";
+import {
+  effortResolutionMetadata,
+  modelResolutionMetadata,
+  sdkOutputMetadata,
+  sdkPreflightMetadata,
+} from "../src/adapters/metadata.js";
 
 describe("SDK adapter metadata", () => {
   it("derives preflight metadata defaults from SDK capability facts", () => {
@@ -41,6 +46,32 @@ describe("SDK adapter metadata", () => {
       captureMode: "text",
       readonlyCapability: "enforced",
       fallbackReason: "retry_limit",
+    });
+  });
+
+  it("normalizes requested and resolved model and effort metadata", () => {
+    expect(
+      modelResolutionMetadata({
+        requested: "alias",
+        resolved: "canonical",
+        source: "adapter-selection",
+      }),
+    ).toEqual({
+      requestedModel: "alias",
+      resolvedModel: "canonical",
+      modelResolutionSource: "adapter-selection",
+    });
+
+    expect(
+      effortResolutionMetadata({
+        requested: "xhigh",
+        resolved: "max",
+        source: "requested",
+      }),
+    ).toEqual({
+      requestedEffort: "xhigh",
+      resolvedEffort: "max",
+      effortResolutionSource: "requested",
     });
   });
 

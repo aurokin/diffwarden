@@ -65,6 +65,9 @@ describe("cursorAdapter", () => {
       model: "composer-latest",
       canonicalModel: "composer-2.5",
       modelAlias: "composer-latest",
+      requestedModel: "composer-latest",
+      resolvedModel: "composer-2.5",
+      modelResolutionSource: "adapter-selection",
     });
   });
 
@@ -228,10 +231,16 @@ describe("cursorAdapter", () => {
 
     expect(preflight?.metadata).toMatchObject({
       requestedEffort: "high",
+      effortResolutionSource: "unsupported",
       effort: "ignored",
     });
     expect(output.metadata).toMatchObject({
+      model: "composer-2.5",
+      requestedModel: "composer-2.5",
+      resolvedModel: "composer-2.5",
+      modelResolutionSource: "provider-result",
       requestedEffort: "high",
+      effortResolutionSource: "unsupported",
       effort: "ignored",
     });
   });
@@ -275,6 +284,8 @@ type MockCursorRun = {
   wait(): Promise<{
     status: string;
     result: string;
+    model?: string;
+    durationMs?: number;
   }>;
 };
 

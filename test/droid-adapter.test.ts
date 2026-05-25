@@ -1,4 +1,4 @@
-import type { DroidResult } from "@factory/droid-sdk";
+import type { DroidResultMessage } from "@factory/droid-sdk";
 import { describe, expect, it } from "vitest";
 import { createDroidAdapter, droidAdapter } from "../src/adapters/droid.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
@@ -139,21 +139,25 @@ describe("droidAdapter", () => {
       transport: "sdk",
       executable: "droid",
       model: "claude-test",
+      requestedModel: "claude-test",
+      resolvedModel: "claude-test",
+      modelResolutionSource: "provider-init",
       effort: "xhigh",
+      requestedEffort: "xhigh",
+      resolvedEffort: "xhigh",
+      effortResolutionSource: "provider-init",
       sessionId: "session-1",
       durationMs: 123,
       turnCount: 1,
     });
     expect(calls).toContainEqual({
-      prompt: "review prompt",
-      options: expect.objectContaining({
+      createSessionOptions: expect.objectContaining({
         cwd: "/repo",
         execPath: "droid",
         specModeModelId: "claude-test",
         specModeReasoningEffort: "xhigh",
         interactionMode: "spec",
         autonomyLevel: "off",
-        outputFormat: expect.objectContaining({ type: "json_schema" }),
         tags: [
           {
             name: "diffwarden",
@@ -166,6 +170,13 @@ describe("droidAdapter", () => {
         ],
       }),
     });
+    expect(calls).toContainEqual({
+      streamPrompt: "review prompt",
+      options: expect.objectContaining({
+        outputFormat: expect.objectContaining({ type: "json_schema" }),
+      }),
+    });
+    expect(calls).toContainEqual({ close: "session-1" });
   });
 
   it("passes configured Droid machine IDs to SDK runs", async () => {
@@ -180,8 +191,7 @@ describe("droidAdapter", () => {
 
     expect(output.metadata).toMatchObject({ machineId: "machine-456" });
     expect(calls).toContainEqual({
-      prompt: "review prompt",
-      options: expect.objectContaining({
+      createSessionOptions: expect.objectContaining({
         machineId: "machine-456",
       }),
     });
@@ -237,7 +247,7 @@ describe("droidAdapter", () => {
       loadSdk: async () =>
         mockDroidSdk([], {
           success: false,
-          error: { message: "model failed" } as DroidResult["error"],
+          error: { message: "model failed" } as DroidResultMessage["error"],
         }),
       checkExecutable: async (executable) => executable,
     });
@@ -324,38 +334,67 @@ function createInput(reviewer: ReviewReviewerConfig) {
 function mockDroidSdk(
   calls: unknown[],
   overrides: Partial<MockDroidResult> = {},
-  runOverride?: () => never,
+  createSessionOverride?: () => never,
 ) {
   return {
     SDK_VERSION: "0.3.0-test",
     OutputFormatType: { JsonSchema: "json_schema" },
     DroidInteractionMode: { Spec: "spec" },
     AutonomyLevel: { Off: "off" },
-    async run(prompt: string, options: unknown) {
-      calls.push({ prompt, options });
-      runOverride?.();
+    DroidMessageType: { Result: "result" },
+    async createSession(options: unknown) {
+      calls.push({ createSessionOptions: options });
+      createSessionOverride?.();
+      const sessionOptions = options as {
+        specModeModelId?: string;
+        specModeReasoningEffort?: string;
+      };
       return {
         sessionId: "session-1",
-        text: "droid ok",
-        messages: [],
-        tokenUsage: { inputTokens: 10 },
-        durationMs: 123,
-        turnCount: 1,
-        error: null,
-        structuredOutput: {
-          findings: [],
-          overall_correctness: "patch is correct",
-          overall_explanation: "droid ok",
-          overall_confidence_score: 1,
+        initResult: {
+          settings: {
+            modelId: "droid-default-model",
+            reasoningEffort: "medium",
+            ...(sessionOptions.specModeModelId !== undefined
+              ? { specModeModelId: sessionOptions.specModeModelId }
+              : {}),
+            ...(sessionOptions.specModeReasoningEffort !== undefined
+              ? { specModeReasoningEffort: sessionOptions.specModeReasoningEffort }
+              : {}),
+          },
         },
-        success: true,
-        ...overrides,
+        async *stream(prompt: string, streamOptions: unknown) {
+          calls.push({ streamPrompt: prompt, options: streamOptions });
+          yield {
+            type: "result",
+            subtype: "success",
+            isError: false,
+            sessionId: "session-1",
+            text: "droid ok",
+            messages: [],
+            tokenUsage: { inputTokens: 10 },
+            durationMs: 123,
+            turnCount: 1,
+            error: null,
+            structuredOutput: {
+              findings: [],
+              overall_correctness: "patch is correct",
+              overall_explanation: "droid ok",
+              overall_confidence_score: 1,
+            },
+            success: true,
+            ...overrides,
+          };
+        },
+        async close() {
+          calls.push({ close: "session-1" });
+        },
       };
     },
   } as typeof import("@factory/droid-sdk");
 }
 
-type MockDroidResult = DroidResult;
+type MockDroidResult = DroidResultMessage;
 
 function optionalString<K extends "model" | "effort">(
   key: K,

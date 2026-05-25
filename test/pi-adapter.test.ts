@@ -58,6 +58,9 @@ describe("piAdapter", () => {
       readonlyCapability: "tool-restricted",
       preferredCaptureMode: "tool-call",
       availableModelCount: 1,
+      model: "test/test-model",
+      resolvedModel: "test/test-model",
+      modelResolutionSource: "adapter-selection",
     });
   });
 
@@ -180,6 +183,9 @@ describe("piAdapter", () => {
       captureMode: "tool-call",
       readonlyCapability: "tool-restricted",
       availableModelCount: 1,
+      model: "test/test-model",
+      resolvedModel: "test/test-model",
+      modelResolutionSource: "adapter-selection",
     });
     expect(calls.createAgentSession).toHaveLength(1);
     expect(calls.createAgentSession[0]).toMatchObject({
@@ -287,6 +293,12 @@ describe("piAdapter", () => {
     );
 
     expect(output.structured).toEqual(validReview());
+    expect(output.metadata).toMatchObject({
+      model: "anthropic/claude-test",
+      requestedModel: "anthropic/claude-test",
+      resolvedModel: "anthropic/claude-test",
+      modelResolutionSource: "requested",
+    });
     expect(calls.createAgentSession[0]).toMatchObject({
       model: requestedModel,
       scopedModels: [{ model: fallbackModel }, { model: requestedModel }],
@@ -506,6 +518,8 @@ describe("piAdapter", () => {
     });
     expect(output.metadata).toMatchObject({
       requestedEffort: "minimal",
+      resolvedEffort: "low",
+      effortResolutionSource: "adapter-selection",
       effectiveEffort: "low",
       effort: "low",
       supportedEfforts: ["off", "low", "medium", "high", "xhigh"],

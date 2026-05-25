@@ -1,6 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { OutputFormat, ReasoningEffort, RunOptions } from "@factory/droid-sdk";
+import type {
+  CreateSessionOptions,
+  DroidResultMessage,
+  OutputFormat,
+  ReasoningEffort,
+  SessionSettings,
+} from "@factory/droid-sdk";
 import { normalizeStructuredOrTextAdapterOutput } from "../core/adapter-output.js";
 import {
   DiffwardenError,
@@ -10,7 +16,12 @@ import {
 } from "../core/errors.js";
 import { reviewResultJsonSchema } from "../core/schema.js";
 import { droidSessionTag } from "./droid-session.js";
-import { sdkOutputMetadata, sdkPreflightMetadata } from "./metadata.js";
+import {
+  effortResolutionMetadata,
+  modelResolutionMetadata,
+  sdkOutputMetadata,
+  sdkPreflightMetadata,
+} from "./metadata.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -119,24 +130,43 @@ export function createDroidAdapter(
       const executable = droidExecutable(input.reviewer);
       const effort = droidEffort(input.reviewer.effort);
       const machineId = droidMachineId(input.reviewer);
+      let resolvedSettings: ResolvedDroidSettings | undefined;
 
       try {
-        const result = await sdk.run(input.prompt, {
+        const session = await sdk.createSession({
           cwd: input.cwd,
           ...(machineId !== undefined ? { machineId } : {}),
           execPath: executable,
           interactionMode: sdk.DroidInteractionMode.Spec,
           autonomyLevel: sdk.AutonomyLevel.Off,
-          outputFormat: {
-            type: sdk.OutputFormatType.JsonSchema,
-            schema: reviewResultJsonSchema as Record<string, unknown>,
-          } as OutputFormat,
           tags: [droidSessionTag(input, "sdk")],
           ...(input.env !== undefined ? { env: stringEnv(droidProcessEnv(input.env)) } : {}),
           ...(input.signal !== undefined ? { abortSignal: input.signal } : {}),
           ...(input.reviewer.model !== undefined ? { specModeModelId: input.reviewer.model } : {}),
           ...(effort !== undefined ? { specModeReasoningEffort: effort } : {}),
-        } satisfies RunOptions);
+        } satisfies CreateSessionOptions);
+        resolvedSettings = resolveDroidSettings(session.initResult.settings);
+
+        let result: DroidResultMessage | undefined;
+        try {
+          for await (const message of session.stream(input.prompt, {
+            outputFormat: {
+              type: sdk.OutputFormatType.JsonSchema,
+              schema: reviewResultJsonSchema as Record<string, unknown>,
+            } as OutputFormat,
+            ...(input.signal !== undefined ? { abortSignal: input.signal } : {}),
+          })) {
+            if (message.type === sdk.DroidMessageType.Result) {
+              result = message;
+            }
+          }
+        } finally {
+          await session.close().catch(() => undefined);
+        }
+
+        if (result === undefined) {
+          throw reviewerFailed("Droid reviewer did not return a result");
+        }
 
         if (result.error !== null || !result.success) {
           throw reviewerFailed(`Droid reviewer failed: ${droidResultError(result)}`);
@@ -147,9 +177,17 @@ export function createDroidAdapter(
           text: result.text,
           usage: result.tokenUsage ?? undefined,
           fallbackReason: "invalid_structured_output",
-          metadata: droidOutputMetadata(input.reviewer, result, executable, effort, machineId, {
-            captureMode: "native-structured",
-          }),
+          metadata: droidOutputMetadata(
+            input.reviewer,
+            result,
+            executable,
+            effort,
+            machineId,
+            resolvedSettings,
+            {
+              captureMode: "native-structured",
+            },
+          ),
         });
         if (output !== undefined) {
           return output;
@@ -245,6 +283,7 @@ function droidOutputMetadata(
   executable: string,
   effort: ReasoningEffort | undefined,
   machineId: string | undefined,
+  resolvedSettings: ResolvedDroidSettings | undefined,
   extra: NonNullable<ReviewAdapterOutput["metadata"]>,
 ): NonNullable<ReviewAdapterOutput["metadata"]> {
   return sdkOutputMetadata("droid", {
@@ -254,9 +293,31 @@ function droidOutputMetadata(
     durationMs: result.durationMs,
     turnCount: result.turnCount,
     ...(reviewer.model !== undefined ? { model: reviewer.model } : {}),
+    ...modelResolutionMetadata({
+      requested: reviewer.model,
+      resolved: resolvedSettings?.model,
+      source: "provider-init",
+    }),
     ...(effort !== undefined ? { effort } : {}),
+    ...effortResolutionMetadata({
+      requested: reviewer.effort,
+      resolved: resolvedSettings?.effort,
+      source: "provider-init",
+    }),
     ...(machineId !== undefined ? { machineId } : {}),
   });
+}
+
+type ResolvedDroidSettings = {
+  model: string;
+  effort: string;
+};
+
+function resolveDroidSettings(settings: SessionSettings): ResolvedDroidSettings {
+  return {
+    model: settings.specModeModelId ?? settings.modelId,
+    effort: settings.specModeReasoningEffort ?? settings.reasoningEffort,
+  };
 }
 
 function droidResultError(result: { error: unknown }): string {

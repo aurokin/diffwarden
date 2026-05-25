@@ -11,7 +11,12 @@ import {
   reviewerFailed,
 } from "../core/errors.js";
 import { reviewResultJsonSchema } from "../core/schema.js";
-import { sdkOutputMetadata, sdkPreflightMetadata } from "./metadata.js";
+import {
+  effortResolutionMetadata,
+  modelResolutionMetadata,
+  sdkOutputMetadata,
+  sdkPreflightMetadata,
+} from "./metadata.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -79,6 +84,7 @@ export function createClaudeAdapter(
         ],
         metadata: sdkPreflightMetadata("claude", {
           model: modelPreflight.model.value,
+          ...claudeModelResolutionMetadata(input.reviewer, modelPreflight.model.value),
           ...(modelPreflight.model.displayName !== undefined
             ? { modelDisplayName: modelPreflight.model.displayName }
             : {}),
@@ -491,10 +497,12 @@ function claudeOutputMetadata(options: {
   fallbackReason?: string;
   previousResult?: ClaudeResultMessage;
 }): NonNullable<ReviewAdapterOutput["metadata"]> {
+  const model = options.input.reviewer.model ?? defaultClaudeModel;
   const metadata = sdkOutputMetadata("claude", {
     captureMode: options.captureMode,
     sessionId: options.result.session_id,
-    model: options.input.reviewer.model ?? defaultClaudeModel,
+    model,
+    ...claudeModelResolutionMetadata(options.input.reviewer, model),
     ...claudeEffortMetadata(options.input.reviewer.effort),
     durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
     totalCostUsd: sumKnownNumbers(
@@ -513,6 +521,17 @@ function claudeOutputMetadata(options: {
   }
 
   return metadata;
+}
+
+function claudeModelResolutionMetadata(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+  resolvedModel: string,
+): Record<string, string> {
+  return modelResolutionMetadata({
+    requested: reviewer.model,
+    resolved: resolvedModel,
+    source: reviewer.model === undefined ? "adapter-default" : "requested",
+  });
 }
 
 function buildClaudeOutput(options: {
@@ -564,7 +583,11 @@ function claudeEffortMetadata(effort: string | undefined): Record<string, string
 
   return {
     effort: effort === "off" ? "off" : claudeNativeEffort(effort),
-    requestedEffort: effort,
+    ...effortResolutionMetadata({
+      requested: effort,
+      resolved: effort === "off" ? "off" : claudeNativeEffort(effort),
+      source: effort === "off" ? "adapter-selection" : "requested",
+    }),
   };
 }
 

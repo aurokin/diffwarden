@@ -147,9 +147,14 @@ describe("claudeAdapter", () => {
     });
     expect(preflight?.metadata).toMatchObject({
       model: "sonnet",
+      requestedModel: "sonnet",
+      resolvedModel: "sonnet",
+      modelResolutionSource: "requested",
       modelDisplayName: "Sonnet",
       effort: "max",
       requestedEffort: "xhigh",
+      resolvedEffort: "max",
+      effortResolutionSource: "requested",
       supportedEffortLevels: ["low", "medium", "high", "max"],
     });
     expect(calls[0]?.options?.abortController).toBeInstanceOf(AbortController);
@@ -364,6 +369,11 @@ describe("claudeAdapter", () => {
     expect(output.metadata).toMatchObject({
       effort: "max",
       requestedEffort: "xhigh",
+      resolvedEffort: "max",
+      effortResolutionSource: "requested",
+      requestedModel: "sonnet",
+      resolvedModel: "sonnet",
+      modelResolutionSource: "requested",
     });
   });
 

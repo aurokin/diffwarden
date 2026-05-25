@@ -5,7 +5,12 @@ import {
   missingRequirement,
   reviewerFailed,
 } from "../core/errors.js";
-import { sdkOutputMetadata, sdkPreflightMetadata } from "./metadata.js";
+import {
+  effortResolutionMetadata,
+  modelResolutionMetadata,
+  sdkOutputMetadata,
+  sdkPreflightMetadata,
+} from "./metadata.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -70,10 +75,18 @@ export function createCursorAdapter(
           model,
           canonicalModel: modelPreflight.canonicalModelId,
           ...(modelPreflight.alias !== undefined ? { modelAlias: modelPreflight.alias } : {}),
+          ...modelResolutionMetadata({
+            requested: input.reviewer.model,
+            resolved: modelPreflight.canonicalModelId,
+            source: input.reviewer.model === undefined ? "adapter-default" : "adapter-selection",
+          }),
           ...(input.reviewer.effort !== undefined
             ? {
                 effort: "ignored",
-                requestedEffort: input.reviewer.effort,
+                ...effortResolutionMetadata({
+                  requested: input.reviewer.effort,
+                  source: "unsupported",
+                }),
               }
             : {}),
         }),
@@ -81,6 +94,7 @@ export function createCursorAdapter(
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
       const apiKey = assertCursorAuth(input.env);
+      const configuredModel = input.reviewer.model ?? defaultCursorModel;
 
       const { Agent } = await dependencies.loadSdk();
       let agent: CursorAgent | undefined;
@@ -91,7 +105,7 @@ export function createCursorAdapter(
         agent = await Agent.create({
           apiKey,
           model: {
-            id: input.reviewer.model ?? defaultCursorModel,
+            id: configuredModel,
           },
           local: {
             cwd: input.cwd,
@@ -126,12 +140,25 @@ export function createCursorAdapter(
           metadata: sdkOutputMetadata("cursor", {
             agentId: agent.agentId,
             runId: run.id,
-            model: result.model,
+            model: result.model ?? configuredModel,
+            ...modelResolutionMetadata({
+              requested: input.reviewer.model,
+              resolved: result.model ?? configuredModel,
+              source:
+                result.model === undefined
+                  ? input.reviewer.model === undefined
+                    ? "adapter-default"
+                    : "requested"
+                  : "provider-result",
+            }),
             durationMs: result.durationMs,
             ...(input.reviewer.effort !== undefined
               ? {
                   effort: "ignored",
-                  requestedEffort: input.reviewer.effort,
+                  ...effortResolutionMetadata({
+                    requested: input.reviewer.effort,
+                    source: "unsupported",
+                  }),
                 }
               : {}),
           }),

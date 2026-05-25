@@ -7,6 +7,14 @@ import {
 } from "./capabilities.js";
 import type { ReviewAdapterOutput, ReviewAdapterPreflightResult } from "./types.js";
 
+export type ResolutionSource =
+  | "adapter-default"
+  | "adapter-selection"
+  | "provider-init"
+  | "provider-result"
+  | "requested"
+  | "unsupported";
+
 type SdkMetadataDefaults = {
   transport: "sdk";
   readonlyCapability: ReadonlyCapability;
@@ -43,6 +51,30 @@ export function sdkOutputMetadata(
     readonlyCapability: capability.readonlyCapability,
     transport: "sdk",
     ...extra,
+  };
+}
+
+export function modelResolutionMetadata(options: {
+  requested?: string | undefined;
+  resolved?: string | undefined;
+  source: ResolutionSource;
+}): Record<string, string> {
+  return {
+    ...(options.requested !== undefined ? { requestedModel: options.requested } : {}),
+    ...(options.resolved !== undefined ? { resolvedModel: options.resolved } : {}),
+    modelResolutionSource: options.source,
+  };
+}
+
+export function effortResolutionMetadata(options: {
+  requested?: string | undefined;
+  resolved?: string | undefined;
+  source: ResolutionSource;
+}): Record<string, string> {
+  return {
+    ...(options.requested !== undefined ? { requestedEffort: options.requested } : {}),
+    ...(options.resolved !== undefined ? { resolvedEffort: options.resolved } : {}),
+    effortResolutionSource: options.source,
   };
 }
 
