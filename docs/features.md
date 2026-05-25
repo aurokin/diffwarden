@@ -19,7 +19,7 @@ Legend:
 | Reviewer spec | Engine | Default transport | Alternate transport | Default executable | Default model |
 | --- | --- | --- | --- | --- | --- |
 | `fake` | Built-in fake reviewer | n/a | n/a | n/a | n/a |
-| `codex` | Codex CLI | CLI | no | `codex` | CLI default |
+| `codex` | Codex CLI/app-server | CLI | APP-SERVER | `codex` | CLI default |
 | `claude` | Claude Agent SDK | SDK | CLI | `claude` for CLI/local auth | `sonnet` |
 | `cursor` | Cursor SDK | SDK | CLI | `cursor-agent` for CLI | `composer-2.5` |
 | `pi` | Pi Coding Agent SDK | SDK | CLI | `pi` for CLI | first authenticated Pi model |
@@ -49,6 +49,7 @@ SDK-backed reviewers can opt into CLI transport from config:
 | --- | --- | --- | --- | --- | --- |
 | `fake` | no | no | native structured | enforced | no external auth |
 | `codex` CLI | yes | yes | native structured | enforced | executable preflight; CLI owns auth |
+| `codex` APP-SERVER | yes | yes | native structured | enforced | executable and local auth preflight; isolated temporary `CODEX_HOME` |
 | `claude` SDK | yes | yes | native structured with text fallback | enforced | SDK load, auth, and model preflight |
 | `claude` CLI | yes | yes | native structured | tool-restricted | executable preflight; CLI owns auth |
 | `cursor` SDK | yes | ignored | text | prompt-only | SDK load, `CURSOR_API_KEY`, and model preflight |
@@ -67,6 +68,7 @@ SDK-backed reviewers can opt into CLI transport from config:
 | Adapter path | Notes |
 | --- | --- |
 | `codex` CLI | Runs `codex exec` with read-only sandboxing, ephemeral execution, and an output schema file. Diffwarden uses this path instead of `codex review` because `codex exec` exposes the JSON-schema contract needed by the shared parser. |
+| `codex` APP-SERVER | Experimental opt-in transport that runs `codex app-server --listen stdio://` with an isolated temporary `CODEX_HOME`, symlinked/copied local `auth.json`, ephemeral read-only threads, disabled web search, and JSON-schema turn output. Command execution remains enabled in this first version; Diffwarden denies approval escalations and records `execEnabled: true` in adapter metadata. |
 | `claude` SDK | Uses `@anthropic-ai/claude-agent-sdk`, disables built-in tools, disables session persistence, and can reuse local Claude Code auth when no `ANTHROPIC_API_KEY` is present. |
 | `claude` CLI | Uses `claude -p` with plan mode, read-only tools, disallowed write/bash tools, no session persistence, disabled slash commands, and JSON schema output. |
 | `cursor` SDK | Uses `@cursor/sdk` in local mode. Effort is accepted by the public config shape but reported as ignored for Cursor SDK runs. |

@@ -1,5 +1,6 @@
 import { claudeAdapter } from "../adapters/claude.js";
 import { createCliAdapter } from "../adapters/cli.js";
+import { createCodexAppServerAdapter } from "../adapters/codex-app-server.js";
 import { cursorAdapter } from "../adapters/cursor.js";
 import { droidAdapter } from "../adapters/droid.js";
 import { fakeAdapter } from "../adapters/fake.js";
@@ -54,7 +55,7 @@ export type ReviewerPreflightArtifact = {
   status: "passed" | "failed";
   profile?: string;
   provider?: string;
-  transport?: "native" | "cli";
+  transport?: "native" | "cli" | "app-server";
   model?: string;
   effort?: string;
   preflight?: Awaited<ReturnType<NonNullable<ReviewAdapter["preflight"]>>>;
@@ -715,6 +716,13 @@ function getAdapter(
     return createCliAdapter(reviewer.sdk);
   }
 
+  if (reviewer.transport === "app-server") {
+    if (reviewer.sdk !== "codex") {
+      throw invalidCli(`${reviewer.sdk} app-server transport is not supported`);
+    }
+    return createCodexAppServerAdapter();
+  }
+
   if (reviewer.sdk === "fake") {
     return fakeAdapter;
   }
@@ -744,10 +752,14 @@ function reviewerAdapterKey(reviewer: ReviewReviewerConfig): string {
 
 function reviewerArtifactTransport(
   reviewer: ReviewReviewerConfig,
-): { transport: "native" | "cli" } | Record<string, never> {
+): { transport: "native" | "cli" | "app-server" } | Record<string, never> {
   if (reviewer.sdk === "fake" && reviewer.transport === undefined) {
     return {};
   }
 
-  return { transport: reviewer.transport === "cli" ? "cli" : "native" };
+  if (reviewer.transport === "cli" || reviewer.transport === "app-server") {
+    return { transport: reviewer.transport };
+  }
+
+  return { transport: "native" };
 }

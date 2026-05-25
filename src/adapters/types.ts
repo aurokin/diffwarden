@@ -27,7 +27,7 @@ export type ReviewReviewerConfig = {
     | "opencode"
     | "grok"
     | "antigravity";
-  transport?: "sdk" | "cli";
+  transport?: "sdk" | "cli" | "app-server";
   profile?: string;
   provider?: string;
   model?: string;

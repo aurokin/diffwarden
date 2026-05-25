@@ -85,6 +85,13 @@ describe("reviewerCapabilities", () => {
       captureMode: "native-structured",
       readonlyCapability: "enforced",
     });
+    expect(getTransportCapability("codex", "app-server")).toMatchObject({
+      defaultExecutable: "codex",
+      supportsModel: true,
+      supportsEffort: true,
+      captureMode: "native-structured",
+      readonlyCapability: "enforced",
+    });
     expect(getTransportCapability("claude", "cli")).toMatchObject({
       defaultExecutable: "claude",
       captureMode: "native-structured",

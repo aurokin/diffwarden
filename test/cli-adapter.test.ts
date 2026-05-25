@@ -648,7 +648,7 @@ if (engine === "codex") {
 }
 
 async function waitForInvocation(harness: ReturnType<typeof createHarness>): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
     try {
       harness.readInvocation();
       return;

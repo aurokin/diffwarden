@@ -42,7 +42,8 @@ When no `--reviewer` or `--reviewer-set` is provided, config must define
 Configured reviewers use `engine` for the reviewer family (`claude`, `pi`, `codex`, etc.).
 Legacy configs that still use `sdk` continue to load and are normalized internally.
 Use `transport: "native"` for the SDK-backed path when you want to be explicit, or
-`transport: "cli"` for executable-backed runs.
+`transport: "cli"` for executable-backed runs. Codex also supports an experimental
+`transport: "app-server"` path for ephemeral `codex app-server` reviews.
 
 ## Environment Defaults
 
@@ -223,6 +224,31 @@ history matters.
   ]
 }
 ```
+
+## Codex App-Server Example
+
+Codex can opt into an experimental app-server transport. This path creates a temporary
+`CODEX_HOME` per review, reuses local Codex auth, starts an ephemeral read-only thread, and
+records `execEnabled: true` because command execution remains available in the first
+implementation.
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "codex-app-server",
+      "engine": "codex",
+      "transport": "app-server",
+      "cliOptions": {
+        "executable": "/opt/homebrew/bin/codex"
+      }
+    }
+  ]
+}
+```
+
+Set `DIFFWARDEN_CODEX_AUTH_HOME` when the auth source should differ from `$CODEX_HOME` or
+`$HOME/.codex`.
 
 Run the configured Droid CLI profile through the normal CLI:
 
