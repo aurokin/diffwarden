@@ -24,8 +24,11 @@ import type {
   ParseMode,
   ReviewArtifact,
   ReviewArtifactResult,
+  ReviewEvent,
   ReviewReviewerArtifact,
+  ReviewTargetResolved,
   ReviewValidation,
+  ReviewerError,
 } from "./schema.js";
 import { validateReviewResult } from "./validate.js";
 
@@ -65,7 +68,24 @@ export type ReviewerPreflightReport = {
   timing_ms: number;
 };
 
-export async function runReview(options: RunReviewOptions): Promise<ReviewArtifact> {
+/**
+ * Run a review, emitting a typed event stream as work progresses.
+ *
+ * The stream starts with `run_started`, then per-reviewer preflight/run
+ * lifecycle events (emitted as each reviewer settles, so out of completion
+ * order under concurrency), and always terminates with exactly one of
+ * `final_result` (authoritative aggregated artifact) or `error` (an expected
+ * terminal failure such as all reviewers failing or a strict-mode violation).
+ *
+ * The generator's return value is the final `ReviewArtifact`, or `undefined`
+ * when it terminated with an `error` event. Reviewer-selection errors thrown
+ * by `resolveReviewerConfigs()` happen before `run_started` and propagate as
+ * thrown `DiffwardenError`s; the terminal-frame guarantee applies only once
+ * `run_started` has been emitted.
+ */
+export async function* runReviewEvents(
+  options: RunReviewOptions,
+): AsyncGenerator<ReviewEvent, ReviewArtifact | undefined, void> {
   const reviewers = resolveReviewerConfigs({
     ...(options.reviewers !== undefined
       ? { reviewers: options.reviewers }
@@ -82,11 +102,152 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
   const prompt = buildReviewPrompt(options.resolved.target, options.resolved.diff);
   const changedLineRanges = parseChangedLineRanges(options.resolved.diff);
   const env = options.env ?? process.env;
-  const preflightOutcomes = await Promise.all(
+
+  yield event({
+    type: "run_started",
+    cwd: options.cwd,
+    target: options.resolved.target,
+    reviewers: reviewers.map((reviewer) => ({ id: reviewer.id, engine: reviewer.sdk })),
+  });
+
+  const reviewerArtifacts = new Array<ReviewReviewerArtifact>(reviewers.length);
+
+  try {
+    const preflightOutcomes = yield* preflightPhase({ reviewers, options, env });
+    yield* runPhase({
+      reviewers,
+      preflightOutcomes,
+      reviewerArtifacts,
+      options,
+      prompt,
+      changedLineRanges,
+      env,
+    });
+
+    const artifact = finalizeArtifact({ reviewerArtifacts, options, changedLineRanges, start });
+    yield event({ type: "final_result", artifact });
+    return artifact;
+  } catch (error) {
+    if (error instanceof DiffwardenError) {
+      yield event({ type: "error", error: diffwardenEventError(error) });
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Stable, non-streaming review API. Drains `runReviewEvents()` and returns the
+ * final artifact, throwing the corresponding `DiffwardenError` when the stream
+ * terminates with an `error` event so existing callers keep their exit codes.
+ */
+export async function runReview(options: RunReviewOptions): Promise<ReviewArtifact> {
+  const stream = runReviewEvents(options);
+  let terminalError: ReviewerError | undefined;
+  let next = await stream.next();
+  while (next.done !== true) {
+    if (next.value.type === "error") {
+      terminalError = next.value.error;
+    }
+    next = await stream.next();
+  }
+
+  if (terminalError !== undefined) {
+    throw new DiffwardenError(
+      terminalError.code as ReviewErrorCode,
+      terminalError.message,
+      terminalError.exit_code ?? 3,
+    );
+  }
+
+  if (next.value === undefined) {
+    throw reviewerFailed("Review produced no result");
+  }
+
+  return next.value;
+}
+
+/**
+ * Preflight every reviewer concurrently, emitting lifecycle events as each
+ * settles. All preflights complete before the run phase begins. Preflight
+ * failures emit `reviewer_failed` here and never enter the run phase.
+ */
+async function* preflightPhase(params: {
+  reviewers: ReviewReviewerConfig[];
+  options: RunReviewOptions;
+  env: NodeJS.ProcessEnv;
+}): AsyncGenerator<ReviewEvent, PreflightOutcome[], void> {
+  const { reviewers, options, env } = params;
+  for (const reviewer of reviewers) {
+    yield event({ type: "preflight_started", reviewer_id: reviewer.id });
+  }
+
+  const outcomes = new Array<PreflightOutcome>(reviewers.length);
+  const settled = settleInCompletionOrder(
     reviewers.map((reviewer) => preflightReviewerOutcome({ reviewer, options, env })),
   );
-  const reviewerArtifacts = await Promise.all(
-    preflightOutcomes.map((outcome) =>
+  for await (const { index, value: outcome } of settled) {
+    outcomes[index] = outcome;
+    const reviewerId = reviewers[index]?.id ?? "unknown";
+    yield event({
+      type: "preflight_finished",
+      reviewer_id: reviewerId,
+      ok: outcome.type !== "failure",
+      timing_ms: preflightOutcomeTiming(outcome),
+    });
+    if (outcome.type === "failure") {
+      yield event({
+        type: "reviewer_failed",
+        reviewer_id: reviewerId,
+        error: outcome.artifact.error,
+        timing_ms: outcome.artifact.timing_ms ?? 0,
+      });
+    }
+  }
+
+  return outcomes;
+}
+
+/**
+ * Run every reviewer that passed preflight, concurrently, emitting
+ * `reviewer_started` up front and `reviewer_result`/`reviewer_failed` as each
+ * settles. Results are written back into `reviewerArtifacts` at their original
+ * index so aggregation order is preserved.
+ */
+async function* runPhase(params: {
+  reviewers: ReviewReviewerConfig[];
+  preflightOutcomes: PreflightOutcome[];
+  reviewerArtifacts: ReviewReviewerArtifact[];
+  options: RunReviewOptions;
+  prompt: string;
+  changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
+  env: NodeJS.ProcessEnv;
+}): AsyncGenerator<ReviewEvent, void, void> {
+  const {
+    reviewers,
+    preflightOutcomes,
+    reviewerArtifacts,
+    options,
+    prompt,
+    changedLineRanges,
+    env,
+  } = params;
+
+  const runnable: Array<{ index: number; outcome: PreflightOutcome }> = [];
+  preflightOutcomes.forEach((outcome, index) => {
+    if (outcome.type === "failure") {
+      reviewerArtifacts[index] = outcome.artifact;
+    } else {
+      runnable.push({ index, outcome });
+    }
+  });
+
+  for (const { index } of runnable) {
+    yield event({ type: "reviewer_started", reviewer_id: reviewers[index]?.id ?? "unknown" });
+  }
+
+  const settled = settleInCompletionOrder(
+    runnable.map(({ index, outcome }) =>
       runReviewerOutcome({
         outcome,
         cwd: options.cwd,
@@ -94,9 +255,43 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
         prompt,
         changedLineRanges,
         env,
-      }),
+      }).then((artifact) => ({ originalIndex: index, artifact })),
     ),
   );
+  for await (const { value } of settled) {
+    const { originalIndex, artifact } = value;
+    reviewerArtifacts[originalIndex] = artifact;
+    const reviewerId = reviewers[originalIndex]?.id ?? "unknown";
+    if (isFailedReviewerArtifact(artifact)) {
+      yield event({
+        type: "reviewer_failed",
+        reviewer_id: reviewerId,
+        error: artifact.error,
+        timing_ms: artifact.timing_ms ?? 0,
+      });
+    } else {
+      yield event({
+        type: "reviewer_result",
+        reviewer_id: reviewerId,
+        provisional: true,
+        artifact,
+      });
+    }
+  }
+}
+
+/**
+ * Aggregate, deduplicate, and validate reviewer artifacts into the final
+ * artifact. Throws `DiffwardenError` for terminal failures (all reviewers
+ * failed, strict-mode violations); callers turn those into `error` events.
+ */
+function finalizeArtifact(params: {
+  reviewerArtifacts: ReviewReviewerArtifact[];
+  options: RunReviewOptions;
+  changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
+  start: number;
+}): ReviewArtifact {
+  const { reviewerArtifacts, options, changedLineRanges, start } = params;
   const successfulReviewerArtifacts = reviewerArtifacts.filter(isSuccessfulReviewerArtifact);
   const failedReviewerArtifacts = reviewerArtifacts.filter(isFailedReviewerArtifact);
 
@@ -153,6 +348,44 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
       : {}),
     timing_ms: timingMs,
   };
+}
+
+type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
+
+function event(payload: DistributiveOmit<ReviewEvent, "schema_version">): ReviewEvent {
+  return { schema_version: 2, ...payload } as ReviewEvent;
+}
+
+function diffwardenEventError(error: DiffwardenError): ReviewerError {
+  return { code: error.code, message: error.message, exit_code: error.exitCode };
+}
+
+function preflightOutcomeTiming(outcome: PreflightOutcome): number {
+  return outcome.type === "failure"
+    ? (outcome.artifact.timing_ms ?? 0)
+    : Math.max(0, Date.now() - outcome.startedAt);
+}
+
+/**
+ * Race an array of promises, yielding each result paired with its original
+ * index as it settles. The input promises must not reject (reviewer outcome
+ * helpers already convert failures into artifacts).
+ */
+async function* settleInCompletionOrder<T>(
+  promises: Array<Promise<T>>,
+): AsyncGenerator<{ index: number; value: T }, void, void> {
+  const pending = new Map<number, Promise<{ index: number; value: T }>>();
+  promises.forEach((promise, index) => {
+    pending.set(
+      index,
+      promise.then((value) => ({ index, value })),
+    );
+  });
+  while (pending.size > 0) {
+    const settled = await Promise.race(pending.values());
+    pending.delete(settled.index);
+    yield settled;
+  }
 }
 
 export async function runReviewerPreflightReport(

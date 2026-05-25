@@ -81,6 +81,56 @@ Create a starter user config with:
 diffwarden init
 ```
 
+## Output Formats
+
+`--format` selects how results are written to **stdout**:
+
+| Format | Stable machine contract? | What stdout receives |
+| --- | --- | --- |
+| `markdown` (default) | Human-readable, not a parsing contract | One rendered report after every reviewer finishes |
+| `json` | Yes | One final `ReviewArtifact` JSON object after every reviewer finishes |
+| `ndjson` | Yes (versioned event stream) | Newline-delimited review events as work progresses |
+
+`markdown` and `json` are final-result-only and unchanged: stdout stays empty until
+aggregation completes. They remain the right choice when you only need the finished
+artifact.
+
+`ndjson` streams typed review events for incremental consumers (agents, CI). Each line is
+one JSON event carrying `schema_version: 2`:
+
+```bash
+diffwarden --target base:main --reviewer-set 2 --format ndjson
+```
+
+```json
+{"schema_version":2,"type":"run_started","cwd":"…","target":{…},"reviewers":[{"id":"pi","engine":"pi"}]}
+{"schema_version":2,"type":"preflight_started","reviewer_id":"pi"}
+{"schema_version":2,"type":"preflight_finished","reviewer_id":"pi","ok":true,"timing_ms":120}
+{"schema_version":2,"type":"reviewer_started","reviewer_id":"pi"}
+{"schema_version":2,"type":"reviewer_result","reviewer_id":"pi","provisional":true,"artifact":{…}}
+{"schema_version":2,"type":"final_result","artifact":{…}}
+```
+
+Event-stream guarantees:
+
+- Once `run_started` is emitted, the stream always ends with **exactly one** terminal
+  frame: `final_result` (authoritative aggregated `ReviewArtifact`) or `error` (an expected
+  terminal failure such as all reviewers failing or a strict-mode violation).
+- `reviewer_result` events are **provisional** (`provisional: true`): their findings are
+  pre-aggregation and are not yet deduplicated or merged across reviewers. Only
+  `final_result.artifact` is authoritative — treat it as the equivalent of `--format json`.
+- Under concurrency, `reviewer_result`/`reviewer_failed` arrive in completion order, but
+  the `reviewers` array in `final_result.artifact` always follows selection order.
+- `--out`, `--report`, and `--fail-on-findings` operate on the final artifact and behave
+  identically across formats. In `ndjson` mode a terminal `error` frame is emitted and the
+  process exits non-zero without throwing, so the stream stays a clean sequence of frames.
+- `--verbose` only shapes `markdown` and is rejected together with `--format ndjson`.
+
+Human progress (not a contract): when stdout is `markdown` or `json` **and stderr is a
+TTY**, diffwarden prints per-reviewer progress lines to **stderr** so long multi-reviewer
+runs are not silent. This is purely informational, is suppressed when stderr is not a TTY
+(pipes, CI), and never appears in `ndjson` mode. Only stdout carries the stable contracts.
+
 ## Review History Reports
 
 Reports are opt-in. Use `--report` to persist an analysis-friendly JSON record of a run:

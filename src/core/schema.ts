@@ -361,6 +361,77 @@ export type ReviewerError = z.infer<typeof reviewerErrorSchema>;
 export type ReviewReviewerArtifact = z.infer<typeof reviewReviewerArtifactSchema>;
 export type ReviewArtifact = z.infer<typeof reviewArtifactSchema>;
 
+/**
+ * Streaming review events emitted by `runReviewEvents()`.
+ *
+ * This is a versioned public contract (`schema_version: 2`). Once `run_started`
+ * is emitted the stream always terminates with exactly one of `final_result`
+ * or `error`. Per-reviewer `reviewer_result` events carry `provisional: true`:
+ * their findings are pre-aggregation (not deduplicated or merged across
+ * reviewers). Only `final_result.artifact` is authoritative.
+ */
+export type ReviewEvent =
+  | ReviewRunStartedEvent
+  | ReviewPreflightStartedEvent
+  | ReviewPreflightFinishedEvent
+  | ReviewReviewerStartedEvent
+  | ReviewReviewerResultEvent
+  | ReviewReviewerFailedEvent
+  | ReviewFinalResultEvent
+  | ReviewErrorEvent;
+
+type ReviewEventEnvelope = { schema_version: 2 };
+
+export type ReviewRunStartedEvent = ReviewEventEnvelope & {
+  type: "run_started";
+  cwd: string;
+  target: ReviewTargetResolved;
+  reviewers: Array<{ id: string; engine: ReviewerSdk }>;
+};
+
+export type ReviewPreflightStartedEvent = ReviewEventEnvelope & {
+  type: "preflight_started";
+  reviewer_id: string;
+};
+
+export type ReviewPreflightFinishedEvent = ReviewEventEnvelope & {
+  type: "preflight_finished";
+  reviewer_id: string;
+  ok: boolean;
+  timing_ms: number;
+};
+
+export type ReviewReviewerStartedEvent = ReviewEventEnvelope & {
+  type: "reviewer_started";
+  reviewer_id: string;
+};
+
+export type ReviewReviewerResultEvent = ReviewEventEnvelope & {
+  type: "reviewer_result";
+  reviewer_id: string;
+  /** Always true: these findings are pre-aggregation; see `final_result`. */
+  provisional: true;
+  artifact: ReviewReviewerArtifact;
+};
+
+export type ReviewReviewerFailedEvent = ReviewEventEnvelope & {
+  type: "reviewer_failed";
+  reviewer_id: string;
+  error: ReviewerError;
+  timing_ms: number;
+};
+
+export type ReviewFinalResultEvent = ReviewEventEnvelope & {
+  type: "final_result";
+  /** Authoritative, aggregated, validated result. */
+  artifact: ReviewArtifact;
+};
+
+export type ReviewErrorEvent = ReviewEventEnvelope & {
+  type: "error";
+  error: ReviewerError;
+};
+
 export function createFallbackReviewResult(text: string): ReviewArtifactResult {
   return {
     findings: [],

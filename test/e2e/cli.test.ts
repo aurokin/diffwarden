@@ -191,6 +191,100 @@ describe("diffwarden CLI e2e", () => {
     }
   });
 
+  it("streams NDJSON events to stdout ending with the final result", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    const result = await runDiffwarden(repo, [
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--format",
+      "ndjson",
+    ]);
+
+    const events = parseNdjson(result.stdout);
+    expect(events[0]?.type).toBe("run_started");
+    const terminal = events.at(-1);
+    expect(terminal?.type).toBe("final_result");
+    expect((terminal as { schema_version?: number }).schema_version).toBe(2);
+    const artifact = (terminal as { artifact?: { engine?: string } }).artifact;
+    expect(artifact?.engine).toBe("fake");
+    // No second terminal frame, and progress stays off stdout/stderr in NDJSON mode.
+    expect(
+      events.filter((event) => event.type === "final_result" || event.type === "error"),
+    ).toHaveLength(1);
+    expect(result.stderr).toBe("");
+  });
+
+  it("still honors --fail-on-findings and --out in NDJSON mode", async () => {
+    const repo = createRepo();
+    const outputPath = path.join(repo, "review.json");
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    try {
+      await runDiffwarden(
+        repo,
+        [
+          "--target",
+          "uncommitted",
+          "--reviewer",
+          "fake",
+          "--cwd",
+          repo,
+          "--format",
+          "ndjson",
+          "--out",
+          outputPath,
+          "--fail-on-findings",
+          "P2",
+        ],
+        {
+          DIFFWARDEN_FAKE_FINDING_PATH: path.join(repo, "tracked.txt"),
+        },
+      );
+      throw new Error("Expected diffwarden to exit 1");
+    } catch (error) {
+      if (!isExecError(error)) {
+        throw error;
+      }
+      expect(error.code).toBe(1);
+      expect(error.stderr).toBe("");
+      const events = parseNdjson(error.stdout);
+      expect(events.at(-1)?.type).toBe("final_result");
+      const outArtifact = JSON.parse(readFileSync(outputPath, "utf8"));
+      expect(outArtifact.result.findings[0]).toMatchObject({
+        title: "[P2] Fake finding",
+        priority: 2,
+      });
+    }
+  });
+
+  it("rejects --format ndjson combined with --verbose", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    await expect(
+      runDiffwarden(repo, [
+        "--target",
+        "uncommitted",
+        "--reviewer",
+        "fake",
+        "--cwd",
+        repo,
+        "--format",
+        "ndjson",
+        "--verbose",
+      ]),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("--verbose is not compatible with --format ndjson"),
+    });
+  });
+
   it("returns a CLI error for invalid fail-on-findings thresholds", async () => {
     const repo = createRepo();
 
@@ -389,6 +483,13 @@ async function runDiffwarden(
     env,
     maxBuffer: 20 * 1024 * 1024,
   });
+}
+
+function parseNdjson(stdout: string): Array<{ type: string }> {
+  return stdout
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as { type: string });
 }
 
 function readPackageBinPath(): string {

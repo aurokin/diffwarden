@@ -7,16 +7,22 @@ import {
   resolveReviewEnvOptionsWithSettings,
   resolveReviewerSelectionWithEnv,
 } from "./core/env.js";
-import { invalidCli } from "./core/errors.js";
+import {
+  DiffwardenError,
+  type ReviewErrorCode,
+  invalidCli,
+  reviewerFailed,
+} from "./core/errors.js";
 import { hasFindingAtOrAbovePriority, parseFindingFailureThreshold } from "./core/finding-gate.js";
 import { resolveGitTarget } from "./core/git.js";
 import { renderJson, renderMarkdown } from "./core/render.js";
 import { resolveReportingOptions, writeReviewReport } from "./core/reporting.js";
 import {
   type ReviewerPreflightReport,
-  runReview,
+  runReviewEvents,
   runReviewerPreflightReport,
 } from "./core/runner.js";
+import type { ReviewArtifact, ReviewEvent, ReviewerError } from "./core/schema.js";
 import { parseTargetSpec } from "./core/target.js";
 import { version } from "./version.js";
 
@@ -45,7 +51,7 @@ program
   .option("--fail-on-findings <priority>", "exit 1 when findings include P0, P1, P2, or P3")
   .option("--verbose", "include per-reviewer details in Markdown output")
   .option("--cwd <path>", "working directory", process.cwd())
-  .option("--format <format>", "output format: markdown or json", "markdown")
+  .option("--format <format>", "output format: markdown, json, or ndjson", "markdown")
   .option("--out <path>", "write the full ReviewArtifact JSON to a file")
   .option("--report", "persist this review to report history")
   .option("--no-report", "disable configured report history")
@@ -71,8 +77,16 @@ program
       reportScope?: string;
       reportMode?: string;
     }) => {
-      if (options.format !== "markdown" && options.format !== "json") {
+      if (
+        options.format !== "markdown" &&
+        options.format !== "json" &&
+        options.format !== "ndjson"
+      ) {
         throw invalidCli(`Invalid --format value: ${options.format}`);
+      }
+
+      if (options.format === "ndjson" && options.verbose === true) {
+        throw invalidCli("--verbose is not compatible with --format ndjson");
       }
 
       if (!options.target) {
@@ -119,7 +133,9 @@ program
         },
         ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
       });
-      const artifact = await runReview({
+      const ndjson = options.format === "ndjson";
+      const showProgress = !ndjson && process.stderr.isTTY === true;
+      const events = runReviewEvents({
         cwd: options.cwd,
         resolved,
         ...reviewerOptions,
@@ -130,15 +146,58 @@ program
         ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
       });
 
+      let artifact: ReviewArtifact | undefined;
+      let terminalError: ReviewerError | undefined;
+      let next = await events.next();
+      while (next.done !== true) {
+        const reviewEvent = next.value;
+        if (ndjson) {
+          process.stdout.write(`${JSON.stringify(reviewEvent)}\n`);
+        } else if (showProgress) {
+          const line = formatReviewProgressLine(reviewEvent);
+          if (line !== undefined) {
+            process.stderr.write(`${line}\n`);
+          }
+        }
+        if (reviewEvent.type === "final_result") {
+          artifact = reviewEvent.artifact;
+        } else if (reviewEvent.type === "error") {
+          terminalError = reviewEvent.error;
+        }
+        next = await events.next();
+      }
+
+      if (terminalError !== undefined) {
+        // The terminal `error` frame already conveyed the failure. In NDJSON
+        // mode we set the exit code without throwing so the stream stays a
+        // clean sequence of frames; otherwise we throw to reuse the standard
+        // stderr error path.
+        if (ndjson) {
+          process.exitCode = terminalError.exit_code ?? 3;
+          return;
+        }
+        throw new DiffwardenError(
+          terminalError.code as ReviewErrorCode,
+          terminalError.message,
+          terminalError.exit_code ?? 3,
+        );
+      }
+
+      if (artifact === undefined) {
+        throw reviewerFailed("Review produced no result");
+      }
+
       if (options.out) {
         await writeFile(options.out, renderJson(artifact));
       }
 
-      process.stdout.write(
-        options.format === "json"
-          ? renderJson(artifact)
-          : renderMarkdown(artifact, { verbose: options.verbose === true }),
-      );
+      if (!ndjson) {
+        process.stdout.write(
+          options.format === "json"
+            ? renderJson(artifact)
+            : renderMarkdown(artifact, { verbose: options.verbose === true }),
+        );
+      }
 
       await writeReviewReport({
         artifact,
@@ -265,6 +324,35 @@ try {
 
   process.stderr.write("Unknown error\n");
   process.exit(1);
+}
+
+function formatReviewProgressLine(reviewEvent: ReviewEvent): string | undefined {
+  switch (reviewEvent.type) {
+    case "run_started":
+      return `diffwarden: reviewing with ${reviewEvent.reviewers
+        .map((reviewer) => reviewer.id)
+        .join(", ")}`;
+    case "reviewer_started":
+      return `  … ${reviewEvent.reviewer_id} running`;
+    case "reviewer_result":
+      return `  ✓ ${reviewEvent.reviewer_id} finished${formatProgressTiming(
+        reviewEvent.artifact.timing_ms,
+      )}`;
+    case "reviewer_failed":
+      return `  ✗ ${reviewEvent.reviewer_id} failed: ${reviewEvent.error.message}`;
+    case "final_result": {
+      const count = reviewEvent.artifact.result.findings.length;
+      return `diffwarden: aggregated ${count} finding${count === 1 ? "" : "s"}`;
+    }
+    default:
+      // preflight_started/preflight_finished are kept quiet to limit noise;
+      // `error` is surfaced by the top-level stderr error handler.
+      return undefined;
+  }
+}
+
+function formatProgressTiming(timingMs: number | undefined): string {
+  return timingMs === undefined ? "" : ` (${(timingMs / 1000).toFixed(1)}s)`;
 }
 
 function renderPreflightMarkdown(report: ReviewerPreflightReport): string {

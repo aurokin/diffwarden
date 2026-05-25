@@ -348,16 +348,31 @@ describe("createCliAdapter", () => {
         DIFFWARDEN_FAKE_HANG: "1",
       },
     });
+    // Observe the run promise up front. Under heavy parallel load the fake CLI
+    // can be slow to start, so waitForInvocation may throw before we abort;
+    // without an attached handler the eventual rejection would surface as an
+    // unhandled rejection, and the spawned process would outlive the test.
+    const runOutcome = run.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
 
-    await waitForInvocation(harness);
-    const pid = harness.readInvocation().pid;
-    abortController.abort(new Error("test abort"));
+    try {
+      await waitForInvocation(harness);
+      const pid = harness.readInvocation().pid;
+      abortController.abort(new Error("test abort"));
 
-    await expect(run).rejects.toMatchObject({
-      code: "reviewer_failed",
-      message: expect.stringContaining("reviewer aborted"),
-    });
-    expect(isProcessAlive(pid)).toBe(false);
+      await expect(run).rejects.toMatchObject({
+        code: "reviewer_failed",
+        message: expect.stringContaining("reviewer aborted"),
+      });
+      expect(isProcessAlive(pid)).toBe(false);
+    } finally {
+      // Guarantee the child is signalled and reaped before afterEach deletes
+      // the harness directory, even if the assertions above threw.
+      abortController.abort(new Error("test cleanup"));
+      await runOutcome;
+    }
   });
 
   it("rejects unsupported Antigravity model overrides", async () => {
@@ -648,7 +663,10 @@ if (engine === "codex") {
 }
 
 async function waitForInvocation(harness: ReturnType<typeof createHarness>): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  // ~4s of patience: a freshly spawned Node subprocess can take well over a
+  // second to write its invocation file when the machine is saturated by
+  // parallel test workers. Stays under the default 5s test timeout.
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     try {
       harness.readInvocation();
       return;

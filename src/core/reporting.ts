@@ -93,7 +93,7 @@ export type ReviewReportProvenance = {
     timeout_seconds?: number;
     strict: boolean;
     fail_on_findings?: string;
-    format?: "markdown" | "json";
+    format?: "markdown" | "json" | "ndjson";
   };
   config?: {
     path: string;
@@ -140,7 +140,7 @@ export type ReviewReportProvenanceInput = {
   timeoutSeconds?: number;
   strict?: boolean;
   failOnFindings?: string;
-  format?: "markdown" | "json";
+  format?: "markdown" | "json" | "ndjson";
   config?: {
     path: string;
     sha256: string;
