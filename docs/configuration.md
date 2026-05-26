@@ -287,6 +287,11 @@ The shared Codex home resolves from `appServerOptions.codexHome`, then
 apps, and daemon state. Diffwarden still sets approval policy `never`, uses a read-only
 sandbox policy with network disabled, and denies approval escalations.
 
+`appServerOptions.codexHome` applies to shared socket modes. In `stdio-isolated` mode,
+Diffwarden creates a temporary `CODEX_HOME` for the app-server process and sources auth and
+model-provider config from `DIFFWARDEN_CODEX_AUTH_HOME`, then `$CODEX_HOME`, then
+`$HOME/.codex`.
+
 Use a stable alternate Codex home when you want a reusable server without sharing the
 primary Codex config:
 
@@ -311,7 +316,7 @@ primary Codex config:
 - `auto`: attach to an existing socket and launch only if none exists.
 - `attach`: attach only and fail if the socket is unavailable.
 - `launch`: reuse an existing socket or launch the shared server.
-- `stdio-isolated`: use the older temporary `CODEX_HOME` stdio app-server path.
+- `stdio-isolated`: use a temporary `CODEX_HOME` and stdio app-server process for each review.
 
 Run the configured Droid CLI profile through the normal CLI:
 

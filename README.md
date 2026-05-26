@@ -195,7 +195,8 @@ Implemented:
 - Project/user `diffwarden.config.json` discovery.
 - Reviewer sets and `engine[:profile]` reviewer specs.
 - Cursor, Claude, Pi, and Droid Agent SDK adapters.
-- Experimental Codex app-server transport with ephemeral read-only threads.
+- Experimental Codex app-server transport with shared server reuse and ephemeral read-only
+  threads.
 - Thin CLI transport adapters for Codex, Gemini, OpenCode, Grok, Antigravity, and CLI
   variants of Cursor, Claude, Pi, and Droid.
 

@@ -86,12 +86,17 @@ The shared Codex home resolves from `appServerOptions.codexHome`, then
 apps, and daemon state. For a reusable middle ground, set `appServerOptions.codexHome` to a
 dedicated stable home such as `~/.codex-diffwarden`.
 
+`appServerOptions.codexHome` applies to shared socket modes. In `stdio-isolated` mode,
+Diffwarden creates a temporary `CODEX_HOME` for the app-server process and sources auth and
+model-provider config from `DIFFWARDEN_CODEX_AUTH_HOME`, then `$CODEX_HOME`, then
+`$HOME/.codex`.
+
 `appServerOptions.mode` controls lifecycle:
 
 - `auto`: attach to an existing socket and launch only if none exists.
 - `attach`: attach only and fail if the socket is unavailable.
 - `launch`: reuse an existing socket or launch the shared server.
-- `stdio-isolated`: use the older temporary `CODEX_HOME` stdio app-server path.
+- `stdio-isolated`: use a temporary `CODEX_HOME` and stdio app-server process for each review.
 
 Command execution is currently left enabled for this experimental transport so Codex can use
 its normal repository inspection path. Diffwarden sets approval policy to `never`, uses a
