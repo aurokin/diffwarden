@@ -63,8 +63,9 @@ the CLI-native effort value after public-effort mapping. CLI default models rema
 until an executable exposes stable machine-readable runtime metadata.
 
 The Codex app-server transport follows the same metadata convention. It additionally records
-`transport: "app-server"`, `ephemeral: true`, and `execEnabled: true` because command
-execution is intentionally still available in the first experimental version.
+`transport: "app-server"`, `ephemeral: true`, `execEnabled: true`, `appServerMode`,
+`codexHome`, `codexHomeShared`, and app-server lifecycle metadata because command execution
+is intentionally still available in the first experimental version.
 
 ## Codex App Server
 
@@ -73,14 +74,24 @@ diffwarden --target uncommitted --reviewer codex-app-server
 ```
 
 The Codex app-server path is configured through a named reviewer with
-`transport: "app-server"`. It spawns `codex app-server --listen stdio://`, creates a
-temporary `CODEX_HOME` for each review, symlinks or copies the user's Codex `auth.json`,
-writes restrictive temporary config, starts an ephemeral read-only thread, disables web
-search, and requests JSON-schema turn output.
+`transport: "app-server"`. By default it uses the shared Codex home, connects to
+`$CODEX_HOME/app-server-control/app-server-control.sock` when an app-server is already
+running, and launches `codex app-server --listen unix://` only when no socket is available.
+The review itself starts an ephemeral read-only thread, disables web search for the thread,
+and requests JSON-schema turn output.
 
-The auth source defaults to `$CODEX_HOME`, then `$HOME/.codex`. Set
-`DIFFWARDEN_CODEX_AUTH_HOME` to point at a different Codex auth directory without changing
-the app-server child environment.
+The shared Codex home resolves from `appServerOptions.codexHome`, then
+`DIFFWARDEN_CODEX_HOME`, then `DIFFWARDEN_CODEX_AUTH_HOME`, then `$CODEX_HOME`, then
+`$HOME/.codex`. Shared mode intentionally inherits that Codex home's auth, config, plugins,
+apps, and daemon state. For a reusable middle ground, set `appServerOptions.codexHome` to a
+dedicated stable home such as `~/.codex-diffwarden`.
+
+`appServerOptions.mode` controls lifecycle:
+
+- `auto`: attach to an existing socket and launch only if none exists.
+- `attach`: attach only and fail if the socket is unavailable.
+- `launch`: reuse an existing socket or launch the shared server.
+- `stdio-isolated`: use the older temporary `CODEX_HOME` stdio app-server path.
 
 Command execution is currently left enabled for this experimental transport so Codex can use
 its normal repository inspection path. Diffwarden sets approval policy to `never`, uses a

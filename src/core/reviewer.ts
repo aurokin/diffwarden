@@ -229,6 +229,9 @@ function materializeConfiguredReviewer(
       ? { providerOptions: configured.providerOptions }
       : {}),
     ...(configured.cliOptions !== undefined ? { cliOptions: configured.cliOptions } : {}),
+    ...(configured.appServerOptions !== undefined
+      ? { appServerOptions: configured.appServerOptions }
+      : {}),
     ...(configured.sdkOptions !== undefined ? { sdkOptions: configured.sdkOptions } : {}),
   });
 }

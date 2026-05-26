@@ -260,10 +260,11 @@ history matters.
 
 ## Codex App-Server Example
 
-Codex can opt into an experimental app-server transport. This path creates a temporary
-`CODEX_HOME` per review, reuses local Codex auth, starts an ephemeral read-only thread, and
-records `execEnabled: true` because command execution remains available in the first
-implementation.
+Codex can opt into an experimental app-server transport. By default this path uses the
+existing shared Codex home, connects to its app-server socket when one is already running,
+and launches `codex app-server --listen unix://` only when no socket is available. Reviews
+still start ephemeral read-only threads and record `execEnabled: true` because command
+execution remains available.
 
 ```json
 {
@@ -280,8 +281,37 @@ implementation.
 }
 ```
 
-Set `DIFFWARDEN_CODEX_AUTH_HOME` when the auth source should differ from `$CODEX_HOME` or
-`$HOME/.codex`.
+The shared Codex home resolves from `appServerOptions.codexHome`, then
+`DIFFWARDEN_CODEX_HOME`, then `DIFFWARDEN_CODEX_AUTH_HOME`, then `$CODEX_HOME`, then
+`$HOME/.codex`. Shared mode intentionally uses that Codex home's auth, config, plugins,
+apps, and daemon state. Diffwarden still sets approval policy `never`, uses a read-only
+sandbox policy with network disabled, and denies approval escalations.
+
+Use a stable alternate Codex home when you want a reusable server without sharing the
+primary Codex config:
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "codex-app-server",
+      "engine": "codex",
+      "transport": "app-server",
+      "appServerOptions": {
+        "mode": "auto",
+        "codexHome": "~/.codex-diffwarden"
+      }
+    }
+  ]
+}
+```
+
+`appServerOptions.mode` accepts:
+
+- `auto`: attach to an existing socket and launch only if none exists.
+- `attach`: attach only and fail if the socket is unavailable.
+- `launch`: reuse an existing socket or launch the shared server.
+- `stdio-isolated`: use the older temporary `CODEX_HOME` stdio app-server path.
 
 Run the configured Droid CLI profile through the normal CLI:
 

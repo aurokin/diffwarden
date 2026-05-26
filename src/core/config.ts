@@ -15,6 +15,13 @@ const transportSchema = z.enum(["native", "sdk", "cli", "app-server"]);
 const reportingScopeSchema = z.enum(["global", "repo"]);
 const reportingModeSchema = z.enum(["full", "metadata"]);
 const configuredReviewerEngineSchema = reviewerSdkSchema.exclude(["fake"]);
+const codexAppServerModeSchema = z.enum(["auto", "attach", "launch", "stdio-isolated"]);
+const appServerOptionsSchema = z
+  .object({
+    mode: codexAppServerModeSchema.optional(),
+    codexHome: z.string().min(1).optional(),
+  })
+  .strict();
 
 const reviewerConfigSchema = z
   .object({
@@ -31,6 +38,7 @@ const reviewerConfigSchema = z
     timeoutSeconds: z.number().positive().optional(),
     readonly: z.literal(true).optional(),
     cliOptions: z.record(z.string(), z.unknown()).optional(),
+    appServerOptions: appServerOptionsSchema.optional(),
     providerOptions: z.record(z.string(), z.unknown()).optional(),
     sdkOptions: z.record(z.string(), z.unknown()).optional(),
   })

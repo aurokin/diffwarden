@@ -1,4 +1,5 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { constants } from "node:fs";
 import {
@@ -11,6 +12,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { type Socket, createConnection } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -45,7 +47,18 @@ type CodexAppServerRunContext = {
   kind: "codex-app-server";
   requestedExecutable: string;
   resolvedExecutable: string;
+  mode: CodexAppServerMode;
+  codexHome?: string;
   path?: string;
+};
+
+type CodexAppServerMode = "auto" | "attach" | "launch" | "stdio-isolated";
+
+type CodexAppServerOptions = {
+  mode: CodexAppServerMode;
+  codexHome: string;
+  socketPath: string;
+  sharedCodexHome: boolean;
 };
 
 type SpawnedAppServer = {
@@ -54,7 +67,26 @@ type SpawnedAppServer = {
   executable: string;
 };
 
+type AppServerConnectionMetadata = {
+  executable: string;
+  appServerMode: CodexAppServerMode;
+  codexHome: string;
+  codexHomeShared: boolean;
+  serverLifecycle: "isolated-stdio" | "reused" | "launched";
+  socketPath?: string;
+};
+
+type AppServerConnection = {
+  metadata: AppServerConnectionMetadata;
+  stderr(): string;
+  write(message: JsonRpcMessage): void;
+  close(): Promise<void>;
+};
+
 const appServerKillGraceMs = 1_000;
+const appServerConnectRetryMs = 100;
+const appServerLaunchTimeoutMs = 5_000;
+const appServerHandshakeTimeoutMs = 2_000;
 
 export function createCodexAppServerAdapter(): ReviewAdapter {
   return {
@@ -67,13 +99,16 @@ export function createCodexAppServerAdapter(): ReviewAdapter {
     },
     async run(input) {
       const runContext = codexAppServerRunContext(input.runContext);
+      const options = codexAppServerOptions(input.reviewer, input.env);
       const executable =
         runContext !== undefined &&
         runContext.requestedExecutable === codexAppServerExecutable(input.reviewer) &&
+        runContext.mode === options.mode &&
+        runContext.codexHome === options.codexHome &&
         runContext.path === pathContext(input.env).path
           ? runContext.resolvedExecutable
           : await resolveExecutable(codexAppServerExecutable(input.reviewer), input.env);
-      const session = new CodexAppServerSession(input, executable);
+      const session = new CodexAppServerSession(input, executable, options);
       return await session.run();
     },
   };
@@ -84,7 +119,8 @@ async function prepareCodexAppServerAdapter(
 ): Promise<{ preflight: ReviewAdapterPreflightResult; runContext: CodexAppServerRunContext }> {
   const executable = codexAppServerExecutable(input.reviewer);
   const resolvedExecutable = await resolveExecutable(executable, input.env);
-  await assertCodexAuthAvailable(input.env);
+  const options = codexAppServerOptions(input.reviewer, input.env);
+  await assertCodexAuthAvailable(authHomeForMode(options, input.env));
 
   const metadata: ReviewAdapterPreflightResult["metadata"] = {
     readonlyCapability: "enforced",
@@ -92,6 +128,10 @@ async function prepareCodexAppServerAdapter(
     executable: resolvedExecutable,
     execEnabled: true,
     ephemeral: true,
+    appServerMode: options.mode,
+    codexHome: options.codexHome,
+    codexHomeShared: options.sharedCodexHome,
+    ...(options.mode === "stdio-isolated" ? {} : { socketPath: options.socketPath }),
     ...codexAppServerSelectionMetadata(input.reviewer),
   };
 
@@ -106,13 +146,26 @@ async function prepareCodexAppServerAdapter(
         {
           name: "auth",
           status: "passed",
-          detail: "Codex auth.json is available for isolated app-server runs.",
+          detail:
+            options.mode === "stdio-isolated"
+              ? "Codex auth.json is available for isolated app-server runs."
+              : `Codex auth.json is available in shared CODEX_HOME: ${options.codexHome}.`,
         },
         {
           name: "readonly",
           status: "passed",
           detail:
-            "Codex app-server runs with ephemeral read-only threads, approval policy never, and temporary CODEX_HOME isolation.",
+            options.mode === "stdio-isolated"
+              ? "Codex app-server runs with ephemeral read-only threads, approval policy never, and temporary CODEX_HOME isolation."
+              : "Codex app-server runs with ephemeral read-only threads, approval policy never, and shared CODEX_HOME app-server state.",
+        },
+        {
+          name: "codex-home",
+          status: options.sharedCodexHome ? "warning" : "passed",
+          detail:
+            options.mode === "stdio-isolated"
+              ? "Diffwarden will create and remove a temporary CODEX_HOME for this review."
+              : `Diffwarden will use shared CODEX_HOME ${options.codexHome}; existing Codex config, auth, plugins, apps, and daemon state may apply.`,
         },
         {
           name: "exec",
@@ -143,6 +196,8 @@ async function prepareCodexAppServerAdapter(
       kind: "codex-app-server",
       requestedExecutable: executable,
       resolvedExecutable,
+      mode: options.mode,
+      codexHome: options.codexHome,
       ...pathContext(input.env),
     },
   };
@@ -152,7 +207,7 @@ class CodexAppServerSession {
   private readonly pending = new Map<string | number, PendingRequest>();
   private readonly completedTurns = new Set<string>();
   private nextId = 1;
-  private spawned: SpawnedAppServer | undefined;
+  private connection: AppServerConnection | undefined;
   private reply = "";
   private currentAgentMessageId = "";
   private currentAgentMessageText = "";
@@ -160,47 +215,31 @@ class CodexAppServerSession {
     | { turnId: string; resolve: () => void; reject: (error: Error) => void }
     | undefined;
   private usage: unknown;
-  private stderr = "";
 
   constructor(
     private readonly input: ReviewAdapterInput,
     private readonly executable: string,
+    private readonly options: CodexAppServerOptions,
   ) {}
 
   async run(): Promise<ReviewAdapterOutput> {
     throwIfAborted(this.input.signal, "codex app-server reviewer aborted before start");
-    const spawned = await spawnCodexAppServer({
+    const connection = await openCodexAppServerConnection({
       executable: this.executable,
       env: this.input.env,
+      options: this.options,
+      onMessage: (message) => this.onMessage(message),
+      onFailure: (error) => {
+        this.rejectAll(error);
+        this.turnCompletion?.reject(error);
+      },
     });
-    this.spawned = spawned;
+    this.connection = connection;
     const removeAbortListener = bindAbortSignal(this.input.signal, () => {
       const error = reviewerFailed("codex app-server reviewer aborted");
       this.rejectAll(error);
       this.turnCompletion?.reject(error);
-      this.kill("SIGTERM");
-      setTimeout(() => this.kill("SIGKILL"), appServerKillGraceMs);
-    });
-
-    const stdout = createInterface({ input: spawned.child.stdout });
-    stdout.on("line", (line) => this.onLine(line));
-    spawned.child.stderr.on("data", (chunk: Buffer) => {
-      this.stderr += chunk.toString("utf8");
-    });
-    spawned.child.stdin.on("error", (error) => {
-      this.onStdinFailure(error);
-    });
-    spawned.child.on("error", (error) => {
-      const classified = classifyAppServerStartError(this.executable, error);
-      this.rejectAll(classified);
-      this.turnCompletion?.reject(classified);
-    });
-    spawned.child.on("close", (code, signal) => {
-      const error = reviewerFailed(
-        `codex app-server exited before review completed: ${code ?? `signal ${signal ?? "none"}`}`,
-      );
-      this.rejectAll(error);
-      this.turnCompletion?.reject(error);
+      void this.close();
     });
 
     try {
@@ -265,10 +304,10 @@ class CodexAppServerSession {
         captureMode: "native-structured",
         readonlyCapability: "enforced",
         transport: "app-server",
-        executable: spawned.executable,
         execEnabled: true,
         ephemeral: true,
-        stderr: trimForMetadata(this.stderr),
+        ...connection.metadata,
+        stderr: trimForMetadata(connection.stderr()),
         ...codexAppServerSelectionMetadata(this.input.reviewer),
       });
       return {
@@ -277,14 +316,12 @@ class CodexAppServerSession {
       };
     } finally {
       removeAbortListener();
-      stdout.close();
       await this.close();
     }
   }
 
   private call(method: string, params: unknown): Promise<unknown> {
-    const child = this.spawned?.child;
-    if (child === undefined) {
+    if (this.connection === undefined) {
       throw reviewerFailed("codex app-server is not running");
     }
 
@@ -315,18 +352,14 @@ class CodexAppServerSession {
   }
 
   private writeClientMessage(message: JsonRpcMessage): void {
-    const child = this.spawned?.child;
-    if (child === undefined || child.stdin.destroyed || !child.stdin.writable) {
-      this.onStdinFailure(new Error("stdin is not writable"));
+    const connection = this.connection;
+    if (connection === undefined) {
+      this.onStdinFailure(new Error("codex app-server connection is not writable"));
       return;
     }
 
     try {
-      child.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
-        if (error !== null && error !== undefined) {
-          this.onStdinFailure(error);
-        }
-      });
+      connection.write(message);
     } catch (error) {
       this.onStdinFailure(error);
     }
@@ -336,20 +369,6 @@ class CodexAppServerSession {
     const classified = reviewerFailed(`codex app-server stdin failed: ${formatError(error)}`);
     this.rejectAll(classified);
     this.turnCompletion?.reject(classified);
-  }
-
-  private onLine(line: string): void {
-    const rawLine = line.trim();
-    if (!rawLine) {
-      return;
-    }
-    let message: JsonRpcMessage;
-    try {
-      message = JSON.parse(rawLine) as JsonRpcMessage;
-    } catch {
-      return;
-    }
-    this.onMessage(message);
   }
 
   private onMessage(message: JsonRpcMessage): void {
@@ -498,47 +517,488 @@ class CodexAppServerSession {
     this.pending.clear();
   }
 
-  private kill(signal: NodeJS.Signals, child = this.spawned?.child): void {
-    if (child === undefined) {
-      return;
+  private async close(): Promise<void> {
+    const connection = this.connection;
+    this.connection = undefined;
+    await connection?.close();
+  }
+}
+
+async function openCodexAppServerConnection(options: {
+  executable: string;
+  env: NodeJS.ProcessEnv | undefined;
+  options: CodexAppServerOptions;
+  onMessage: (message: JsonRpcMessage) => void;
+  onFailure: (error: Error) => void;
+}): Promise<AppServerConnection> {
+  if (options.options.mode === "stdio-isolated") {
+    return await openStdioIsolatedConnection(options);
+  }
+  return await openSharedSocketConnection(options);
+}
+
+async function openStdioIsolatedConnection(options: {
+  executable: string;
+  env: NodeJS.ProcessEnv | undefined;
+  options: CodexAppServerOptions;
+  onMessage: (message: JsonRpcMessage) => void;
+  onFailure: (error: Error) => void;
+}): Promise<AppServerConnection> {
+  const spawned = await spawnCodexAppServer({
+    executable: options.executable,
+    env: options.env,
+  });
+  let stderr = "";
+  const stdout = createInterface({ input: spawned.child.stdout });
+  stdout.on("line", (line) => {
+    const message = parseJsonRpcLine(line);
+    if (message !== undefined) {
+      options.onMessage(message);
     }
-    try {
-      if (process.platform !== "win32" && child.pid !== undefined) {
-        process.kill(-child.pid, signal);
-        return;
+  });
+  spawned.child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  spawned.child.stdin.on("error", (error) => {
+    options.onFailure(reviewerFailed(`codex app-server stdin failed: ${formatError(error)}`));
+  });
+  spawned.child.on("error", (error) => {
+    options.onFailure(classifyAppServerStartError(options.executable, error));
+  });
+  spawned.child.on("close", (code, signal) => {
+    options.onFailure(
+      reviewerFailed(
+        `codex app-server exited before review completed: ${code ?? `signal ${signal ?? "none"}`}`,
+      ),
+    );
+  });
+
+  return {
+    metadata: {
+      executable: spawned.executable,
+      appServerMode: "stdio-isolated",
+      codexHome: spawned.codexHome,
+      codexHomeShared: false,
+      serverLifecycle: "isolated-stdio",
+    },
+    stderr: () => stderr,
+    write(message) {
+      if (spawned.child.stdin.destroyed || !spawned.child.stdin.writable) {
+        throw reviewerFailed("codex app-server stdin is not writable");
       }
-    } catch {
-      // Fall back to killing the direct child below.
-    }
-    child.kill(signal);
+      spawned.child.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
+        if (error !== null && error !== undefined) {
+          options.onFailure(reviewerFailed(`codex app-server stdin failed: ${error.message}`));
+        }
+      });
+    },
+    async close() {
+      stdout.close();
+      await closeSpawnedIsolatedAppServer(spawned);
+    },
+  };
+}
+
+async function openSharedSocketConnection(options: {
+  executable: string;
+  env: NodeJS.ProcessEnv | undefined;
+  options: CodexAppServerOptions;
+  onMessage: (message: JsonRpcMessage) => void;
+  onFailure: (error: Error) => void;
+}): Promise<AppServerConnection> {
+  const existing = await tryConnectCodexSocket(options.options.socketPath, options);
+  if (existing !== undefined) {
+    return existing;
+  }
+  if (options.options.mode === "attach") {
+    throw missingRequirement(
+      `Codex app-server is not running at ${options.options.socketPath}; start it or use appServerOptions.mode "auto"`,
+    );
   }
 
-  private async close(): Promise<void> {
-    const spawned = this.spawned;
-    this.spawned = undefined;
-    if (spawned === undefined) {
+  const launched = launchSharedCodexAppServer({
+    executable: options.executable,
+    env: options.env,
+    codexHome: options.options.codexHome,
+  });
+  try {
+    return await waitForSharedSocketConnection(options, launched);
+  } catch (error) {
+    launched.child.kill("SIGTERM");
+    throw error;
+  }
+}
+
+async function waitForSharedSocketConnection(
+  options: {
+    executable: string;
+    options: CodexAppServerOptions;
+    onMessage: (message: JsonRpcMessage) => void;
+    onFailure: (error: Error) => void;
+  },
+  launched: { child: ChildProcess; startedAt: number },
+): Promise<AppServerConnection> {
+  let startError: Error | undefined;
+  launched.child.once("error", (error) => {
+    startError = classifyAppServerStartError(options.executable, error);
+  });
+
+  const deadline = Date.now() + appServerLaunchTimeoutMs;
+  while (Date.now() < deadline) {
+    if (startError !== undefined) {
+      throw startError;
+    }
+    const connected = await tryConnectCodexSocket(options.options.socketPath, options);
+    if (connected !== undefined) {
+      connected.metadata.serverLifecycle = "launched";
+      return connected;
+    }
+    await sleep(appServerConnectRetryMs);
+  }
+
+  throw reviewerFailed(
+    `timed out waiting for codex app-server socket: ${options.options.socketPath}`,
+  );
+}
+
+async function tryConnectCodexSocket(
+  socketPath: string,
+  options: {
+    executable: string;
+    options: CodexAppServerOptions;
+    onMessage: (message: JsonRpcMessage) => void;
+    onFailure: (error: Error) => void;
+  },
+): Promise<AppServerConnection | undefined> {
+  try {
+    const socket = await CodexUnixSocketJsonRpc.connect(socketPath, options.onMessage, (error) => {
+      options.onFailure(reviewerFailed(`codex app-server socket failed: ${formatError(error)}`));
+    });
+    return {
+      metadata: {
+        executable: options.executable,
+        appServerMode: options.options.mode,
+        codexHome: options.options.codexHome,
+        codexHomeShared: options.options.sharedCodexHome,
+        socketPath,
+        serverLifecycle: "reused",
+      },
+      stderr: () => "",
+      write(message) {
+        socket.write(message);
+      },
+      close() {
+        return socket.close();
+      },
+    };
+  } catch (error) {
+    if (
+      isNodeErrorWithCode(error, "ENOENT") ||
+      isNodeErrorWithCode(error, "ECONNREFUSED") ||
+      isNodeErrorWithCode(error, "ENOTSOCK")
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function launchSharedCodexAppServer(options: {
+  executable: string;
+  env: NodeJS.ProcessEnv | undefined;
+  codexHome: string;
+}): { child: ChildProcess; startedAt: number } {
+  const env = {
+    ...(options.env ?? process.env),
+    CODEX_HOME: options.codexHome,
+  };
+  const child = spawn(options.executable, ["app-server", "--listen", "unix://"], {
+    cwd: options.codexHome,
+    detached: process.platform !== "win32",
+    env,
+    stdio: "ignore",
+  });
+  child.unref();
+  return { child, startedAt: Date.now() };
+}
+
+async function closeSpawnedIsolatedAppServer(spawned: SpawnedAppServer): Promise<void> {
+  let exited = spawned.child.exitCode !== null || spawned.child.signalCode !== null;
+  const exit = exited
+    ? Promise.resolve()
+    : once(spawned.child, "exit")
+        .then(() => {
+          exited = true;
+        })
+        .catch(() => {
+          exited = true;
+        });
+  if (!spawned.child.killed) {
+    killChildProcessGroup(spawned.child, "SIGTERM");
+  }
+  await Promise.race([exit, sleep(appServerKillGraceMs)]);
+  if (!exited) {
+    killChildProcessGroup(spawned.child, "SIGKILL");
+    await Promise.race([exit, sleep(appServerKillGraceMs)]);
+  }
+  await rm(spawned.codexHome, { force: true, recursive: true });
+}
+
+function killChildProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    if (process.platform !== "win32" && child.pid !== undefined) {
+      process.kill(-child.pid, signal);
       return;
     }
-    let exited = spawned.child.exitCode !== null || spawned.child.signalCode !== null;
-    const exit = exited
-      ? Promise.resolve()
-      : once(spawned.child, "exit")
-          .then(() => {
-            exited = true;
-          })
-          .catch(() => {
-            exited = true;
-          });
-    if (!spawned.child.killed) {
-      this.kill("SIGTERM", spawned.child);
-    }
-    await Promise.race([exit, sleep(appServerKillGraceMs)]);
-    if (!exited) {
-      this.kill("SIGKILL", spawned.child);
-      await Promise.race([exit, sleep(appServerKillGraceMs)]);
-    }
-    await rm(spawned.codexHome, { force: true, recursive: true });
+  } catch {
+    // Fall back to killing the direct child below.
   }
+  child.kill(signal);
+}
+
+class CodexUnixSocketJsonRpc {
+  private buffer = Buffer.alloc(0);
+  private readonly fragments: Buffer[] = [];
+  private closed = false;
+  private intentionalClose = false;
+
+  private constructor(
+    private readonly socket: Socket,
+    private readonly onMessage: (message: JsonRpcMessage) => void,
+    private readonly onFailure: (error: Error) => void,
+  ) {}
+
+  static async connect(
+    socketPath: string,
+    onMessage: (message: JsonRpcMessage) => void,
+    onFailure: (error: Error) => void,
+  ): Promise<CodexUnixSocketJsonRpc> {
+    const socket = createConnection(socketPath);
+    const client = new CodexUnixSocketJsonRpc(socket, onMessage, onFailure);
+    await client.handshake();
+    socket.on("data", (chunk) => client.onData(chunk));
+    socket.on("error", (error) => {
+      if (!client.closed) {
+        onFailure(error);
+      }
+    });
+    socket.on("close", () => {
+      if (!client.intentionalClose) {
+        onFailure(reviewerFailed("codex app-server socket closed"));
+      }
+      client.closed = true;
+    });
+    return client;
+  }
+
+  write(message: JsonRpcMessage): void {
+    if (this.closed || this.socket.destroyed || !this.socket.writable) {
+      throw reviewerFailed("codex app-server socket is not writable");
+    }
+    this.socket.write(encodeWebSocketFrame(Buffer.from(JSON.stringify(message), "utf8"), true));
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    this.intentionalClose = true;
+    this.closed = true;
+    try {
+      if (!this.socket.destroyed && this.socket.writable) {
+        this.socket.write(encodeWebSocketFrame(Buffer.alloc(0), true, 0x8));
+      }
+    } catch {
+      // Closing is best-effort.
+    }
+    this.socket.end();
+    await Promise.race([once(this.socket, "close"), sleep(appServerKillGraceMs)]);
+    this.socket.destroy();
+  }
+
+  private async handshake(): Promise<void> {
+    const key = randomBytes(16).toString("base64");
+    const request = [
+      "GET /rpc HTTP/1.1",
+      "Host: localhost",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Key: ${key}`,
+      "Sec-WebSocket-Version: 13",
+      "",
+      "",
+    ].join("\r\n");
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(
+          reviewerFailed(
+            `timed out waiting for codex app-server socket upgrade: ${this.socket.remoteAddress ?? "unix socket"}`,
+          ),
+        );
+      }, appServerHandshakeTimeoutMs);
+      const onConnect = () => {
+        this.socket.write(request);
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const onClose = () => {
+        cleanup();
+        reject(reviewerFailed("codex app-server socket closed before upgrade completed"));
+      };
+      const onData = (chunk: Buffer) => {
+        this.buffer = Buffer.concat([this.buffer, chunk]);
+        const headerEnd = this.buffer.indexOf("\r\n\r\n");
+        if (headerEnd === -1) {
+          return;
+        }
+        const header = this.buffer.subarray(0, headerEnd).toString("utf8");
+        this.buffer = this.buffer.subarray(headerEnd + 4);
+        cleanup();
+        if (!/^HTTP\/1\.1 101\b/i.test(header)) {
+          reject(reviewerFailed(`codex app-server socket upgrade failed: ${firstLine(header)}`));
+          return;
+        }
+        resolve();
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.socket.off("connect", onConnect);
+        this.socket.off("error", onError);
+        this.socket.off("close", onClose);
+        this.socket.off("end", onClose);
+        this.socket.off("data", onData);
+      };
+      this.socket.on("connect", onConnect);
+      this.socket.on("error", onError);
+      this.socket.on("close", onClose);
+      this.socket.on("end", onClose);
+      this.socket.on("data", onData);
+    });
+  }
+
+  private onData(chunk: Buffer): void {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    try {
+      this.consumeFrames();
+    } catch (error) {
+      this.onFailure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  private consumeFrames(): void {
+    while (true) {
+      const frame = decodeWebSocketFrame(this.buffer);
+      if (frame === undefined) {
+        return;
+      }
+      this.buffer = this.buffer.subarray(frame.bytes);
+      if (frame.opcode === 0x8) {
+        this.closed = true;
+        this.socket.end();
+        return;
+      }
+      if (frame.opcode === 0x9) {
+        this.socket.write(encodeWebSocketFrame(frame.payload, true, 0xa));
+        continue;
+      }
+      if (frame.opcode === 0x1 || frame.opcode === 0x0) {
+        this.fragments.push(frame.payload);
+        if (!frame.fin) {
+          continue;
+        }
+        const payload = Buffer.concat(this.fragments).toString("utf8");
+        this.fragments.length = 0;
+        const parsed = parseJsonRpcPayload(payload);
+        if (parsed !== undefined) {
+          this.onMessage(parsed);
+        }
+      }
+    }
+  }
+}
+
+function encodeWebSocketFrame(payload: Buffer, mask: boolean, opcode = 0x1): Buffer {
+  const length = payload.length;
+  const lengthBytes =
+    length < 126
+      ? Buffer.from([length])
+      : length <= 0xffff
+        ? Buffer.from([126, (length >> 8) & 0xff, length & 0xff])
+        : websocketUInt64(length);
+  const maskKey = mask ? randomBytes(4) : Buffer.alloc(0);
+  const header = Buffer.concat([
+    Buffer.from([0x80 | opcode, (mask ? 0x80 : 0) | (lengthBytes[0] ?? 0)]),
+    lengthBytes.subarray(1),
+    maskKey,
+  ]);
+  if (!mask) {
+    return Buffer.concat([header, payload]);
+  }
+  const masked = Buffer.alloc(payload.length);
+  for (let index = 0; index < payload.length; index++) {
+    masked[index] = (payload[index] ?? 0) ^ (maskKey[index % 4] ?? 0);
+  }
+  return Buffer.concat([header, masked]);
+}
+
+function websocketUInt64(length: number): Buffer {
+  const buffer = Buffer.alloc(9);
+  buffer[0] = 127;
+  buffer.writeBigUInt64BE(BigInt(length), 1);
+  return buffer;
+}
+
+function decodeWebSocketFrame(
+  buffer: Buffer,
+): { fin: boolean; opcode: number; payload: Buffer; bytes: number } | undefined {
+  if (buffer.length < 2) {
+    return undefined;
+  }
+  const first = buffer[0] ?? 0;
+  const second = buffer[1] ?? 0;
+  let offset = 2;
+  let length = second & 0x7f;
+  if (length === 126) {
+    if (buffer.length < offset + 2) {
+      return undefined;
+    }
+    length = buffer.readUInt16BE(offset);
+    offset += 2;
+  } else if (length === 127) {
+    if (buffer.length < offset + 8) {
+      return undefined;
+    }
+    const bigLength = buffer.readBigUInt64BE(offset);
+    if (bigLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw reviewerFailed("codex app-server websocket frame is too large");
+    }
+    length = Number(bigLength);
+    offset += 8;
+  }
+  const masked = (second & 0x80) !== 0;
+  const maskKey = masked ? buffer.subarray(offset, offset + 4) : undefined;
+  if (masked) {
+    offset += 4;
+  }
+  if (buffer.length < offset + length) {
+    return undefined;
+  }
+  const payload = Buffer.from(buffer.subarray(offset, offset + length));
+  if (maskKey !== undefined) {
+    for (let index = 0; index < payload.length; index++) {
+      payload[index] = (payload[index] ?? 0) ^ (maskKey[index % 4] ?? 0);
+    }
+  }
+  return {
+    fin: (first & 0x80) !== 0,
+    opcode: first & 0x0f,
+    payload,
+    bytes: offset + length,
+  };
 }
 
 async function spawnCodexAppServer(options: {
@@ -655,6 +1115,59 @@ function extractModelProviderConfig(config: string): string {
   return selected.join("\n").trim();
 }
 
+function codexAppServerOptions(
+  reviewer: ReviewReviewerConfig,
+  env: NodeJS.ProcessEnv | undefined,
+): CodexAppServerOptions {
+  const mode = codexAppServerMode(reviewer);
+  const codexHome = resolveCodexHome(reviewer, env);
+  return {
+    mode,
+    codexHome,
+    socketPath: path.join(codexHome, "app-server-control", "app-server-control.sock"),
+    sharedCodexHome: mode !== "stdio-isolated",
+  };
+}
+
+function codexAppServerMode(reviewer: ReviewReviewerConfig): CodexAppServerMode {
+  const value = reviewer.appServerOptions?.mode;
+  if (value === undefined) {
+    return "auto";
+  }
+  if (value === "auto" || value === "attach" || value === "launch" || value === "stdio-isolated") {
+    return value;
+  }
+  throw reviewerFailed(`Invalid Codex appServerOptions.mode: ${String(value)}`);
+}
+
+function resolveCodexHome(
+  reviewer: ReviewReviewerConfig,
+  env: NodeJS.ProcessEnv | undefined,
+): string {
+  const effectiveEnv = env ?? process.env;
+  const configured = optionalStringOption(reviewer.appServerOptions, "codexHome");
+  return absoluteHomePath(
+    configured ||
+      effectiveEnv.DIFFWARDEN_CODEX_HOME?.trim() ||
+      effectiveEnv.DIFFWARDEN_CODEX_AUTH_HOME?.trim() ||
+      effectiveEnv.CODEX_HOME?.trim() ||
+      path.join(effectiveEnv.HOME?.trim() || homedir(), ".codex"),
+  );
+}
+
+function absoluteHomePath(value: string): string {
+  const expanded =
+    value === "~" || value.startsWith("~/") ? path.join(homedir(), value.slice(2)) : value;
+  return path.resolve(expanded);
+}
+
+function authHomeForMode(
+  options: CodexAppServerOptions,
+  env: NodeJS.ProcessEnv | undefined,
+): string {
+  return options.mode === "stdio-isolated" ? codexAuthHome(env) : options.codexHome;
+}
+
 function codexAuthHome(env: NodeJS.ProcessEnv | undefined): string {
   const effectiveEnv = env ?? process.env;
   return (
@@ -664,8 +1177,8 @@ function codexAuthHome(env: NodeJS.ProcessEnv | undefined): string {
   );
 }
 
-async function assertCodexAuthAvailable(env: NodeJS.ProcessEnv | undefined): Promise<void> {
-  const authPath = path.join(codexAuthHome(env), "auth.json");
+async function assertCodexAuthAvailable(codexHome: string): Promise<void> {
+  const authPath = path.join(codexHome, "auth.json");
   try {
     await access(authPath, constants.R_OK);
   } catch {
@@ -741,7 +1254,8 @@ function codexAppServerRunContext(value: unknown): CodexAppServerRunContext | un
     !isRecord(value) ||
     value.kind !== "codex-app-server" ||
     typeof value.requestedExecutable !== "string" ||
-    typeof value.resolvedExecutable !== "string"
+    typeof value.resolvedExecutable !== "string" ||
+    !isCodexAppServerMode(value.mode)
   ) {
     return undefined;
   }
@@ -751,6 +1265,18 @@ function codexAppServerRunContext(value: unknown): CodexAppServerRunContext | un
 function pathContext(env: NodeJS.ProcessEnv | undefined): { path?: string } {
   const value = (env ?? process.env).PATH;
   return value === undefined ? {} : { path: value };
+}
+
+function optionalStringOption(
+  options: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = options?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isCodexAppServerMode(value: unknown): value is CodexAppServerMode {
+  return value === "auto" || value === "attach" || value === "launch" || value === "stdio-isolated";
 }
 
 function throwIfAborted(signal: AbortSignal | undefined, message: string): void {
@@ -773,6 +1299,23 @@ function bindAbortSignal(signal: AbortSignal | undefined, abort: () => void): ()
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseJsonRpcLine(line: string): JsonRpcMessage | undefined {
+  const rawLine = line.trim();
+  if (!rawLine) {
+    return undefined;
+  }
+  return parseJsonRpcPayload(rawLine);
+}
+
+function parseJsonRpcPayload(payload: string): JsonRpcMessage | undefined {
+  try {
+    const value = JSON.parse(payload);
+    return isRecord(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function classifyAppServerStartError(executable: string, error: unknown): Error {
@@ -849,6 +1392,10 @@ function formatError(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+function firstLine(value: string): string {
+  return value.split(/\r?\n/, 1)[0] ?? value;
 }
 
 function formatTurnFailure(params: unknown, status: string): string {

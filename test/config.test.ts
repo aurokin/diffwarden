@@ -158,6 +158,35 @@ describe("loadDiffwardenConfig", () => {
     });
   });
 
+  it("loads Codex app-server reuse options", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [
+        {
+          id: "codex-app-server",
+          engine: "codex",
+          transport: "app-server",
+          appServerOptions: {
+            mode: "attach",
+            codexHome: "~/.codex-diffwarden",
+          },
+        },
+      ],
+    });
+
+    const loaded = await loadDiffwardenConfig({ cwd: root, repoRoot: root });
+
+    expect(loaded?.config.reviewers?.[0]).toMatchObject({
+      id: "codex-app-server",
+      sdk: "codex",
+      transport: "app-server",
+      appServerOptions: {
+        mode: "attach",
+        codexHome: "~/.codex-diffwarden",
+      },
+    });
+  });
+
   it("rejects app-server transport for non-Codex reviewers", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {

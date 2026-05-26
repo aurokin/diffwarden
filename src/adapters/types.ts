@@ -37,6 +37,7 @@ export type ReviewReviewerConfig = {
   timeoutMs?: number;
   readonly: boolean;
   cliOptions?: Record<string, unknown>;
+  appServerOptions?: Record<string, unknown>;
   sdkOptions?: Record<string, unknown>;
   providerOptions?: Record<string, unknown>;
 };
