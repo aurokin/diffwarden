@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 import { writeFile } from "node:fs/promises";
 import { Command } from "commander";
-import { initDiffwardenConfig, loadDiffwardenConfig } from "./core/config.js";
+import { defaultReviewerModel, defaultReviewerTransport } from "./adapters/capabilities.js";
+import {
+  type LoadedDiffwardenConfig,
+  initDiffwardenConfig,
+  loadDiffwardenConfig,
+} from "./core/config.js";
 import {
   parseTimeoutSeconds,
   resolveReviewEnvOptionsWithSettings,
@@ -11,6 +16,7 @@ import {
   DiffwardenError,
   type ReviewErrorCode,
   invalidCli,
+  invalidConfig,
   reviewerFailed,
 } from "./core/errors.js";
 import { hasFindingAtOrAbovePriority, parseFindingFailureThreshold } from "./core/finding-gate.js";
@@ -30,6 +36,27 @@ import { version } from "./version.js";
 const program = new Command();
 const collectReviewers = (value: string, previous: string[]): string[] => [...previous, value];
 const collectValues = (value: string, previous: string[]): string[] => [...previous, value];
+
+type ReviewerListSummary = {
+  schema_version: 1;
+  config: {
+    path: string;
+    sha256: string;
+  };
+  defaultReviewerSet?: string;
+  reviewerSets: Record<string, string[]>;
+  reviewers: ReviewerListEntry[];
+};
+
+type ReviewerListEntry = {
+  id: string;
+  engine: string;
+  profile?: string;
+  transport: "native" | "cli" | "app-server";
+  provider?: string;
+  model?: string;
+  effort?: string;
+};
 
 program
   .name("diffwarden")
@@ -315,6 +342,34 @@ program
     },
   );
 
+const reviewers = program.command("reviewers").description("Inspect configured reviewers.");
+
+reviewers
+  .command("list")
+  .description("List configured reviewers and reviewer sets without running preflight checks.")
+  .option("--cwd <path>", "working directory", process.cwd())
+  .option("--format <format>", "output format: markdown or json", "markdown")
+  .action(async (options: { cwd: string; format: string }) => {
+    const resolvedOptions = resolveReviewerListOptions(options);
+    if (resolvedOptions.format !== "markdown" && resolvedOptions.format !== "json") {
+      throw invalidCli(`Invalid --format value: ${resolvedOptions.format}`);
+    }
+
+    const loadedConfig = await loadDiffwardenConfig({ cwd: resolvedOptions.cwd });
+    if (loadedConfig === undefined) {
+      throw invalidConfig(
+        "No diffwarden config found; run diffwarden init to create a config or pass --cwd to a configured repository",
+      );
+    }
+
+    const summary = summarizeReviewers(loadedConfig);
+    process.stdout.write(
+      resolvedOptions.format === "json"
+        ? `${JSON.stringify(summary, null, 2)}\n`
+        : renderReviewerListMarkdown(summary),
+    );
+  });
+
 const macos = program.command("macos").description("Inspect macOS executable trust state.");
 
 macos
@@ -455,8 +510,108 @@ function renderMacosDoctorMarkdown(report: MacosDoctorReport): string {
   return `${lines.join("\n")}\n`;
 }
 
+function summarizeReviewers(loadedConfig: LoadedDiffwardenConfig): ReviewerListSummary {
+  return {
+    schema_version: 1,
+    config: {
+      path: loadedConfig.path,
+      sha256: loadedConfig.sha256,
+    },
+    ...(loadedConfig.config.defaultReviewerSet !== undefined
+      ? { defaultReviewerSet: loadedConfig.config.defaultReviewerSet }
+      : {}),
+    reviewerSets: loadedConfig.config.reviewerSets ?? {},
+    reviewers: (loadedConfig.config.reviewers ?? []).map((reviewer) => {
+      const transport = reviewer.transport ?? defaultReviewerTransport(reviewer.sdk) ?? "sdk";
+      const model = reviewer.model ?? defaultReviewerModel(reviewer.sdk);
+
+      return {
+        id: reviewer.id,
+        engine: reviewer.sdk,
+        ...(reviewer.profile !== undefined ? { profile: reviewer.profile } : {}),
+        transport: publicTransport(transport),
+        ...(reviewer.provider !== undefined ? { provider: reviewer.provider } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(reviewer.effort !== undefined ? { effort: reviewer.effort } : {}),
+      };
+    }),
+  };
+}
+
+function renderReviewerListMarkdown(summary: ReviewerListSummary): string {
+  const lines = [
+    "# Diffwarden Reviewers",
+    "",
+    `Config: ${summary.config.path}`,
+    `Default reviewer set: ${summary.defaultReviewerSet ?? "(none)"}`,
+    "",
+    "## Reviewer Sets",
+    "",
+  ];
+
+  const reviewerSetEntries = Object.entries(summary.reviewerSets);
+  if (reviewerSetEntries.length === 0) {
+    lines.push("_None configured._", "");
+  } else {
+    lines.push("| Set | Reviewers | Default |");
+    lines.push("| --- | --- | --- |");
+    for (const [name, reviewers] of reviewerSetEntries) {
+      lines.push(
+        `| ${escapeMarkdownTable(name)} | ${escapeMarkdownTable(reviewers.join(", "))} | ${
+          name === summary.defaultReviewerSet ? "yes" : "no"
+        } |`,
+      );
+    }
+    lines.push("");
+  }
+
+  lines.push("## Reviewers", "");
+  if (summary.reviewers.length === 0) {
+    lines.push("_None configured._", "");
+  } else {
+    lines.push("| ID | Engine | Profile | Transport | Provider | Model | Effort |");
+    lines.push("| --- | --- | --- | --- | --- | --- | --- |");
+    for (const reviewer of summary.reviewers) {
+      const row = [
+        reviewer.id,
+        reviewer.engine,
+        reviewer.profile ?? "",
+        reviewer.transport,
+        reviewer.provider ?? "",
+        reviewer.model ?? "",
+        reviewer.effort ?? "",
+      ]
+        .map(escapeMarkdownTable)
+        .join(" | ");
+      lines.push(`| ${row} |`);
+    }
+    lines.push("");
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function publicTransport(transport: "sdk" | "cli" | "app-server"): "native" | "cli" | "app-server" {
+  return transport === "sdk" ? "native" : transport;
+}
+
 function escapeMarkdownTable(value: string): string {
   return value.replaceAll("|", "\\|").replaceAll("\n", " ");
+}
+
+function resolveReviewerListOptions(options: { cwd: string; format: string }): {
+  cwd: string;
+  format: string;
+} {
+  const globalOptions = program.opts<{
+    cwd?: string;
+    format?: string;
+  }>();
+
+  return {
+    cwd: globalOptions.cwd ?? options.cwd,
+    format: globalOptions.format ?? options.format,
+  };
 }
 
 function resolveDoctorOptions(options: {

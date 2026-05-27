@@ -58,6 +58,13 @@ diffwarden doctor --reviewer claude --model sonnet --effort high
 diffwarden doctor --reviewer pi --model anthropic/claude-sonnet-4-5
 ```
 
+List configured reviewers and reviewer sets without running preflight checks:
+
+```bash
+diffwarden reviewers list
+diffwarden reviewers list --format json
+```
+
 Supported v1 targets:
 
 - `uncommitted`

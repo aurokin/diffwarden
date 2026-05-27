@@ -112,6 +112,7 @@ Expected behavior:
 
 ```bash
 diffwarden [options]
+diffwarden reviewers list [--cwd <path>] [--format markdown|json]
 ```
 
 ### 5.2 Options
@@ -143,6 +144,12 @@ diffwarden --reviewer-set 2      Use config reviewerSets["2"].
 diffwarden --reviewer-set 3      Use config reviewerSets["3"].
 diffwarden --reviewer-set deep   Use config reviewerSets["deep"].
 ```
+
+`diffwarden reviewers list` loads the discovered config and lists `defaultReviewerSet`,
+`reviewerSets`, and configured reviewer IDs/profiles without resolving a target, invoking
+adapters, running preflight checks, or spending model/API time. JSON output is intended for
+agents and automation and must not include nested option bags such as `providerOptions`,
+`sdkOptions`, or `cliOptions`.
 
 Reviewer specs should stay compact and SDK-agnostic at the public boundary:
 

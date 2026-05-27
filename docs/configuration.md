@@ -39,6 +39,13 @@ diffwarden --target base:main --reviewer-set 2
 When no `--reviewer` or `--reviewer-set` is provided, config must define
 `defaultReviewerSet`.
 
+List configured reviewers and reviewer sets without invoking adapters or running preflight:
+
+```bash
+diffwarden reviewers list
+diffwarden reviewers list --format json
+```
+
 Configured reviewers use `engine` for the reviewer family (`claude`, `pi`, `codex`, etc.).
 Legacy configs that still use `sdk` continue to load and are normalized internally.
 Use `transport: "native"` for the SDK-backed path when you want to be explicit, or

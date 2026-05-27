@@ -29,6 +29,8 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
    the prompt, or validate findings against changed-line overlap.
 
 2. Pick reviewers:
+   - Use `diffwarden reviewers list` when you need to see configured reviewer IDs or reviewer
+     sets before choosing.
    - Use explicit `--reviewer` values when the user names reviewers.
    - Prefer the configured default reviewer set unless the user specifies reviewers or a
      different set. Passing no reviewer flags uses `defaultReviewerSet` when config defines
@@ -71,6 +73,8 @@ diffwarden --target base:main --reviewer cursor --format json --out review.json
 diffwarden --target base:main --reviewer-set <name> --format ndjson
 diffwarden --target 'custom:Review auth flow and permission checks' --reviewer-set <name>
 diffwarden --target base:main --reviewer-set <name> --fail-on-findings P2
+diffwarden reviewers list
+diffwarden reviewers list --format json
 diffwarden init
 ```
 

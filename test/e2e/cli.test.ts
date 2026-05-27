@@ -457,6 +457,88 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("lists configured reviewers in Markdown without running preflight", async () => {
+    const repo = createRepo();
+    writeDiffwardenConfig(repo);
+
+    const result = await runDiffwarden(repo, ["reviewers", "list", "--cwd", repo]);
+
+    expect(result.stdout).toContain("# Diffwarden Reviewers");
+    expect(result.stdout).toContain(`Config: ${path.join(repo, "diffwarden.config.json")}`);
+    expect(result.stdout).toContain("Default reviewer set: 2");
+    expect(result.stdout).toContain("| 2 | cursor-fast, pi-openrouter-high | yes |");
+    expect(result.stdout).toContain(
+      "| pi-openrouter-high | pi | openrouter-high | native | openrouter | anthropic/claude-sonnet | high |",
+    );
+    expect(result.stdout).not.toContain("OPENROUTER_API_KEY");
+    expect(result.stdout).not.toContain("providerProfile");
+    expect(result.stderr).toBe("");
+  });
+
+  it("lists configured reviewers in JSON without leaking nested option bags", async () => {
+    const repo = createRepo();
+    writeDiffwardenConfig(repo);
+
+    const result = await runDiffwarden(repo, [
+      "reviewers",
+      "list",
+      "--cwd",
+      repo,
+      "--format",
+      "json",
+    ]);
+    const summary = JSON.parse(result.stdout);
+
+    expect(summary).toMatchObject({
+      schema_version: 1,
+      config: {
+        path: path.join(repo, "diffwarden.config.json"),
+        sha256: expect.any(String),
+      },
+      defaultReviewerSet: "2",
+      reviewerSets: {
+        "1": ["pi-default"],
+        "2": ["cursor-fast", "pi-openrouter-high"],
+      },
+      reviewers: [
+        {
+          id: "pi-default",
+          engine: "pi",
+          transport: "native",
+        },
+        {
+          id: "cursor-fast",
+          engine: "cursor",
+          profile: "fast",
+          transport: "native",
+          model: "composer-2.5",
+        },
+        {
+          id: "pi-openrouter-high",
+          engine: "pi",
+          profile: "openrouter-high",
+          transport: "native",
+          provider: "openrouter",
+          model: "anthropic/claude-sonnet",
+          effort: "high",
+        },
+      ],
+    });
+    expect(result.stdout).not.toContain("providerOptions");
+    expect(result.stdout).not.toContain("sdkOptions");
+    expect(result.stdout).not.toContain("OPENROUTER_API_KEY");
+    expect(result.stderr).toBe("");
+  });
+
+  it("requires config before listing reviewers", async () => {
+    const repo = createRepo();
+
+    await expect(runDiffwarden(repo, ["reviewers", "list", "--cwd", repo])).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("No diffwarden config found"),
+    });
+  });
+
   it("returns a CLI error for unsupported targets", async () => {
     const repo = createRepo();
 
@@ -510,6 +592,50 @@ function createRepo(): string {
   git(repo, ["add", "tracked.txt"]);
   git(repo, ["commit", "-m", "initial"]);
   return repo;
+}
+
+function writeDiffwardenConfig(repo: string): void {
+  writeFileSync(
+    path.join(repo, "diffwarden.config.json"),
+    `${JSON.stringify(
+      {
+        defaultReviewerSet: "2",
+        reviewerSets: {
+          "1": ["pi-default"],
+          "2": ["cursor-fast", "pi-openrouter-high"],
+        },
+        reviewers: [
+          {
+            id: "pi-default",
+            engine: "pi",
+          },
+          {
+            id: "cursor-fast",
+            engine: "cursor",
+            profile: "fast",
+            transport: "native",
+            model: "composer-2.5",
+          },
+          {
+            id: "pi-openrouter-high",
+            engine: "pi",
+            profile: "openrouter-high",
+            provider: "openrouter",
+            model: "anthropic/claude-sonnet",
+            effort: "high",
+            providerOptions: {
+              apiKeyEnv: "OPENROUTER_API_KEY",
+            },
+            sdkOptions: {
+              providerProfile: "openrouter",
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  );
 }
 
 function isolatedEnv(): NodeJS.ProcessEnv {
