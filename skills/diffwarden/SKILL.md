@@ -6,10 +6,14 @@ description: Use when an agent should run the diffwarden CLI to request read-onl
 # Diffwarden
 
 Use `diffwarden` as a read-only review tool from the repository being reviewed. This skill is
-for agents using Diffwarden, not for agents developing the Diffwarden codebase.
+for agents using Diffwarden.
 
-Do not edit files, post review comments, or change repository state because Diffwarden found
-issues. Report findings first, then fix only when the user separately asks for remediation.
+If the user needs to install this skill, prefer the Skills CLI so agent-specific skill
+directories and lockfiles stay consistent:
+
+```bash
+npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex claude-code --full-depth
+```
 
 ## Workflow
 
@@ -26,15 +30,20 @@ issues. Report findings first, then fix only when the user separately asks for r
 
 2. Pick reviewers:
    - Use explicit `--reviewer` values when the user names reviewers.
-   - Use `--reviewer-set` when the user or project config provides one.
+   - Prefer the configured default reviewer set unless the user specifies reviewers or a
+     different set. Passing no reviewer flags uses `defaultReviewerSet` when config defines
+     it; use `--reviewer-set <name|count>` when you need an explicit set.
    - If neither is available, explain that Diffwarden needs an explicit reviewer, a reviewer
      set, or a config-defined `defaultReviewerSet`.
 
 3. Run `diffwarden` from the repository being reviewed. If running from another directory,
    pass `--cwd <repo>`.
 
-4. Prefer Markdown output for human-facing responses. Use JSON when another tool or agent
-   needs structured findings.
+4. Pick an output format:
+   - Use default Markdown for human-facing responses.
+   - Use `--format json` when another tool or agent needs the final structured artifact.
+   - Use `--format ndjson` for incremental consumers that need progress events before the
+     final artifact is ready.
 
 5. For CI-like checks, use `--fail-on-findings <P0|P1|P2|P3>` only when the user wants an
    exit-code gate. It preserves normal Markdown or JSON output and exits `1` when final
@@ -50,7 +59,8 @@ Use real built-in reviewers or configured profile names in `--reviewer`; do not 
 literal placeholder `<reviewer>`.
 
 ```bash
-diffwarden --target base:main --reviewer-set <name>
+diffwarden --target base:main
+diffwarden --target base:main --reviewer-set <name|count>
 diffwarden --target commit:<sha> --format json
 diffwarden --target uncommitted --reviewer cursor
 diffwarden --target base:main --reviewer pi
@@ -58,6 +68,7 @@ diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 diffwarden --target base:main --reviewer claude --model sonnet --effort high
 diffwarden --target base:main --reviewer droid-cli --model claude-opus-4-7 --effort high
 diffwarden --target base:main --reviewer cursor --format json --out review.json
+diffwarden --target base:main --reviewer-set <name> --format ndjson
 diffwarden --target 'custom:Review auth flow and permission checks' --reviewer-set <name>
 diffwarden --target base:main --reviewer-set <name> --fail-on-findings P2
 diffwarden init
@@ -72,11 +83,18 @@ diffwarden --target uncommitted --reviewer fake
 ## Output Handling
 
 - Default Markdown can be shown directly to the user.
-- JSON artifacts use `schema_version: 1` and include target, result, validation, warnings,
+- JSON artifacts use `schema_version: 2` and include target, result, validation, warnings,
   and per-reviewer artifacts.
+- NDJSON events use `schema_version: 2`. Parse each stdout line as one event. After
+  `run_started`, the stream ends with exactly one terminal event: `final_result` or `error`.
+- Treat `reviewer_result` NDJSON events as provisional. Only `final_result.artifact` is the
+  authoritative aggregated review artifact.
 - Findings include title, body, confidence, optional priority, file path, and line range.
 - Treat findings as review evidence, not automatic truth.
 - Preserve severity, reviewer attribution, and file/line references when summarizing.
+- If a finding is intentionally declined, add a concise inline code
+  comment near the relevant code explaining the invariant or tradeoff. That helps future
+  review runs avoid fixating on the same apparent issue. 
 - If there are no findings, say that directly and mention any warnings or residual test gaps.
 
 ## Boundaries
