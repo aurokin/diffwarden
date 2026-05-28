@@ -1,22 +1,8 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ReviewAdapter } from "../src/adapters/types.js";
-import { resolveGitTarget } from "../src/core/git.js";
+import type { ResolvedDiff } from "../src/core/git.js";
 import { runReviewEvents } from "../src/core/runner.js";
 import { type ReviewArtifact, type ReviewEvent, reviewArtifactSchema } from "../src/core/schema.js";
-import { parseTargetSpec } from "../src/core/target.js";
-
-let repo: string | undefined;
-
-afterEach(() => {
-  if (repo) {
-    rmSync(repo, { force: true, recursive: true });
-    repo = undefined;
-  }
-});
 
 describe("runReviewEvents", () => {
   it("streams lifecycle events and a final aggregate that matches the return value", async () => {
@@ -211,12 +197,30 @@ describe("runReviewEvents", () => {
 
 async function uncommittedTarget(): Promise<{
   cwd: string;
-  resolved: Awaited<ReturnType<typeof resolveGitTarget>>;
+  resolved: ResolvedDiff;
 }> {
-  const cwd = createRepo();
-  repo = cwd;
-  writeFileSync(path.join(cwd, "tracked.txt"), "changed\n");
-  return { cwd, resolved: await resolveGitTarget(cwd, parseTargetSpec("uncommitted")) };
+  const cwd = "/repo";
+  return {
+    cwd,
+    resolved: {
+      diff: [
+        "diff --git a/tracked.txt b/tracked.txt",
+        "index e79c5e8..2d95f3b 100644",
+        "--- a/tracked.txt",
+        "+++ b/tracked.txt",
+        "@@ -1 +1 @@",
+        "-initial",
+        "+changed",
+      ].join("\n"),
+      target: {
+        kind: "uncommitted",
+        repo_root: cwd,
+        head_sha: "head-sha",
+        diff_command: "git diff --staged && git diff",
+        changed_files: ["tracked.txt"],
+      },
+    },
+  };
 }
 
 async function collect(
@@ -317,23 +321,4 @@ function createFailingPreflightAdapter(
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function createRepo(): string {
-  const newRepo = mkdtempSync(path.join(tmpdir(), "diffwarden-events-"));
-  git(newRepo, ["init", "-b", "main"]);
-  git(newRepo, ["config", "user.email", "test@example.com"]);
-  git(newRepo, ["config", "user.name", "Test User"]);
-  writeFileSync(path.join(newRepo, "tracked.txt"), "initial\n");
-  git(newRepo, ["add", "tracked.txt"]);
-  git(newRepo, ["commit", "-m", "initial"]);
-  return newRepo;
-}
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
 }

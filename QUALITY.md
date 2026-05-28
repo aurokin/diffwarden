@@ -18,6 +18,11 @@ The default unit suite excludes tests that intentionally spawn fake reviewer exe
 create real Git repositories. Those process-heavy paths are still covered by explicit suites
 listed below.
 
+Keep default unit tests free of real Git repositories and spawned reviewer executables unless the
+behavior under test is specifically process or Git integration. Use synthetic resolved targets or
+fake runners for core orchestration tests, then cover the boundary in `test:process`, `test:git`,
+or `test:e2e`.
+
 ## Test Tiers
 
 ```bash
@@ -34,6 +39,11 @@ real Git target-resolution behavior. `test:full` runs all three tiers in sequenc
 Process and Git suites run test files serially with one worker. Several tests create temporary
 Git repositories or short-lived child processes; on macOS, parallelizing those tests can amplify
 `syspolicyd`/`trustd` executable validation work enough to affect the whole machine.
+
+For CI, prefer separate jobs for `pnpm check`, `pnpm test:process`, and `pnpm test:git` instead of
+one serial job. Keep `pnpm check` as the required fast gate, then run the process and real-Git
+suites as credential-free integration gates. Run `pnpm test:e2e` where built CLI coverage is
+required, and keep live tests manual or scheduled with explicit spend opt-in.
 
 ## Coverage
 
