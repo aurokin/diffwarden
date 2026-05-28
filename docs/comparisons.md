@@ -76,18 +76,19 @@ the Codex app/session model.
 | --- | --- | --- |
 | Instruction shape | Separates a static review rubric (`core/review_prompt.md`) from target-specific review prompts | Builds one adapter-neutral prompt from the target, repo instructions, schema instructions, and an embedded patch for diff-backed targets |
 | Target inspection | Prompts the review child to inspect the repository and run the appropriate Git diff | Core resolves the target and captures the patch before any reviewer runs |
-| Prompt fidelity | Uses Codex's full bug threshold, comment style, priority rubric, location rules, and correctness semantics | Current implementation uses a smaller prompt; the product goal is to preserve the Codex rubric across all adapters |
+| Prompt fidelity | Uses Codex's full bug threshold, comment style, priority rubric, location rules, and correctness semantics | Shared prompt now carries the Codex-style rubric so all adapters receive the same review contract |
 | Structured output | Review mode asks for JSON in the prompt, then parses the final message as `ReviewOutputEvent` | Uses the shared `ReviewResult` schema with native schema output, tool-call capture, or text parsing depending on adapter support |
 | JSON parsing | Parses exact JSON, then extracts a JSON object substring, then falls back to plain text | Parses exact JSON, scans balanced JSON candidates, then falls back to plain text; this is intentionally more robust for CLI/SDK output with logs or echoed prompts |
 | Priority field | Codex prompt says priority may be omitted/null, but the protocol struct requires an integer priority | Normalized schema accepts optional priority for compatibility; strict structured-output paths require priority |
 | Review lifecycle | Emits `EnteredReviewMode`/`ExitedReviewMode`, records a synthetic review action, and writes a final assistant review into Codex history | Emits Diffwarden run/reviewer/final events, returns Markdown/JSON/NDJSON artifacts, and does not mutate a Codex thread |
-| Read-only posture | Uses a constrained review child with approval policy never and selected features disabled | Reports per-adapter capability as enforced, tool-restricted, or prompt-only; Codex CLI uses `codex exec --sandbox read-only --ephemeral` |
+| Read-only posture | Uses a constrained review child with approval policy never and selected features disabled | Reports per-adapter capability as enforced, tool-restricted, or prompt-only; Codex CLI uses `codex exec --sandbox read-only --ephemeral` and Codex app-server uses ephemeral read-only threads |
 
-The main implementation gap is prompt/rubric fidelity. Diffwarden should preserve Codex's
-reviewer threshold for actionable bugs, one-finding-per-issue discipline, priority
-definitions, short diff-overlapping locations, comment style, and overall-correctness
-semantics in the shared prompt so Claude, Cursor, Pi, Droid, Codex, and other adapters are
-all asked to perform the same review.
+Diffwarden's current Codex-specific implementation keeps two paths: the default CLI and
+app-server flows use Diffwarden's shared schema-constrained prompt, while experimental
+`appServerOptions.reviewMode: "native"` delegates to Codex `review/start` and parses the
+rendered review text. Native mode is intentionally marked text-only in metadata because Codex
+does not currently expose the underlying structured `ReviewOutputEvent` through the app-server
+item.
 
 ### Feature Comparison
 

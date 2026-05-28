@@ -167,6 +167,9 @@ describe("createCodexAppServerAdapter", () => {
       requestedEffort: "minimal",
       resolvedEffort: "minimal",
       effortResolutionSource: "requested",
+      codexReviewMode: "structured",
+      webSearchPolicy: "enabled",
+      webSearchMode: "live",
     });
     expect(prepared.preflight?.checks).toContainEqual(
       expect.objectContaining({
@@ -189,8 +192,11 @@ describe("createCodexAppServerAdapter", () => {
       executable: harness.executable,
       execEnabled: true,
       ephemeral: true,
+      codexReviewMode: "structured",
       requestedModel: "gpt-test",
       resolvedEffort: "minimal",
+      webSearchPolicy: "enabled",
+      webSearchMode: "live",
     });
     expect(invocation.argv).toContain("app-server");
     expect(invocation.argv).not.toContain("shell_tool");
@@ -203,7 +209,7 @@ describe("createCodexAppServerAdapter", () => {
       persistExtendedHistory: false,
       model: "gpt-test",
     });
-    expect(invocation.threadStart.config).toEqual({ web_search: "disabled" });
+    expect(invocation.threadStart.config).toEqual({ web_search: "live" });
     expect(invocation.turnStart).toMatchObject({
       approvalPolicy: "never",
       model: "gpt-test",
@@ -214,11 +220,11 @@ describe("createCodexAppServerAdapter", () => {
         networkAccess: false,
       },
     });
-    expect(invocation.turnStart.outputSchema).toMatchObject({
+    expect(invocation.turnStart?.outputSchema).toMatchObject({
       type: "object",
       additionalProperties: false,
     });
-    expect(invocation.turnStart.input[0]?.text).toBe("review prompt");
+    expect(invocation.turnStart?.input[0]?.text).toBe("review prompt");
     expect(existsSync(invocation.env.CODEX_HOME)).toBe(false);
   });
 
@@ -267,6 +273,119 @@ describe("createCodexAppServerAdapter", () => {
     expect(invocation.config).toContain('sandbox_mode = "read-only"');
     expect(invocation.config).not.toContain('sandbox_mode = "danger-full-access"');
     expect(invocation.config).not.toContain("[projects.");
+  });
+
+  it("supports Codex app-server web search overrides", async () => {
+    const harness = createHarness({
+      sourceConfig: [
+        'web_search = "cached"',
+        "",
+        '[projects."/tmp/repo"]',
+        'web_search = "disabled"',
+        "",
+      ].join("\n"),
+    });
+    const adapter = createCodexAppServerAdapter();
+    const disabledReviewer = createReviewer(harness.executable, {
+      appServerOptions: {
+        mode: "stdio-isolated",
+        webSearch: "disabled",
+      },
+    });
+
+    const disabledOutput = await adapter.run(createInput(disabledReviewer, harness));
+    expect(harness.readInvocation().threadStart.config).toEqual({ web_search: "disabled" });
+    expect(harness.readInvocation().config).not.toContain('web_search = "cached"');
+    expect(disabledOutput.metadata).toMatchObject({
+      webSearchPolicy: "disabled",
+      webSearchMode: "disabled",
+    });
+
+    const inheritReviewer = createReviewer(harness.executable, {
+      appServerOptions: {
+        mode: "stdio-isolated",
+        webSearch: "inherit",
+      },
+    });
+
+    const inheritOutput = await adapter.run(createInput(inheritReviewer, harness));
+    expect(harness.readInvocation().threadStart).not.toHaveProperty("config");
+    expect(harness.readInvocation().config).toContain('web_search = "cached"');
+    expect(harness.readInvocation().config).not.toContain("[projects.");
+    expect(inheritOutput.metadata).toMatchObject({
+      webSearchPolicy: "inherit",
+    });
+    expect(inheritOutput.metadata).not.toHaveProperty("webSearchMode");
+  });
+
+  it("can run experimental Codex native review mode", async () => {
+    const harness = createHarness({ nativeReview: true });
+    const adapter = createCodexAppServerAdapter();
+    const reviewer = createReviewer(harness.executable, {
+      effort: "high",
+      appServerOptions: {
+        mode: "stdio-isolated",
+        reviewMode: "native",
+      },
+    });
+
+    const prepared = await adapter.prepare?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: harness.env,
+    });
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      runContext: prepared?.runContext,
+    });
+    const invocation = harness.readInvocation();
+
+    expect(prepared?.preflight?.metadata).toMatchObject({
+      codexReviewMode: "native",
+      nativeReviewOutput: "rendered-text",
+      nativeReviewStructuredFindings: false,
+      requestedEffort: "high",
+      resolvedEffort: "high",
+      webSearchPolicy: "enabled",
+      requestedWebSearchMode: "live",
+      webSearchMode: "disabled",
+      effectiveWebSearchMode: "disabled",
+      effectiveWebSearchReason: "codex-native-review-disables-web-search",
+    });
+    expect(prepared?.preflight?.checks).toContainEqual(
+      expect.objectContaining({
+        name: "web-search",
+        status: "warning",
+      }),
+    );
+    expect(invocation.threadStart.config).toEqual({
+      web_search: "disabled",
+      model_reasoning_effort: "high",
+    });
+    expect(invocation.reviewStart).toMatchObject({
+      threadId: "thread-1",
+      delivery: "inline",
+      target: {
+        type: "custom",
+        instructions: "review prompt",
+      },
+    });
+    expect(invocation.turnStart).toBeUndefined();
+    expect(output.text).toBe("native review text");
+    expect(output.metadata).toMatchObject({
+      captureMode: "text",
+      codexReviewMode: "native",
+      nativeReviewOutput: "rendered-text",
+      nativeReviewStructuredFindings: false,
+      requestedEffort: "high",
+      resolvedEffort: "high",
+      webSearchPolicy: "enabled",
+      requestedWebSearchMode: "live",
+      webSearchMode: "disabled",
+      effectiveWebSearchMode: "disabled",
+      effectiveWebSearchReason: "codex-native-review-disables-web-search",
+    });
   });
 
   it("captures completed agent messages when no delta is emitted", async () => {
@@ -408,13 +527,20 @@ type FakeInvocation = {
     config?: unknown;
   };
   config: string;
-  turnStart: {
-    approvalPolicy: string;
-    model?: string;
-    effort?: string;
-    sandboxPolicy: unknown;
-    outputSchema: unknown;
-    input: Array<{ text: string }>;
+  turnStart:
+    | {
+        approvalPolicy: string;
+        model?: string;
+        effort?: string;
+        sandboxPolicy: unknown;
+        outputSchema: unknown;
+        input: Array<{ text: string }>;
+      }
+    | undefined;
+  reviewStart?: {
+    threadId: string;
+    delivery?: string;
+    target: unknown;
   };
   approvalResponse?: unknown;
   legacyApprovalResponse?: unknown;
@@ -525,6 +651,7 @@ function createHarness(
     failedTurn?: boolean;
     directCompletedTurn?: boolean;
     directFailedTurn?: boolean;
+    nativeReview?: boolean;
   } = {},
 ): Harness {
   root = mkdtempSync(path.join(tmpdir(), "diffwarden-codex-app-server-"));
@@ -558,6 +685,7 @@ function createHarness(
       ...(options.retryableError ? { DIFFWARDEN_FAKE_APP_SERVER_RETRYABLE_ERROR: "1" } : {}),
       ...(options.unsupportedRequest ? { DIFFWARDEN_FAKE_APP_SERVER_UNSUPPORTED: "1" } : {}),
       ...(options.failedTurn ? { DIFFWARDEN_FAKE_APP_SERVER_FAILED_TURN: "1" } : {}),
+      ...(options.nativeReview ? { DIFFWARDEN_FAKE_APP_SERVER_NATIVE_REVIEW: "1" } : {}),
       ...(options.directCompletedTurn
         ? { DIFFWARDEN_FAKE_APP_SERVER_DIRECT_COMPLETED_TURN: "1" }
         : {}),
@@ -923,8 +1051,38 @@ rl.on("line", (line) => {
     } else {
       finish();
     }
+    return;
+  }
+  if (message.method === "review/start") {
+    invocation.reviewStart = message.params;
+    send({ id: message.id, result: { turn: { id: "turn-1" }, reviewThreadId: "thread-1" } });
+    finishNativeReview();
   }
 });
+
+function finishNativeReview() {
+  send({
+    method: "item/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      completedAtMs: Date.now(),
+      item: {
+        type: "exitedReviewMode",
+        id: "review-1",
+        review: "native review text"
+      }
+    }
+  });
+  writeInvocation();
+  send({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" }
+    }
+  });
+}
 
 function finish() {
   const review = {

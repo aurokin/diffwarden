@@ -2,6 +2,7 @@ import { invalidCli } from "../core/errors.js";
 import { getTransportCapability } from "./capabilities.js";
 import type { ReviewerTransportCapability } from "./capabilities.js";
 import type { CliEngine } from "./cli-types.js";
+import { codexCliWebSearchPolicy, codexWebSearchMode } from "./codex-options.js";
 import type { ReviewReviewerConfig } from "./types.js";
 
 export function cliExecutable(reviewer: ReviewReviewerConfig, fallback: string): string {
@@ -31,6 +32,10 @@ export function numberCliOption(reviewer: ReviewReviewerConfig, key: string): nu
 export function codexGlobalArgs(reviewer: ReviewReviewerConfig): string[] {
   const args: string[] = [];
   pushModel(args, reviewer);
+  const webSearch = codexWebSearchMode(codexCliWebSearchPolicy(reviewer));
+  if (webSearch !== undefined) {
+    args.push("-c", `web_search="${webSearch}"`);
+  }
   if (reviewer.effort !== undefined && reviewer.effort !== "off") {
     args.push("-c", `model_reasoning_effort="${reviewer.effort}"`);
   }

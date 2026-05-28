@@ -16,12 +16,22 @@ import { type Socket, createConnection } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { normalizeJsonLikeAdapterOutput } from "../core/adapter-output.js";
+import { buildTextAdapterOutput, normalizeJsonLikeAdapterOutput } from "../core/adapter-output.js";
 import { missingAuth, missingRequirement, reviewerFailed } from "../core/errors.js";
 import { reviewResultStrictJsonSchema } from "../core/schema.js";
+import type { ReviewTargetResolved } from "../core/schema.js";
 import { version } from "../version.js";
 import { cliExecutable } from "./cli-helpers.js";
 import { resolveExecutable, trimForMetadata } from "./cli-process.js";
+import {
+  type CodexAppServerReviewMode,
+  type CodexWebSearchMode,
+  type CodexWebSearchPolicy,
+  codexAppServerReviewMode,
+  codexAppServerWebSearchPolicy,
+  codexWebSearchMetadata,
+  codexWebSearchMode,
+} from "./codex-options.js";
 import {
   type ResolutionSource,
   effortResolutionMetadata,
@@ -59,6 +69,10 @@ type CodexAppServerOptions = {
   codexHome: string;
   socketPath: string;
   sharedCodexHome: boolean;
+  effort?: string;
+  webSearchPolicy: CodexWebSearchPolicy;
+  webSearchMode?: CodexWebSearchMode;
+  reviewMode: CodexAppServerReviewMode;
 };
 
 type SpawnedAppServer = {
@@ -131,6 +145,8 @@ async function prepareCodexAppServerAdapter(
     appServerMode: options.mode,
     codexHome: options.codexHome,
     codexHomeShared: options.sharedCodexHome,
+    ...codexAppServerReviewModeMetadata(options),
+    ...codexAppServerWebSearchMetadata(options),
     ...(options.mode === "stdio-isolated" ? {} : { socketPath: options.socketPath }),
     ...codexAppServerSelectionMetadata(input.reviewer),
   };
@@ -172,6 +188,22 @@ async function prepareCodexAppServerAdapter(
           status: "warning",
           detail:
             "Codex app-server command execution remains enabled for this experimental transport; approval escalations are denied.",
+        },
+        {
+          name: "web-search",
+          status:
+            options.reviewMode === "native" || options.webSearchPolicy === "inherit"
+              ? "warning"
+              : "passed",
+          detail: codexAppServerWebSearchDetail(options),
+        },
+        {
+          name: "review-mode",
+          status: options.reviewMode === "native" ? "warning" : "passed",
+          detail:
+            options.reviewMode === "native"
+              ? "Diffwarden will use experimental Codex native review/start mode; this returns rendered review text, not structured findings."
+              : "Diffwarden will use schema-constrained turn/start mode.",
         },
         {
           name: "model",
@@ -259,9 +291,7 @@ class CodexAppServerSession {
         cwd: this.input.cwd,
         approvalPolicy: "never",
         sandbox: "read-only",
-        config: {
-          web_search: "disabled",
-        },
+        ...codexAppServerThreadConfig(this.options),
         developerInstructions: codexDeveloperInstructions(),
         ephemeral: true,
         experimentalRawEvents: false,
@@ -273,51 +303,102 @@ class CodexAppServerSession {
         throw reviewerFailed("codex app-server did not return a thread id");
       }
 
-      const turnWait = this.waitForTurn();
-      void turnWait.catch(() => undefined);
-      const turnResponse = await this.call("turn/start", {
-        threadId,
-        input: [{ type: "text", text: this.input.prompt, text_elements: [] }],
-        approvalPolicy: "never",
-        sandboxPolicy: {
-          type: "readOnly",
-          access: { type: "fullAccess" },
-          networkAccess: false,
-        },
-        outputSchema: reviewResultStrictJsonSchema,
-        ...codexAppServerTurnModelOptions(this.input.reviewer),
-        ...(this.input.reviewer.effort !== undefined
-          ? { effort: codexAppServerEffort(this.input.reviewer.effort) }
-          : {}),
-      });
-      const turnId = stringAtPath(turnResponse, ["turn", "id"]);
-      if (turnId !== undefined && this.turnCompletion !== undefined) {
-        this.turnCompletion.turnId = turnId;
-        if (this.completedTurns.has(turnId)) {
-          this.turnCompletion.resolve();
-        }
+      if (this.options.reviewMode === "native") {
+        return await this.runNativeReview(connection, threadId);
       }
-      this.onTurn(turnResponse);
-      await turnWait;
-
-      const output = normalizeJsonLikeAdapterOutput(this.reply, {
-        captureMode: "native-structured",
-        readonlyCapability: "enforced",
-        transport: "app-server",
-        execEnabled: true,
-        ephemeral: true,
-        ...connection.metadata,
-        stderr: trimForMetadata(connection.stderr()),
-        ...codexAppServerSelectionMetadata(this.input.reviewer),
-      });
-      return {
-        ...output,
-        ...(this.usage !== undefined ? { usage: this.usage } : {}),
-      };
+      return await this.runStructuredReview(connection, threadId);
     } finally {
       removeAbortListener();
       await this.close();
     }
+  }
+
+  private async runStructuredReview(
+    connection: AppServerConnection,
+    threadId: string,
+  ): Promise<ReviewAdapterOutput> {
+    const turnWait = this.waitForTurn();
+    void turnWait.catch(() => undefined);
+    const turnResponse = await this.call("turn/start", {
+      threadId,
+      input: [{ type: "text", text: this.input.prompt, text_elements: [] }],
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "readOnly",
+        access: { type: "fullAccess" },
+        networkAccess: false,
+      },
+      outputSchema: reviewResultStrictJsonSchema,
+      ...codexAppServerTurnModelOptions(this.input.reviewer),
+      ...(this.input.reviewer.effort !== undefined
+        ? { effort: codexAppServerEffort(this.input.reviewer.effort) }
+        : {}),
+    });
+    const turnId = stringAtPath(turnResponse, ["turn", "id"]);
+    if (turnId !== undefined && this.turnCompletion !== undefined) {
+      this.turnCompletion.turnId = turnId;
+      if (this.completedTurns.has(turnId)) {
+        this.turnCompletion.resolve();
+      }
+    }
+    this.onTurn(turnResponse);
+    await turnWait;
+
+    const output = normalizeJsonLikeAdapterOutput(this.reply, {
+      captureMode: "native-structured",
+      readonlyCapability: "enforced",
+      transport: "app-server",
+      execEnabled: true,
+      ephemeral: true,
+      ...codexAppServerReviewModeMetadata(this.options),
+      ...connection.metadata,
+      stderr: trimForMetadata(connection.stderr()),
+      ...codexAppServerWebSearchMetadata(this.options),
+      ...codexAppServerSelectionMetadata(this.input.reviewer),
+    });
+    return {
+      ...output,
+      ...(this.usage !== undefined ? { usage: this.usage } : {}),
+    };
+  }
+
+  private async runNativeReview(
+    connection: AppServerConnection,
+    threadId: string,
+  ): Promise<ReviewAdapterOutput> {
+    const turnWait = this.waitForTurn();
+    void turnWait.catch(() => undefined);
+    const reviewResponse = await this.call("review/start", {
+      threadId,
+      target: codexNativeReviewTarget(this.input.target, this.input.prompt),
+      delivery: "inline",
+    });
+    const turnId = stringAtPath(reviewResponse, ["turn", "id"]);
+    if (turnId !== undefined && this.turnCompletion !== undefined) {
+      this.turnCompletion.turnId = turnId;
+      if (this.completedTurns.has(turnId)) {
+        this.turnCompletion.resolve();
+      }
+    }
+    this.onTurn(reviewResponse);
+    await turnWait;
+
+    return buildTextAdapterOutput({
+      text: this.reply.trim(),
+      usage: this.usage,
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "enforced",
+        transport: "app-server",
+        execEnabled: true,
+        ephemeral: true,
+        ...codexAppServerReviewModeMetadata(this.options),
+        ...connection.metadata,
+        stderr: trimForMetadata(connection.stderr()),
+        ...codexAppServerWebSearchMetadata(this.options),
+        ...codexAppServerSelectionMetadata(this.input.reviewer),
+      },
+    });
   }
 
   private call(method: string, params: unknown): Promise<unknown> {
@@ -410,7 +491,7 @@ class CodexAppServerSession {
     if (method === "item/completed") {
       const item =
         isRecord(message.params) && isRecord(message.params.item) ? message.params.item : {};
-      this.captureAgentMessageItem(item);
+      this.captureThreadItem(item);
       return;
     }
 
@@ -470,7 +551,7 @@ class CodexAppServerSession {
     const items = Array.isArray(turn.items) ? turn.items : [];
     for (const item of items) {
       if (isRecord(item)) {
-        this.captureAgentMessageItem(item);
+        this.captureThreadItem(item);
       }
     }
 
@@ -496,11 +577,15 @@ class CodexAppServerSession {
     }
   }
 
-  private captureAgentMessageItem(item: Record<string, unknown>): void {
+  private captureThreadItem(item: Record<string, unknown>): void {
     if (item.type === "agentMessage" && typeof item.text === "string") {
       this.currentAgentMessageId = typeof item.id === "string" ? item.id : "agent-message";
       this.currentAgentMessageText = item.text;
       this.reply = item.text;
+      return;
+    }
+    if (item.type === "exitedReviewMode" && typeof item.review === "string") {
+      this.reply = item.review;
     }
   }
 
@@ -547,6 +632,7 @@ async function openStdioIsolatedConnection(options: {
   const spawned = await spawnCodexAppServer({
     executable: options.executable,
     env: options.env,
+    options: options.options,
   });
   let stderr = "";
   const stdout = createInterface({ input: spawned.child.stdout });
@@ -1004,8 +1090,9 @@ function decodeWebSocketFrame(
 async function spawnCodexAppServer(options: {
   executable: string;
   env: NodeJS.ProcessEnv | undefined;
+  options: CodexAppServerOptions;
 }): Promise<SpawnedAppServer> {
-  const codexHome = await createIsolatedCodexHome(options.env);
+  const codexHome = await createIsolatedCodexHome(options.env, options.options);
   const env = {
     ...(options.env ?? process.env),
     CODEX_HOME: codexHome,
@@ -1043,7 +1130,10 @@ async function spawnCodexAppServer(options: {
   }
 }
 
-async function createIsolatedCodexHome(env: NodeJS.ProcessEnv | undefined): Promise<string> {
+async function createIsolatedCodexHome(
+  env: NodeJS.ProcessEnv | undefined,
+  options: CodexAppServerOptions,
+): Promise<string> {
   const sourceHome = codexAuthHome(env);
   const authPath = path.join(sourceHome, "auth.json");
   try {
@@ -1063,7 +1153,7 @@ async function createIsolatedCodexHome(env: NodeJS.ProcessEnv | undefined): Prom
     }
     await writeFile(
       path.join(codexHome, "config.toml"),
-      await isolatedCodexConfig(sourceHome),
+      await isolatedCodexConfig(sourceHome, options),
       "utf8",
     );
     return codexHome;
@@ -1073,25 +1163,33 @@ async function createIsolatedCodexHome(env: NodeJS.ProcessEnv | undefined): Prom
   }
 }
 
-async function isolatedCodexConfig(sourceHome: string): Promise<string> {
-  const providerConfig = await readSourceModelProviderConfig(sourceHome);
+async function isolatedCodexConfig(
+  sourceHome: string,
+  options: CodexAppServerOptions,
+): Promise<string> {
+  const sourceConfig = await readSourceConfig(sourceHome);
+  const providerConfig = sourceConfig === undefined ? "" : extractModelProviderConfig(sourceConfig);
+  const webSearchConfig =
+    options.webSearchPolicy === "inherit" && sourceConfig !== undefined
+      ? extractTopLevelConfigAssignment(sourceConfig, "web_search")
+      : "";
   return [
-    providerConfig,
+    webSearchConfig,
     `approval_policy = "never"`,
     `sandbox_mode = "read-only"`,
-    `web_search = "disabled"`,
+    providerConfig,
     "",
   ]
     .filter((part) => part.length > 0)
     .join("\n");
 }
 
-async function readSourceModelProviderConfig(sourceHome: string): Promise<string> {
+async function readSourceConfig(sourceHome: string): Promise<string | undefined> {
   try {
-    return extractModelProviderConfig(await readFile(path.join(sourceHome, "config.toml"), "utf8"));
+    return await readFile(path.join(sourceHome, "config.toml"), "utf8");
   } catch (error) {
     if (isNodeErrorWithCode(error, "ENOENT")) {
-      return "";
+      return undefined;
     }
     throw error;
   }
@@ -1115,17 +1213,35 @@ function extractModelProviderConfig(config: string): string {
   return selected.join("\n").trim();
 }
 
+function extractTopLevelConfigAssignment(config: string, key: string): string {
+  for (const line of config.split(/\r?\n/)) {
+    if (tomlTableHeader(line) !== undefined) {
+      return "";
+    }
+    if (new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`).test(line)) {
+      return line.trim();
+    }
+  }
+  return "";
+}
+
 function codexAppServerOptions(
   reviewer: ReviewReviewerConfig,
   env: NodeJS.ProcessEnv | undefined,
 ): CodexAppServerOptions {
   const mode = codexAppServerMode(reviewer);
   const codexHome = resolveCodexHome(reviewer, env);
+  const webSearchPolicy = codexAppServerWebSearchPolicy(reviewer);
+  const webSearchMode = codexWebSearchMode(webSearchPolicy);
   return {
     mode,
     codexHome,
     socketPath: path.join(codexHome, "app-server-control", "app-server-control.sock"),
     sharedCodexHome: mode !== "stdio-isolated",
+    ...(reviewer.effort !== undefined ? { effort: codexAppServerEffort(reviewer.effort) } : {}),
+    webSearchPolicy,
+    ...(webSearchMode !== undefined ? { webSearchMode } : {}),
+    reviewMode: codexAppServerReviewMode(reviewer),
   };
 }
 
@@ -1138,6 +1254,95 @@ function codexAppServerMode(reviewer: ReviewReviewerConfig): CodexAppServerMode 
     return value;
   }
   throw reviewerFailed(`Invalid Codex appServerOptions.mode: ${String(value)}`);
+}
+
+function codexAppServerThreadConfig(
+  options: CodexAppServerOptions,
+): { config: Record<string, string> } | Record<string, never> {
+  const config: Record<string, string> = {};
+  if (options.reviewMode === "native") {
+    config.web_search = "disabled";
+    if (options.effort !== undefined) {
+      config.model_reasoning_effort = options.effort;
+    }
+    return { config };
+  }
+  if (options.webSearchMode !== undefined) {
+    config.web_search = options.webSearchMode;
+  }
+  return Object.keys(config).length === 0 ? {} : { config };
+}
+
+function codexAppServerWebSearchMetadata(options: CodexAppServerOptions): Record<string, string> {
+  if (options.reviewMode !== "native") {
+    const requested = codexWebSearchMode(options.webSearchPolicy);
+    return {
+      ...codexWebSearchMetadata(options.webSearchPolicy),
+      ...(requested !== undefined ? { effectiveWebSearchMode: requested } : {}),
+    };
+  }
+
+  const requested = codexWebSearchMode(options.webSearchPolicy);
+  return {
+    webSearchPolicy: options.webSearchPolicy,
+    ...(requested !== undefined ? { requestedWebSearchMode: requested } : {}),
+    webSearchMode: "disabled",
+    effectiveWebSearchMode: "disabled",
+    effectiveWebSearchReason: "codex-native-review-disables-web-search",
+  };
+}
+
+function codexAppServerWebSearchDetail(options: CodexAppServerOptions): string {
+  if (options.reviewMode === "native") {
+    return "Codex native review/start disables web search inside the review task; Diffwarden will report effective webSearchMode disabled.";
+  }
+  if (options.webSearchPolicy === "inherit") {
+    return "Diffwarden will not override Codex web_search for this app-server review.";
+  }
+  return `Diffwarden will set Codex web_search to ${options.webSearchMode}.`;
+}
+
+function codexAppServerReviewModeMetadata(
+  options: CodexAppServerOptions,
+): Record<string, string | boolean> {
+  if (options.reviewMode === "native") {
+    return {
+      codexReviewMode: "native",
+      nativeReviewOutput: "rendered-text",
+      nativeReviewStructuredFindings: false,
+    };
+  }
+  return {
+    codexReviewMode: "structured",
+  };
+}
+
+function codexNativeReviewTarget(
+  target: ReviewTargetResolved,
+  prompt: string,
+): Record<string, unknown> {
+  switch (target.kind) {
+    case "uncommitted":
+      return { type: "uncommittedChanges" };
+    case "base":
+      if (target.base_ref === undefined) {
+        throw reviewerFailed("Codex native review requires target.base_ref for base targets");
+      }
+      return { type: "baseBranch", branch: target.base_ref };
+    case "commit":
+      if (target.commit_sha === undefined) {
+        throw reviewerFailed("Codex native review requires target.commit_sha for commit targets");
+      }
+      return { type: "commit", sha: target.commit_sha };
+    case "custom":
+      return { type: "custom", instructions: prompt };
+    case "pr":
+      throw reviewerFailed("Codex native review does not support pr targets");
+    default: {
+      const exhaustive: never = target.kind;
+      throw reviewerFailed(`Unsupported Codex native review target: ${String(exhaustive)}`);
+    }
+  }
 }
 
 function resolveCodexHome(
@@ -1365,6 +1570,10 @@ function booleanAtPath(value: unknown, keys: string[]): boolean | undefined {
 function tomlTableHeader(line: string): string | undefined {
   const match = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line);
   return match?.[1]?.trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

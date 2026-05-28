@@ -13,6 +13,7 @@ import {
 import { resolveExecutable, runCli, trimForMetadata } from "./cli-process.js";
 import { cliSpecs } from "./cli-specs.js";
 import type { CliEngine } from "./cli-types.js";
+import { codexCliWebSearchPolicy, codexWebSearchMetadata } from "./codex-options.js";
 import {
   type ResolutionSource,
   effortResolutionMetadata,
@@ -200,6 +201,7 @@ function cliSelectionMetadata(
           source: effort.source,
         })
       : {}),
+    ...(engine === "codex" ? codexWebSearchMetadata(codexCliWebSearchPolicy(reviewer)) : {}),
   };
 }
 

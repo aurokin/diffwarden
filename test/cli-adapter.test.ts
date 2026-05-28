@@ -44,6 +44,8 @@ describe("createCliAdapter", () => {
       requestedEffort: "high",
       resolvedEffort: "high",
       effortResolutionSource: "requested",
+      webSearchPolicy: "enabled",
+      webSearchMode: "live",
     });
     expect(output.structured).toMatchObject({
       overall_correctness: "patch is correct",
@@ -59,14 +61,43 @@ describe("createCliAdapter", () => {
       requestedEffort: "high",
       resolvedEffort: "high",
       effortResolutionSource: "requested",
+      webSearchPolicy: "enabled",
+      webSearchMode: "live",
     });
     expect(invocation.args).toContain("--model");
     expect(invocation.args).toContain("gpt-test");
+    expect(invocation.args).toContain('web_search="live"');
     expect(invocation.args).toContain('model_reasoning_effort="high"');
     expect(invocation.args).toContain("exec");
     expect(invocation.args).toContain("--sandbox");
     expect(invocation.args).toContain("read-only");
     expect(invocation.stdin).toBe("review prompt");
+  });
+
+  it("supports Codex CLI web search overrides", async () => {
+    const harness = createHarness("codex");
+    const adapter = createCliAdapter("codex");
+    const disabledReviewer = createReviewer("codex", harness.executable, {
+      cliOptions: { executable: harness.executable, webSearch: "disabled" },
+    });
+
+    const disabledOutput = await adapter.run(createInput(disabledReviewer, harness));
+    expect(harness.readInvocation().args).toContain('web_search="disabled"');
+    expect(disabledOutput.metadata).toMatchObject({
+      webSearchPolicy: "disabled",
+      webSearchMode: "disabled",
+    });
+
+    const inheritReviewer = createReviewer("codex", harness.executable, {
+      cliOptions: { executable: harness.executable, webSearch: "inherit" },
+    });
+
+    const inheritOutput = await adapter.run(createInput(inheritReviewer, harness));
+    expect(harness.readInvocation().args.join(" ")).not.toContain("web_search=");
+    expect(inheritOutput.metadata).toMatchObject({
+      webSearchPolicy: "inherit",
+    });
+    expect(inheritOutput.metadata).not.toHaveProperty("webSearchMode");
   });
 
   it.each([

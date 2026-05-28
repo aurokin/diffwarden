@@ -230,7 +230,9 @@ reads or writes `auth.json`.
 
 SDK-backed families can be configured to use a CLI transport.
 Droid users should prefer the CLI profile for routine reviews when Factory UI session
-history matters.
+history matters. Codex CLI enables Codex web search by default with `web_search = "live"`;
+set `cliOptions.webSearch` to `"disabled"` or `"inherit"` when a reviewer should avoid that
+override.
 
 ```json
 {
@@ -271,7 +273,7 @@ Codex can opt into an experimental app-server transport. By default this path us
 existing shared Codex home, connects to its app-server socket when one is already running,
 and launches `codex app-server --listen unix://` only when no socket is available. Reviews
 still start ephemeral read-only threads and record `execEnabled: true` because command
-execution remains available.
+execution remains available. Diffwarden sets Codex `web_search` to `"live"` by default.
 
 ```json
 {
@@ -282,11 +284,37 @@ execution remains available.
       "transport": "app-server",
       "cliOptions": {
         "executable": "/opt/homebrew/bin/codex"
+      },
+      "appServerOptions": {
+        "webSearch": "enabled",
+        "reviewMode": "structured"
       }
     }
   ]
 }
 ```
+
+`appServerOptions.webSearch` accepts:
+
+- `enabled`: set Codex `web_search = "live"` for the review. This is the default.
+- `disabled`: set Codex `web_search = "disabled"`.
+- `inherit`: do not override Codex web search for the thread.
+
+In `stdio-isolated` mode, `inherit` copies the source Codex home's top-level `web_search`
+setting into the temporary `CODEX_HOME` when one is configured.
+
+`appServerOptions.reviewMode` accepts:
+
+- `structured`: use Diffwarden's schema-constrained `turn/start` flow. This is the default.
+- `native`: use experimental Codex `review/start` mode and return Codex's rendered review
+  text. This mode is text-only for Diffwarden artifacts unless the text contains parseable
+  `ReviewResult` JSON.
+
+In native mode, Codex disables web search inside the review task regardless of the parent
+thread's `web_search` setting. Diffwarden reports `webSearchMode: "disabled"` and preserves
+the requested parent-thread setting as `requestedWebSearchMode` when one was configured.
+Configured effort overrides still apply; Diffwarden passes them through thread config as
+`model_reasoning_effort` because `review/start` has no per-request effort field.
 
 The shared Codex home resolves from `appServerOptions.codexHome`, then
 `DIFFWARDEN_CODEX_HOME`, then `DIFFWARDEN_CODEX_AUTH_HOME`, then `$CODEX_HOME`, then

@@ -1,9 +1,6 @@
 import type { ReviewTargetResolved } from "./schema.js";
 
-export function buildReviewPrompt(
-  target: ReviewTargetResolved,
-  diff: string,
-): string {
+export function buildReviewPrompt(target: ReviewTargetResolved, diff: string): string {
   if (target.kind === "custom") {
     return buildCustomReviewPrompt(target);
   }
@@ -47,7 +44,7 @@ function reviewRubric(options: { diffBacked: boolean }): string {
   return [
     "Review guidelines:",
     "",
-    "Act as a read-only reviewer for a proposed code change made by another engineer. Do not run tests or health checks.",
+    "Act as a read-only reviewer for a proposed code change made by another engineer. Do not run tests or health checks. Avoid starting sub-processes.",
     "",
     "Flag a finding only when all of these are true:",
     "",

@@ -51,7 +51,7 @@ SDK-backed reviewers can opt into CLI transport from config:
 | --- | --- | --- | --- | --- | --- |
 | `fake` | no | no | native structured | enforced | no external auth |
 | `codex` CLI | yes | yes | native structured | enforced | executable preflight; CLI owns auth |
-| `codex` APP-SERVER | yes | yes | native structured | enforced | executable and Codex auth preflight; shared `CODEX_HOME` by default or temporary `CODEX_HOME` with `stdio-isolated` |
+| `codex` APP-SERVER | yes | yes | native structured; text in native review mode | enforced | executable and Codex auth preflight; shared `CODEX_HOME` by default or temporary `CODEX_HOME` with `stdio-isolated` |
 | `claude` SDK | yes | yes | native structured with text fallback | tool-restricted | SDK load, auth, and model preflight |
 | `claude` CLI | yes | yes | native structured | tool-restricted | executable preflight; CLI owns auth |
 | `cursor` SDK | yes | ignored | text | prompt-only | SDK load, `CURSOR_API_KEY`, and model preflight |
@@ -69,8 +69,8 @@ SDK-backed reviewers can opt into CLI transport from config:
 
 | Adapter path | Notes |
 | --- | --- |
-| `codex` CLI | Runs `codex exec` with read-only sandboxing, ephemeral execution, and an output schema file. Diffwarden uses this path instead of `codex review` because `codex exec` exposes the JSON-schema contract needed by the shared parser. |
-| `codex` APP-SERVER | Experimental opt-in transport that defaults to the shared Codex `CODEX_HOME`, attaches to an existing Unix-socket app-server when available, and launches `codex app-server --listen unix://` only when needed. Reviews remain ephemeral and read-only with approval escalations denied, but shared mode intentionally inherits the selected Codex home's config, plugins, apps, auth, and daemon state. `appServerOptions.mode: "stdio-isolated"` selects a temporary `CODEX_HOME` stdio app-server instead. |
+| `codex` CLI | Runs `codex exec` with read-only sandboxing, ephemeral execution, an output schema file, and `web_search = "live"` by default. Diffwarden uses this path instead of `codex review` because `codex exec` exposes the JSON-schema contract needed by the shared parser. |
+| `codex` APP-SERVER | Experimental opt-in transport that defaults to the shared Codex `CODEX_HOME`, attaches to an existing Unix-socket app-server when available, and launches `codex app-server --listen unix://` only when needed. Reviews remain ephemeral and read-only with approval escalations denied, `web_search = "live"` by default, and optional experimental native `review/start` mode. Native mode is text-only for Diffwarden artifacts and reports effective web search as disabled because Codex disables web search inside the review task. `appServerOptions.mode: "stdio-isolated"` selects a temporary `CODEX_HOME` stdio app-server instead. |
 | `claude` SDK | Uses `@anthropic-ai/claude-agent-sdk`, restricts tools to `Read`, `Grep`, `Glob`, and `LS`, disables session persistence, and can reuse local Claude Code auth when no `ANTHROPIC_API_KEY` is present. |
 | `claude` CLI | Uses `claude -p` with plan mode, read-only tools, disallowed write/bash tools, no session persistence, disabled slash commands, and JSON schema output. |
 | `cursor` SDK | Uses `@cursor/sdk` in local mode. Effort is accepted by the public config shape but reported as ignored for Cursor SDK runs. |

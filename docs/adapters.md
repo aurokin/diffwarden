@@ -64,8 +64,9 @@ until an executable exposes stable machine-readable runtime metadata.
 
 The Codex app-server transport follows the same metadata convention. It additionally records
 `transport: "app-server"`, `ephemeral: true`, `execEnabled: true`, `appServerMode`,
-`codexHome`, `codexHomeShared`, and app-server lifecycle metadata because command execution
-is intentionally still available in the first experimental version.
+`codexHome`, `codexHomeShared`, `webSearchPolicy`, `codexReviewMode`, and app-server lifecycle
+metadata because command execution is intentionally still available in the first experimental
+version.
 
 ## Codex App Server
 
@@ -77,8 +78,8 @@ The Codex app-server path is configured through a named reviewer with
 `transport: "app-server"`. By default it uses the shared Codex home, connects to
 `$CODEX_HOME/app-server-control/app-server-control.sock` when an app-server is already
 running, and launches `codex app-server --listen unix://` only when no socket is available.
-The review itself starts an ephemeral read-only thread, disables web search for the thread,
-and requests JSON-schema turn output.
+The review itself starts an ephemeral read-only thread, sets Codex `web_search` to `"live"` by
+default, and requests JSON-schema turn output.
 
 The shared Codex home resolves from `appServerOptions.codexHome`, then
 `DIFFWARDEN_CODEX_HOME`, then `DIFFWARDEN_CODEX_AUTH_HOME`, then `$CODEX_HOME`, then
@@ -97,6 +98,29 @@ model-provider config from `DIFFWARDEN_CODEX_AUTH_HOME`, then `$CODEX_HOME`, the
 - `attach`: attach only and fail if the socket is unavailable.
 - `launch`: reuse an existing socket or launch the shared server.
 - `stdio-isolated`: use a temporary `CODEX_HOME` and stdio app-server process for each review.
+
+`appServerOptions.webSearch` controls Codex's thread-level web-search override:
+
+- `enabled`: set `web_search = "live"`. This is the default.
+- `disabled`: set `web_search = "disabled"`.
+- `inherit`: do not set `web_search` on the thread.
+
+In `stdio-isolated` mode, `inherit` copies the source Codex home's top-level `web_search`
+setting into the temporary `CODEX_HOME` when one is configured.
+
+`appServerOptions.reviewMode` controls the review protocol:
+
+- `structured`: use Diffwarden's schema-constrained `turn/start` flow. This is the default.
+- `native`: use experimental Codex `review/start` mode and return Codex's rendered review
+  text. This mode does not preserve structured findings in Diffwarden artifacts unless the
+  text contains parseable `ReviewResult` JSON.
+
+Codex native review mode disables web search inside the review task, even when the parent
+thread has `web_search = "live"`. Diffwarden reports native-mode `webSearchMode` and
+`effectiveWebSearchMode` as `"disabled"`; the requested parent-thread mode is preserved as
+`requestedWebSearchMode` when applicable. Native mode carries configured effort overrides
+through thread config as `model_reasoning_effort` because `review/start` does not accept a
+per-request effort field.
 
 Command execution is currently left enabled for this experimental transport so Codex can use
 its normal repository inspection path. Diffwarden sets approval policy to `never`, uses a
@@ -269,6 +293,10 @@ diffwarden --target uncommitted --reviewer antigravity
 The shared CLI adapter performs executable preflight, runs the selected CLI in its most
 restrictive documented review mode, and returns either native structured output or text for
 the core parser.
+
+Codex CLI sets `web_search = "live"` by default so review runs can use current context when
+needed. Set `cliOptions.webSearch` to `"disabled"` to force `web_search = "disabled"`, or
+`"inherit"` to leave Codex's configured default untouched.
 
 SDK-backed families, including Droid, can use `transport: "cli"` from config.
 `cliOptions.executable` can point at non-standard installs, such as local `pi`, `droid`, or

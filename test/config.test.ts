@@ -114,6 +114,7 @@ describe("loadDiffwardenConfig", () => {
           transport: "cli",
           cliOptions: {
             executable: "/opt/homebrew/bin/codex",
+            webSearch: "inherit",
           },
         },
       ],
@@ -127,6 +128,7 @@ describe("loadDiffwardenConfig", () => {
       transport: "cli",
       cliOptions: {
         executable: "/opt/homebrew/bin/codex",
+        webSearch: "inherit",
       },
     });
   });
@@ -169,6 +171,8 @@ describe("loadDiffwardenConfig", () => {
           appServerOptions: {
             mode: "attach",
             codexHome: "~/.codex-diffwarden",
+            webSearch: "disabled",
+            reviewMode: "native",
           },
         },
       ],
@@ -183,6 +187,8 @@ describe("loadDiffwardenConfig", () => {
       appServerOptions: {
         mode: "attach",
         codexHome: "~/.codex-diffwarden",
+        webSearch: "disabled",
+        reviewMode: "native",
       },
     });
   });

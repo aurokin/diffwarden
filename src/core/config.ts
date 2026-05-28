@@ -16,10 +16,14 @@ const reportingScopeSchema = z.enum(["global", "repo"]);
 const reportingModeSchema = z.enum(["full", "metadata"]);
 const configuredReviewerEngineSchema = reviewerSdkSchema.exclude(["fake"]);
 const codexAppServerModeSchema = z.enum(["auto", "attach", "launch", "stdio-isolated"]);
+const codexWebSearchSchema = z.enum(["enabled", "disabled", "inherit"]);
+const codexAppServerReviewModeSchema = z.enum(["structured", "native"]);
 const appServerOptionsSchema = z
   .object({
     mode: codexAppServerModeSchema.optional(),
     codexHome: z.string().min(1).optional(),
+    webSearch: codexWebSearchSchema.optional(),
+    reviewMode: codexAppServerReviewModeSchema.optional(),
   })
   .strict();
 
