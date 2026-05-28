@@ -4,7 +4,9 @@ Point-in-time spec: 2026-05-14. This document captures the current product and a
 
 ## 1. Product summary
 
-`diffwarden` is a small command-line tool that lets coding agents request a code review and receive a structured review result.
+`diffwarden` is a small command-line tool that brings Codex's review process,
+rubric, and output contract to multiple agent SDKs and CLIs, so coding agents
+can request a code review and receive a structured review result.
 
 The public contract should stay boring:
 
@@ -24,8 +26,8 @@ Agents call the CLI. The CLI resolves the target diff, runs one or more reviewer
 ## 2. Goals
 
 1. Provide a simple CLI that agents can call from any coding workflow.
-2. Recreate the useful parts of Codex `/review` outside Codex.
-3. Use Codex's review rubric and review output shape as the normalized contract.
+2. Recreate the useful parts of Codex `/review` outside Codex, including target resolution, reviewer prompting, parsing, validation, and rendering.
+3. Use Codex's review rubric and review output shape as the normalized contract across supported SDK and CLI adapters.
 4. Support Cursor Agent SDK, Claude Agent SDK, and Pi Agent SDK in v1.
 5. Support thin CLI transports for Codex, Gemini, OpenCode, Pi, Cursor, Antigravity, Grok, and Claude where the executable is the practical integration path.
 6. Keep engine differences behind reviewer profiles and adapters without changing the CLI contract.
@@ -300,7 +302,8 @@ export type ReviewError = {
 
 ### 7.1 ReviewResult
 
-The normalized model should mirror Codex's review output event.
+The normalized model should mirror Codex's review output event so every
+supported SDK and CLI adapter returns the same review contract.
 
 ```ts
 export type ReviewResult = {
@@ -333,8 +336,10 @@ Rules:
 
 - `title` should start with `[P0]`, `[P1]`, `[P2]`, or `[P3]`.
 - `body` should explain why the issue is a bug and when it occurs.
-- `line_range` should be as small as possible.
+- `body` should be one concise paragraph, explain the specific failure mode, and avoid praise or accusatory phrasing.
+- `line_range` should be as small as possible, usually no more than 5-10 lines.
 - Findings should only identify issues introduced by the reviewed diff.
+- Findings should identify discrete, actionable issues the original author would likely fix.
 - Findings should avoid vague style comments.
 
 ### 7.3 ReviewArtifact
@@ -457,13 +462,16 @@ The prompt should be assembled from three parts:
 
 The rubric should preserve Codex's core semantics:
 
-- Find real bugs, not broad style issues.
-- Only report issues introduced by the diff.
-- Prefer a small number of high-confidence findings.
+- Find real bugs that affect correctness, performance, security, or maintainability, not broad style issues.
+- Only report issues introduced by the diff; pre-existing bugs are out of scope.
+- Report every qualifying finding, but prefer no findings when there is no definite fix-worthy issue.
 - Do not report issues that the author clearly did not change.
-- Keep comments concise and actionable.
+- Do not rely on unstated assumptions about author intent or speculative breakage; identify the affected code path or scenario.
+- Keep comments concise, actionable, matter-of-fact, and specific about the inputs or environment required for the bug.
+- Use `[P0]` for universal release-blocking issues, `[P1]` for urgent next-cycle fixes, `[P2]` for normal bugs, and `[P3]` for low-priority issues.
+- Treat `overall_correctness` as whether existing code and tests will continue to work and the patch is free of blocking bugs; ignore non-blocking nits for that verdict.
 - Use absolute file paths in structured output.
-- Make line ranges overlap changed lines whenever possible.
+- Make line ranges short and overlapping changed lines whenever possible.
 - Always produce the normalized structured result through the adapter when possible.
 - Let the CLI decide whether to render that result as Markdown or JSON.
 
@@ -582,7 +590,13 @@ The adapter contract should be shared across SDKs:
 
 `captureMode` describes how the adapter captured output from the SDK. `parse_mode` describes how core parsed that captured output. For example, Cursor can have `captureMode: "text"` with `parse_mode: "extracted-json"`, while Pi can have `captureMode: "tool-call"` with `parse_mode: "tool-output"`.
 
-Codex's built-in review flow is the reference pattern: prompt the reviewer for an exact JSON review object, parse exact JSON first, attempt to extract a JSON object from surrounding text, and preserve useful plain text as a fallback rather than making the adapter responsible for rendering.
+Codex's built-in review flow is the reference pattern: prompt the reviewer for
+an exact JSON review object, parse exact JSON first, attempt to extract a JSON
+object from surrounding text, and preserve useful plain text as a fallback
+rather than making the adapter responsible for rendering. Diffwarden may use a
+more robust extraction strategy than upstream Codex when adapter output can echo
+prompts, append logs, or contain multiple JSON objects; the contract remains
+Codex-derived even when the parser is hardened for multi-adapter output.
 
 ## 10. Review runner
 
@@ -1028,12 +1042,13 @@ If a reviewer adapter requires shell access, restrict the prompt and adapter pol
 
 Reviewers should be allowed to inspect surrounding code with read-only tools. A diff alone is often insufficient for a high-quality review. The reviewed surface remains the target diff, but adapters may expose safe context tools that allow reading files, listing/searching files, and running read-only git/shell inspection commands.
 
-Codex review reference, refreshed from `/Users/auro/code/upstream/codex` at commit `02a7205250` on 2026-05-14:
+Codex review reference, refreshed from `/Users/auro/code/upstream/codex` at commit `462deb0426bf` on 2026-05-28:
 
-- Codex review runs as a sub-Codex review task with review-specific prompts from `codex-rs/core/src/review_prompts.rs`.
+- Codex review runs as a sub-Codex review task with target-specific prompts from `codex-rs/core/src/review_prompts.rs`.
 - Codex sets the review subagent base instructions to `REVIEW_PROMPT`, uses `review_model` when configured, and sets approval policy to never in `codex-rs/core/src/tasks/review.rs`.
-- The newer review-thread path disables web search for reviews and keeps review execution constrained while preserving repository inspection context in `codex-rs/core/src/session/review.rs`.
-- Codex review output parsing first tries to deserialize the final agent message as `ReviewOutputEvent`, then extracts the first JSON object substring, then falls back to putting plain text into `overall_explanation` in `codex-rs/core/src/tasks/review.rs`.
+- The review-thread path disables web search, goal tools, CSV spawning, collaboration, and multi-agent features for reviews while preserving repository inspection context in `codex-rs/core/src/session/review.rs` and `codex-rs/core/src/tasks/review.rs`.
+- Codex review output parsing first tries to deserialize the final agent message as `ReviewOutputEvent`, then extracts a JSON object substring, then falls back to putting plain text into `overall_explanation` in `codex-rs/core/src/tasks/review.rs`.
+- Diffwarden intentionally uses `codex exec --output-schema` rather than `codex review` for the Codex CLI transport because `exec` exposes the same JSON-schema contract used by the shared parser.
 - The Codex tool registry includes shell/unified exec, MCP resource listing/reading, planning/goal tools, view-image, apply-patch, and multi-agent tools depending on configuration in `codex-rs/core/src/tools/spec_plan.rs`.
 - For `diffwarden`, only the read-only subset should be exposed: file read/list/search, `git diff`, `git show`, `git status`, `git grep`, `rg`, `sed`, `nl`, and equivalent inspection commands. Do not expose apply-patch, edit/write tools, web search, external comment publishing tools, or multi-agent spawning inside reviewer adapters.
 

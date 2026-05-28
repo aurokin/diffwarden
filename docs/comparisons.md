@@ -5,12 +5,10 @@ workflow, and when choosing SDK or CLI transports for a reviewer.
 
 ## Diffwarden vs Codex Review
 
-Codex has a first-class review path. This comparison was dated May 23, 2026, when the
-latest GitHub release was
-[`0.133.0` / `rust-v0.133.0`](https://github.com/openai/codex/releases/tag/rust-v0.133.0)
-(published May 21, 2026). The source inspection used upstream commit
-[`7d47056ea4`](https://github.com/openai/codex/tree/7d47056ea4). The relevant source paths
-are:
+Codex has a first-class review path. This comparison was refreshed on May 28,
+2026 from local upstream commit
+[`462deb0426bf`](https://github.com/openai/codex/tree/462deb0426bf). The
+relevant source paths are:
 
 - `codex-rs/exec/src/cli.rs` and `codex-rs/exec/src/lib.rs` for `codex review`.
 - `codex-rs/core/src/review_prompts.rs` for target-specific review prompts.
@@ -40,8 +38,8 @@ The Codex review path is session-native:
    instructing the reviewer to compute it.
 5. Core spawns an isolated review child task using the Codex review rubric from
    `core/review_prompt.md`.
-6. The review task disables web search, view-image behavior, CSV spawning, collaboration,
-   and multi-agent features for the review child.
+6. The review task disables web search, goal tools, CSV spawning, collaboration, and
+   multi-agent features for the review child.
 7. The review child uses `review_model` from Codex config when set; otherwise it uses the
    parent session model.
 8. The review task parses the last assistant message as `ReviewOutputEvent` JSON, or
@@ -68,8 +66,28 @@ needs orchestration that Codex review does not own:
   the adapter supports them.
 - A bundled `$diffwarden` skill for agents that are using Diffwarden from another repo.
 
-The overlap is intentional. Diffwarden borrows Codex-style review semantics, but keeps the
-review runner independent from the Codex app/session model.
+The overlap is intentional. Diffwarden brings Codex's review process, rubric, and output
+contract to multiple agent SDKs and CLIs, while keeping the review runner independent from
+the Codex app/session model.
+
+### Review Process Differences
+
+| Area | Codex review | Diffwarden |
+| --- | --- | --- |
+| Instruction shape | Separates a static review rubric (`core/review_prompt.md`) from target-specific review prompts | Builds one adapter-neutral prompt from the target, repo instructions, schema instructions, and an embedded patch for diff-backed targets |
+| Target inspection | Prompts the review child to inspect the repository and run the appropriate Git diff | Core resolves the target and captures the patch before any reviewer runs |
+| Prompt fidelity | Uses Codex's full bug threshold, comment style, priority rubric, location rules, and correctness semantics | Current implementation uses a smaller prompt; the product goal is to preserve the Codex rubric across all adapters |
+| Structured output | Review mode asks for JSON in the prompt, then parses the final message as `ReviewOutputEvent` | Uses the shared `ReviewResult` schema with native schema output, tool-call capture, or text parsing depending on adapter support |
+| JSON parsing | Parses exact JSON, then extracts a JSON object substring, then falls back to plain text | Parses exact JSON, scans balanced JSON candidates, then falls back to plain text; this is intentionally more robust for CLI/SDK output with logs or echoed prompts |
+| Priority field | Codex prompt says priority may be omitted/null, but the protocol struct requires an integer priority | Normalized schema accepts optional priority for compatibility; strict structured-output paths require priority |
+| Review lifecycle | Emits `EnteredReviewMode`/`ExitedReviewMode`, records a synthetic review action, and writes a final assistant review into Codex history | Emits Diffwarden run/reviewer/final events, returns Markdown/JSON/NDJSON artifacts, and does not mutate a Codex thread |
+| Read-only posture | Uses a constrained review child with approval policy never and selected features disabled | Reports per-adapter capability as enforced, tool-restricted, or prompt-only; Codex CLI uses `codex exec --sandbox read-only --ephemeral` |
+
+The main implementation gap is prompt/rubric fidelity. Diffwarden should preserve Codex's
+reviewer threshold for actionable bugs, one-finding-per-issue discipline, priority
+definitions, short diff-overlapping locations, comment style, and overall-correctness
+semantics in the shared prompt so Claude, Cursor, Pi, Droid, Codex, and other adapters are
+all asked to perform the same review.
 
 ### Feature Comparison
 
@@ -92,6 +110,7 @@ review runner independent from the Codex app/session model.
 | Session integration | Strong: review mode events and parent history integration | Deliberately external; no Codex thread UI integration |
 | Agent portability | Codex-specific | Designed for any agent that can call a CLI |
 | Custom review instructions | Yes | Yes, through `custom:<text>` |
+| Prompt/rubric fidelity | Full Codex rubric | Codex-derived contract; prompt parity is an active gap |
 
 Choose Codex review when:
 

@@ -3,6 +3,8 @@
 This matrix summarizes currently supported reviewer capabilities in Diffwarden. The
 code-owned source of truth is `src/adapters/capabilities.ts`; this page describes
 Diffwarden's adapter behavior, not every feature exposed by the underlying vendor tool.
+All adapter paths are expected to preserve Diffwarden's shared Codex-derived review
+rubric, parsing behavior, validation path, and Markdown/JSON output contract.
 
 Legend:
 

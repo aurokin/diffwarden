@@ -14,6 +14,13 @@ describe("buildReviewPrompt", () => {
       "diff --git a/tracked.txt b/tracked.txt",
     );
 
+    expect(prompt).toContain("Review guidelines:");
+    expect(prompt).toContain("The original author would likely fix it if they knew about it.");
+    expect(prompt).toContain("make the range overlap the diff");
+    expect(prompt).toContain("[P0], [P1], [P2], or [P3]");
+    expect(prompt).toContain(
+      '"patch is correct" only when existing code and tests should continue',
+    );
     expect(prompt).toContain("Only report bugs introduced by this diff.");
     expect(prompt).toContain("Patch:");
     expect(prompt).toContain("diff --git a/tracked.txt b/tracked.txt");
@@ -34,7 +41,10 @@ describe("buildReviewPrompt", () => {
     expect(prompt).toContain("Review this repository using the custom instructions below.");
     expect(prompt).toContain("custom:Review the auth flow");
     expect(prompt).toContain("Review the auth flow");
+    expect(prompt).toContain("directly within the custom review scope");
+    expect(prompt).toContain("keep locations inside the repository");
     expect(prompt).not.toContain("Only report bugs introduced by this diff.");
+    expect(prompt).not.toContain("make the range overlap the diff");
     expect(prompt).not.toContain("Patch:");
   });
 });
