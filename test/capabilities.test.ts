@@ -92,6 +92,11 @@ describe("reviewerCapabilities", () => {
       captureMode: "native-structured",
       readonlyCapability: "enforced",
     });
+    expect(getTransportCapability("claude", "sdk")).toMatchObject({
+      defaultExecutable: "claude",
+      captureMode: "native-structured",
+      readonlyCapability: "tool-restricted",
+    });
     expect(getTransportCapability("claude", "cli")).toMatchObject({
       defaultExecutable: "claude",
       captureMode: "native-structured",

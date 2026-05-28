@@ -28,6 +28,7 @@ import type {
 const defaultClaudeModel = "sonnet";
 const defaultClaudeExecutable = "claude";
 const maxClaudeTurns = 3;
+const claudeReadonlyTools = ["Read", "Grep", "Glob", "LS"];
 const execFileAsync = promisify(execFile);
 
 type ClaudeAdapterDependencies = {
@@ -177,7 +178,7 @@ async function prepareClaudeAdapter(
         {
           name: "readonly",
           status: "passed",
-          detail: "Claude built-in tools are disabled for this adapter path.",
+          detail: "Claude SDK is restricted to Read, Grep, Glob, and LS tools.",
         },
       ],
       metadata: sdkPreflightMetadata("claude", {
@@ -329,7 +330,7 @@ function buildClaudeModelPreflightOptions(
 ): ClaudeQueryOptions {
   const queryOptions: ClaudeQueryOptions = {
     cwd: input.cwd,
-    tools: [],
+    tools: claudeReadonlyTools,
     permissionMode: "dontAsk",
     settingSources: [],
     persistSession: false,
@@ -479,7 +480,7 @@ function buildClaudeQueryOptions(
   const queryOptions: ClaudeQueryOptions = {
     cwd: options.input.cwd,
     model: options.input.reviewer.model ?? defaultClaudeModel,
-    tools: [],
+    tools: claudeReadonlyTools,
     permissionMode: "dontAsk",
     settingSources: [],
     persistSession: false,

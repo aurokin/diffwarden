@@ -232,7 +232,7 @@ describe("claudeAdapter", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.options).toMatchObject({
       cwd: process.cwd(),
-      tools: [],
+      tools: ["Read", "Grep", "Glob", "LS"],
       permissionMode: "dontAsk",
       settingSources: [],
       persistSession: false,
@@ -500,6 +500,7 @@ describe("claudeAdapter", () => {
     );
 
     expect(calls[0]?.options).toMatchObject({
+      tools: ["Read", "Grep", "Glob", "LS"],
       effort: "max",
     });
     expect(output.metadata).toMatchObject({
@@ -534,7 +535,7 @@ describe("claudeAdapter", () => {
           await createLiveAdapterInput(fixture, reviewer, process.env),
         );
 
-        expect(preflight?.metadata?.readonlyCapability).toBe("enforced");
+        expect(preflight?.metadata?.readonlyCapability).toBe("tool-restricted");
         expect(["api-key", "claude-code"]).toContain(preflight?.metadata?.authMode);
         expect(["native-structured", "text"]).toContain(output.metadata?.captureMode);
         expectLiveAdapterOutput(output);

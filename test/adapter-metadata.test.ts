@@ -17,7 +17,7 @@ describe("SDK adapter metadata", () => {
     });
     expect(sdkPreflightMetadata("claude")).toMatchObject({
       transport: "sdk",
-      readonlyCapability: "enforced",
+      readonlyCapability: "tool-restricted",
       preferredCaptureMode: "native-structured",
     });
     expect(sdkPreflightMetadata("pi")).toMatchObject({
@@ -44,7 +44,7 @@ describe("SDK adapter metadata", () => {
     ).toMatchObject({
       transport: "sdk",
       captureMode: "text",
-      readonlyCapability: "enforced",
+      readonlyCapability: "tool-restricted",
       fallbackReason: "retry_limit",
     });
   });

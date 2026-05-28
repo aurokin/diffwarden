@@ -77,7 +77,7 @@ const reviewerCapabilityDefinitions = {
         supportsModel: true,
         supportsEffort: true,
         captureMode: "native-structured",
-        readonlyCapability: "enforced",
+        readonlyCapability: "tool-restricted",
       },
       cli: {
         transport: "cli",

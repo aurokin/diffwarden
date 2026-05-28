@@ -141,8 +141,9 @@ ANTHROPIC_API_KEY=... pnpm dev -- --target uncommitted --reviewer claude
 pnpm dev -- --target uncommitted --reviewer claude
 ```
 
-The adapter uses `@anthropic-ai/claude-agent-sdk` with built-in tools disabled, isolated
-setting sources, and native JSON Schema output. In the default `auto` auth mode, Diffwarden
+The adapter uses `@anthropic-ai/claude-agent-sdk` with tools restricted to `Read`, `Grep`,
+`Glob`, and `LS`, isolated setting sources, and native JSON Schema output. In the default
+`auto` auth mode, Diffwarden
 checks `claude auth status --json` with Anthropic API credentials removed from the child
 environment. If that reports a logged-in Claude Code account, the SDK is pointed at the
 local `claude` executable and API credentials are removed from the SDK process environment
