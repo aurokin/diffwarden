@@ -187,7 +187,7 @@ async function prepareCodexAppServerAdapter(
           name: "exec",
           status: "warning",
           detail:
-            "Codex app-server command execution remains enabled for this experimental transport; approval escalations are denied.",
+            "Codex app-server command execution remains enabled for this transport; approval escalations are denied.",
         },
         {
           name: "web-search",
@@ -1396,7 +1396,7 @@ function codexDeveloperInstructions(): string {
     "You are running inside Diffwarden as a read-only code reviewer.",
     "Inspect the requested repository state and return only the requested review result.",
     "Do not modify files. Do not ask for permission to modify files.",
-    "Command execution is currently enabled for this experimental app-server transport, but approval escalations are denied and the sandbox is read-only.",
+    "Command execution is currently enabled for this app-server transport, but approval escalations are denied and the sandbox is read-only.",
   ].join("\n");
 }
 

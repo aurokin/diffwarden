@@ -700,7 +700,7 @@ Direct executable adapters are thin transports. They must not own target resolut
 Implemented CLI families:
 
 - Codex CLI uses `codex exec` with a read-only sandbox, JSON schema, and `--output-last-message`.
-- Codex CLI sets `web_search = "live"` by default, with `cliOptions.webSearch` allowing `"enabled"`, `"disabled"`, or `"inherit"`.
+- Codex CLI sets `web_search = "disabled"` by default, with `cliOptions.webSearch` allowing `"enabled"`, `"disabled"`, or `"inherit"`.
 - Claude CLI uses `claude -p` with JSON output, JSON schema, no session persistence, and read-oriented tools.
 - Cursor CLI uses `cursor-agent -p` with JSON output, plan mode, sandbox enabled, and workspace scoping.
 - Gemini CLI uses JSON output and plan approval mode.
@@ -1053,6 +1053,7 @@ Codex review reference, refreshed from `/Users/auro/code/upstream/codex` at comm
 - Diffwarden's Codex app-server transport defaults to schema-constrained `turn/start`; `appServerOptions.reviewMode: "native"` opts into Codex `review/start` and returns rendered review text only unless that text contains parseable `ReviewResult` JSON.
 - Codex native `review/start` disables web search inside the review task, so Diffwarden reports native-mode `webSearchMode`/`effectiveWebSearchMode` as `disabled` even when the parent thread requested `live`.
 - Codex native `review/start` has no per-request effort field; Diffwarden applies configured effort overrides through thread config as `model_reasoning_effort`.
+- A future fallback translator may convert non-schema review text into `ReviewResult` JSON with a model after parsing fails, but translated output must be marked distinctly from native structured output.
 - The Codex tool registry includes shell/unified exec, MCP resource listing/reading, planning/goal tools, view-image, apply-patch, and multi-agent tools depending on configuration in `codex-rs/core/src/tools/spec_plan.rs`.
 - For `diffwarden`, only the read-only subset should be exposed: file read/list/search, `git diff`, `git show`, `git status`, `git grep`, `rg`, `sed`, `nl`, optional Codex web search, and equivalent inspection commands. Do not expose apply-patch, edit/write tools, external comment publishing tools, or multi-agent spawning inside reviewer adapters.
 

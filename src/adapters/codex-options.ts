@@ -48,7 +48,7 @@ export function codexAppServerReviewMode(reviewer: ReviewReviewerConfig): CodexA
 
 function parseCodexWebSearchPolicy(value: unknown, optionName: string): CodexWebSearchPolicy {
   if (value === undefined) {
-    return "enabled";
+    return "disabled";
   }
   if (value === "enabled" || value === "disabled" || value === "inherit") {
     return value;

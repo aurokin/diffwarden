@@ -168,8 +168,8 @@ describe("createCodexAppServerAdapter", () => {
       resolvedEffort: "minimal",
       effortResolutionSource: "requested",
       codexReviewMode: "structured",
-      webSearchPolicy: "enabled",
-      webSearchMode: "live",
+      webSearchPolicy: "disabled",
+      webSearchMode: "disabled",
     });
     expect(prepared.preflight?.checks).toContainEqual(
       expect.objectContaining({
@@ -195,8 +195,8 @@ describe("createCodexAppServerAdapter", () => {
       codexReviewMode: "structured",
       requestedModel: "gpt-test",
       resolvedEffort: "minimal",
-      webSearchPolicy: "enabled",
-      webSearchMode: "live",
+      webSearchPolicy: "disabled",
+      webSearchMode: "disabled",
     });
     expect(invocation.argv).toContain("app-server");
     expect(invocation.argv).not.toContain("shell_tool");
@@ -209,7 +209,7 @@ describe("createCodexAppServerAdapter", () => {
       persistExtendedHistory: false,
       model: "gpt-test",
     });
-    expect(invocation.threadStart.config).toEqual({ web_search: "live" });
+    expect(invocation.threadStart.config).toEqual({ web_search: "disabled" });
     expect(invocation.turnStart).toMatchObject({
       approvalPolicy: "never",
       model: "gpt-test",
@@ -286,6 +286,21 @@ describe("createCodexAppServerAdapter", () => {
       ].join("\n"),
     });
     const adapter = createCodexAppServerAdapter();
+    const enabledReviewer = createReviewer(harness.executable, {
+      appServerOptions: {
+        mode: "stdio-isolated",
+        webSearch: "enabled",
+      },
+    });
+
+    const enabledOutput = await adapter.run(createInput(enabledReviewer, harness));
+    expect(harness.readInvocation().threadStart.config).toEqual({ web_search: "live" });
+    expect(harness.readInvocation().config).not.toContain('web_search = "cached"');
+    expect(enabledOutput.metadata).toMatchObject({
+      webSearchPolicy: "enabled",
+      webSearchMode: "live",
+    });
+
     const disabledReviewer = createReviewer(harness.executable, {
       appServerOptions: {
         mode: "stdio-isolated",
@@ -347,8 +362,8 @@ describe("createCodexAppServerAdapter", () => {
       nativeReviewStructuredFindings: false,
       requestedEffort: "high",
       resolvedEffort: "high",
-      webSearchPolicy: "enabled",
-      requestedWebSearchMode: "live",
+      webSearchPolicy: "disabled",
+      requestedWebSearchMode: "disabled",
       webSearchMode: "disabled",
       effectiveWebSearchMode: "disabled",
       effectiveWebSearchReason: "codex-native-review-disables-web-search",
@@ -380,8 +395,8 @@ describe("createCodexAppServerAdapter", () => {
       nativeReviewStructuredFindings: false,
       requestedEffort: "high",
       resolvedEffort: "high",
-      webSearchPolicy: "enabled",
-      requestedWebSearchMode: "live",
+      webSearchPolicy: "disabled",
+      requestedWebSearchMode: "disabled",
       webSearchMode: "disabled",
       effectiveWebSearchMode: "disabled",
       effectiveWebSearchReason: "codex-native-review-disables-web-search",

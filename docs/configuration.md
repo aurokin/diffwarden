@@ -49,7 +49,7 @@ diffwarden reviewers list --format json
 Configured reviewers use `engine` for the reviewer family (`claude`, `pi`, `codex`, etc.).
 Legacy configs that still use `sdk` continue to load and are normalized internally.
 Use `transport: "native"` for the SDK-backed path when you want to be explicit, or
-`transport: "cli"` for executable-backed runs. Codex also supports an experimental
+`transport: "cli"` for executable-backed runs. Codex also supports a
 `transport: "app-server"` path for ephemeral `codex app-server` reviews.
 
 ## Environment Defaults
@@ -230,9 +230,9 @@ reads or writes `auth.json`.
 
 SDK-backed families can be configured to use a CLI transport.
 Droid users should prefer the CLI profile for routine reviews when Factory UI session
-history matters. Codex CLI enables Codex web search by default with `web_search = "live"`;
-set `cliOptions.webSearch` to `"disabled"` or `"inherit"` when a reviewer should avoid that
-override.
+history matters. Codex CLI disables Codex web search by default with
+`web_search = "disabled"`; set `cliOptions.webSearch` to `"enabled"` or `"inherit"` when a
+reviewer should use a different policy.
 
 ```json
 {
@@ -269,11 +269,11 @@ override.
 
 ## Codex App-Server Example
 
-Codex can opt into an experimental app-server transport. By default this path uses the
+Codex can opt into an app-server transport. By default this path uses the
 existing shared Codex home, connects to its app-server socket when one is already running,
 and launches `codex app-server --listen unix://` only when no socket is available. Reviews
 still start ephemeral read-only threads and record `execEnabled: true` because command
-execution remains available. Diffwarden sets Codex `web_search` to `"live"` by default.
+execution remains available. Diffwarden sets Codex `web_search` to `"disabled"` by default.
 
 ```json
 {
@@ -286,7 +286,7 @@ execution remains available. Diffwarden sets Codex `web_search` to `"live"` by d
         "executable": "/opt/homebrew/bin/codex"
       },
       "appServerOptions": {
-        "webSearch": "enabled",
+        "webSearch": "disabled",
         "reviewMode": "structured"
       }
     }
@@ -296,8 +296,8 @@ execution remains available. Diffwarden sets Codex `web_search` to `"live"` by d
 
 `appServerOptions.webSearch` accepts:
 
-- `enabled`: set Codex `web_search = "live"` for the review. This is the default.
-- `disabled`: set Codex `web_search = "disabled"`.
+- `disabled`: set Codex `web_search = "disabled"`. This is the default.
+- `enabled`: set Codex `web_search = "live"` for the review.
 - `inherit`: do not override Codex web search for the thread.
 
 In `stdio-isolated` mode, `inherit` copies the source Codex home's top-level `web_search`

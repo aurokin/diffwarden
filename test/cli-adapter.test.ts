@@ -44,8 +44,8 @@ describe("createCliAdapter", () => {
       requestedEffort: "high",
       resolvedEffort: "high",
       effortResolutionSource: "requested",
-      webSearchPolicy: "enabled",
-      webSearchMode: "live",
+      webSearchPolicy: "disabled",
+      webSearchMode: "disabled",
     });
     expect(output.structured).toMatchObject({
       overall_correctness: "patch is correct",
@@ -61,12 +61,12 @@ describe("createCliAdapter", () => {
       requestedEffort: "high",
       resolvedEffort: "high",
       effortResolutionSource: "requested",
-      webSearchPolicy: "enabled",
-      webSearchMode: "live",
+      webSearchPolicy: "disabled",
+      webSearchMode: "disabled",
     });
     expect(invocation.args).toContain("--model");
     expect(invocation.args).toContain("gpt-test");
-    expect(invocation.args).toContain('web_search="live"');
+    expect(invocation.args).toContain('web_search="disabled"');
     expect(invocation.args).toContain('model_reasoning_effort="high"');
     expect(invocation.args).toContain("exec");
     expect(invocation.args).toContain("--sandbox");
@@ -77,15 +77,15 @@ describe("createCliAdapter", () => {
   it("supports Codex CLI web search overrides", async () => {
     const harness = createHarness("codex");
     const adapter = createCliAdapter("codex");
-    const disabledReviewer = createReviewer("codex", harness.executable, {
-      cliOptions: { executable: harness.executable, webSearch: "disabled" },
+    const enabledReviewer = createReviewer("codex", harness.executable, {
+      cliOptions: { executable: harness.executable, webSearch: "enabled" },
     });
 
-    const disabledOutput = await adapter.run(createInput(disabledReviewer, harness));
-    expect(harness.readInvocation().args).toContain('web_search="disabled"');
-    expect(disabledOutput.metadata).toMatchObject({
-      webSearchPolicy: "disabled",
-      webSearchMode: "disabled",
+    const enabledOutput = await adapter.run(createInput(enabledReviewer, harness));
+    expect(harness.readInvocation().args).toContain('web_search="live"');
+    expect(enabledOutput.metadata).toMatchObject({
+      webSearchPolicy: "enabled",
+      webSearchMode: "live",
     });
 
     const inheritReviewer = createReviewer("codex", harness.executable, {

@@ -88,7 +88,9 @@ app-server flows use Diffwarden's shared schema-constrained prompt, while experi
 `appServerOptions.reviewMode: "native"` delegates to Codex `review/start` and parses the
 rendered review text. Native mode is intentionally marked text-only in metadata because Codex
 does not currently expose the underlying structured `ReviewOutputEvent` through the app-server
-item.
+item. A future translator step could ask a model to convert fallback text into `ReviewResult`
+JSON after schema parsing fails, but that should be opt-in and reported separately from native
+structured output.
 
 ### Feature Comparison
 

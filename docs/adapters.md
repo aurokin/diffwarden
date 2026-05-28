@@ -23,7 +23,7 @@ CLI-only reviewers use `transport: "cli"` automatically:
 - `grok`
 - `antigravity`
 
-Codex also has an experimental opt-in app-server transport:
+Codex also has an opt-in app-server transport:
 
 ```json
 {
@@ -65,8 +65,7 @@ until an executable exposes stable machine-readable runtime metadata.
 The Codex app-server transport follows the same metadata convention. It additionally records
 `transport: "app-server"`, `ephemeral: true`, `execEnabled: true`, `appServerMode`,
 `codexHome`, `codexHomeShared`, `webSearchPolicy`, `codexReviewMode`, and app-server lifecycle
-metadata because command execution is intentionally still available in the first experimental
-version.
+metadata because command execution is intentionally still available for this transport.
 
 ## Codex App Server
 
@@ -78,7 +77,7 @@ The Codex app-server path is configured through a named reviewer with
 `transport: "app-server"`. By default it uses the shared Codex home, connects to
 `$CODEX_HOME/app-server-control/app-server-control.sock` when an app-server is already
 running, and launches `codex app-server --listen unix://` only when no socket is available.
-The review itself starts an ephemeral read-only thread, sets Codex `web_search` to `"live"` by
+The review itself starts an ephemeral read-only thread, sets Codex `web_search` to `"disabled"` by
 default, and requests JSON-schema turn output.
 
 The shared Codex home resolves from `appServerOptions.codexHome`, then
@@ -101,8 +100,8 @@ model-provider config from `DIFFWARDEN_CODEX_AUTH_HOME`, then `$CODEX_HOME`, the
 
 `appServerOptions.webSearch` controls Codex's thread-level web-search override:
 
-- `enabled`: set `web_search = "live"`. This is the default.
-- `disabled`: set `web_search = "disabled"`.
+- `disabled`: set `web_search = "disabled"`. This is the default.
+- `enabled`: set `web_search = "live"`.
 - `inherit`: do not set `web_search` on the thread.
 
 In `stdio-isolated` mode, `inherit` copies the source Codex home's top-level `web_search`
@@ -122,7 +121,7 @@ thread has `web_search = "live"`. Diffwarden reports native-mode `webSearchMode`
 through thread config as `model_reasoning_effort` because `review/start` does not accept a
 per-request effort field.
 
-Command execution is currently left enabled for this experimental transport so Codex can use
+Command execution is currently left enabled for this transport so Codex can use
 its normal repository inspection path. Diffwarden sets approval policy to `never`, uses a
 read-only sandbox policy, denies approval escalation requests, and exposes this fact as
 `execEnabled: true` in preflight and adapter metadata. A later hardening pass can explore
@@ -294,9 +293,9 @@ The shared CLI adapter performs executable preflight, runs the selected CLI in i
 restrictive documented review mode, and returns either native structured output or text for
 the core parser.
 
-Codex CLI sets `web_search = "live"` by default so review runs can use current context when
-needed. Set `cliOptions.webSearch` to `"disabled"` to force `web_search = "disabled"`, or
-`"inherit"` to leave Codex's configured default untouched.
+Codex CLI sets `web_search = "disabled"` by default to match Codex review mode. Set
+`cliOptions.webSearch` to `"enabled"` to opt into live search, or `"inherit"` to leave
+Codex's configured default untouched.
 
 SDK-backed families, including Droid, can use `transport: "cli"` from config.
 `cliOptions.executable` can point at non-standard installs, such as local `pi`, `droid`, or
