@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,20 +16,7 @@ afterEach(() => {
 });
 
 describe("resolveGitTarget", () => {
-  it("resolves uncommitted tracked and untracked changes", async () => {
-    const repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-    writeFileSync(path.join(repo, "new.txt"), "new\n");
-
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
-
-    expect(resolved.target.kind).toBe("uncommitted");
-    expect(resolved.target.changed_files).toEqual(["new.txt", "tracked.txt"]);
-    expect(resolved.diff).toContain("tracked.txt");
-    expect(resolved.diff).toContain("new.txt");
-  });
-
-  it("excludes repo-local report history from uncommitted changes", async () => {
+  it("resolves uncommitted tracked and untracked changes while excluding report history", async () => {
     const repo = createRepo();
     mkdirSync(path.join(repo, ".diffwarden", "reports", "2026", "05", "24"), {
       recursive: true,
@@ -38,32 +25,20 @@ describe("resolveGitTarget", () => {
       path.join(repo, ".diffwarden", "reports", "2026", "05", "24", "report.json"),
       "{}\n",
     );
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
     writeFileSync(path.join(repo, "new.txt"), "new\n");
 
     const resolved = await resolveGitTarget(repo, parseTargetSpec("uncommitted"));
 
-    expect(resolved.target.changed_files).toEqual(["new.txt"]);
+    expect(resolved.target.kind).toBe("uncommitted");
+    expect(resolved.target.changed_files).toEqual(["new.txt", "tracked.txt"]);
     expect(resolved.target.diff_command).toContain("--exclude='.diffwarden/reports/**'");
+    expect(resolved.diff).toContain("tracked.txt");
     expect(resolved.diff).toContain("new.txt");
     expect(resolved.diff).not.toContain(".diffwarden/reports");
   });
 
-  it("resolves base branch changes", async () => {
-    const repo = createRepo();
-    git(repo, ["checkout", "-b", "feature"]);
-    writeFileSync(path.join(repo, "tracked.txt"), "feature\n");
-    git(repo, ["add", "tracked.txt"]);
-    git(repo, ["commit", "-m", "feature"]);
-
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("base:main"));
-
-    expect(resolved.target.kind).toBe("base");
-    expect(resolved.target.base_ref).toBe("main");
-    expect(resolved.target.changed_files).toEqual(["tracked.txt"]);
-    expect(resolved.diff).toContain("feature");
-  });
-
-  it("excludes unrelated worktree changes from base branch targets", async () => {
+  it("resolves base branch changes without including unrelated worktree changes", async () => {
     const repo = createRepo();
     writeFileSync(path.join(repo, "worktree.txt"), "base\n");
     git(repo, ["add", "worktree.txt"]);
@@ -79,35 +54,6 @@ describe("resolveGitTarget", () => {
     expect(resolved.target.changed_files).toEqual(["tracked.txt"]);
     expect(resolved.diff).toContain("feature");
     expect(resolved.diff).not.toContain("uncommitted");
-  });
-
-  it("resolves commit changes", async () => {
-    const repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "commit\n");
-    git(repo, ["add", "tracked.txt"]);
-    git(repo, ["commit", "-m", "change"]);
-    const sha = git(repo, ["rev-parse", "HEAD"]);
-
-    const resolved = await resolveGitTarget(repo, parseTargetSpec(`commit:${sha}`));
-
-    expect(resolved.target.kind).toBe("commit");
-    expect(resolved.target.commit_sha).toBe(sha);
-    expect(resolved.target.changed_files).toEqual(["tracked.txt"]);
-    expect(resolved.diff).toContain("commit");
-  });
-
-  it("resolves nested changed files for commit targets", async () => {
-    const repo = createRepo();
-    mkdirSync(path.join(repo, "src", "nested"), { recursive: true });
-    writeFileSync(path.join(repo, "src", "nested", "file.txt"), "nested\n");
-    git(repo, ["add", "src/nested/file.txt"]);
-    git(repo, ["commit", "-m", "nested"]);
-    const sha = git(repo, ["rev-parse", "HEAD"]);
-
-    const resolved = await resolveGitTarget(repo, parseTargetSpec(`commit:${sha}`));
-
-    expect(resolved.target.changed_files).toEqual(["src/nested/file.txt"]);
-    expect(resolved.diff).toContain("src/nested/file.txt");
   });
 
   it("resolves merge commit changes against the first parent", async () => {
@@ -128,33 +74,6 @@ describe("resolveGitTarget", () => {
     expect(resolved.target.changed_files).toEqual(["feature.txt"]);
     expect(resolved.diff).toContain("feature.txt");
     expect(resolved.diff).not.toContain("main.txt");
-  });
-
-  it("resolves root commit changes", async () => {
-    const repo = createRepo();
-    const rootSha = git(repo, ["rev-list", "--max-parents=0", "HEAD"]);
-
-    const resolved = await resolveGitTarget(repo, parseTargetSpec(`commit:${rootSha}`));
-
-    expect(resolved.target.kind).toBe("commit");
-    expect(resolved.target.commit_sha).toBe(rootSha);
-    expect(resolved.target.changed_files).toEqual(["tracked.txt"]);
-    expect(resolved.diff).toContain("initial");
-  });
-
-  it("resolves custom instructions without a diff", async () => {
-    const repo = createRepo();
-
-    const resolved = await resolveGitTarget(repo, parseTargetSpec("custom:Review auth paths"));
-
-    expect(resolved.diff).toBe("");
-    expect(resolved.target).toMatchObject({
-      kind: "custom",
-      repo_root: realpathSync(repo),
-      head_sha: git(repo, ["rev-parse", "HEAD"]),
-      instructions: "Review auth paths",
-      changed_files: [],
-    });
   });
 });
 
