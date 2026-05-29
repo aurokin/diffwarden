@@ -33,8 +33,17 @@ pnpm test:full
 ```
 
 `test:unit` is the default local loop and avoids real Git subprocesses, fake CLI launches, and
-model calls. `test:process` covers fake CLI/app-server process contracts. `test:git` covers
-real Git target-resolution behavior. `test:full` runs all three tiers in sequence.
+model calls. Prefer pure seams here for command construction, parsing, validation, rendering,
+runner orchestration, and resolver command selection.
+
+`test:process` covers fake CLI/app-server process canaries: executable resolution, stdio capture,
+exit classification, abort/reaping, and app-server lifecycle behavior. Do not add process tests
+just to inspect deterministic argv/env construction or parser behavior; cover those in
+`test:unit`.
+
+`test:git` covers real Git target-resolution canaries. Keep broad resolver behavior in fake-runner
+unit tests, and reserve this tier for compatibility with actual Git behavior. `test:full` runs all
+three tiers in sequence.
 
 Process and Git suites run test files serially with one worker. Several tests create temporary
 Git repositories or short-lived child processes; on macOS, parallelizing those tests can amplify
@@ -73,6 +82,11 @@ pnpm test:e2e
 Runs credential-free black-box CLI tests against temporary Git repositories using the fake
 reviewer. These tests exercise the CLI entry point, Git target resolution, Markdown output,
 JSON output, and CLI error handling.
+
+Keep e2e tests focused on built-binary behavior that smaller tiers cannot prove: CLI startup,
+config loading, output framing, report writes, exit codes, and a few real target-resolution paths.
+When an e2e case only re-checks parser, renderer, fake-reviewer, or resolver internals, move the
+coverage to unit, process, or real-Git canaries instead.
 
 ## Live Smoke Tests
 
