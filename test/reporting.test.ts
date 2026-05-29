@@ -86,6 +86,23 @@ describe("resolveReportingOptions", () => {
 
     expect(options.enabled).toBe(false);
   });
+
+  it("rejects unsupported CLI reporting options", () => {
+    expect(() =>
+      resolveReportingOptions({
+        cwd: "/repo",
+        repoRoot: "/repo",
+        cli: { reportScope: "workspace" },
+      }),
+    ).toThrow("Invalid --report-scope value");
+    expect(() =>
+      resolveReportingOptions({
+        cwd: "/repo",
+        repoRoot: "/repo",
+        cli: { reportMode: "summary" },
+      }),
+    ).toThrow("Invalid --report-mode value");
+  });
 });
 
 describe("createReviewReport", () => {

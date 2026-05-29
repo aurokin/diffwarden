@@ -50,56 +50,6 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("reviews base branch changes with the fake reviewer in JSON", async () => {
-    const repo = createRepo();
-    git(repo, ["checkout", "-q", "-b", "feature"]);
-    writeFileSync(path.join(repo, "tracked.txt"), "feature\n");
-    git(repo, ["add", "tracked.txt"]);
-    git(repo, ["commit", "-m", "feature"]);
-
-    const result = await runDiffwarden(repo, [
-      "--target",
-      "base:main",
-      "--reviewer",
-      "fake",
-      "--cwd",
-      repo,
-      "--format",
-      "json",
-    ]);
-    const artifact = JSON.parse(result.stdout);
-
-    expect(artifact.engine).toBe("fake");
-    expect(artifact.target.kind).toBe("base");
-    expect(artifact.target.base_ref).toBe("main");
-    expect(artifact.target.changed_files).toEqual(["tracked.txt"]);
-    expect(artifact.result.overall_correctness).toBe("patch is correct");
-  });
-
-  it("reviews a single commit with the fake reviewer in JSON", async () => {
-    const repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "commit change\n");
-    git(repo, ["add", "tracked.txt"]);
-    git(repo, ["commit", "-m", "change"]);
-    const commitSha = git(repo, ["rev-parse", "HEAD"]);
-
-    const result = await runDiffwarden(repo, [
-      "--target",
-      `commit:${commitSha}`,
-      "--reviewer",
-      "fake",
-      "--cwd",
-      repo,
-      "--format",
-      "json",
-    ]);
-    const artifact = JSON.parse(result.stdout);
-
-    expect(artifact.target.kind).toBe("commit");
-    expect(artifact.target.commit_sha).toBe(commitSha);
-    expect(artifact.target.changed_files).toEqual(["tracked.txt"]);
-  });
-
   it("reviews custom instructions with the fake reviewer in JSON", async () => {
     const repo = createRepo();
 
@@ -120,25 +70,6 @@ describe("diffwarden CLI e2e", () => {
     expect(artifact.target.changed_files).toEqual([]);
     expect(artifact.validation.valid_locations).toBe(true);
     expect(artifact.validation.findings_overlap_diff).toBe(true);
-  });
-
-  it("accepts fail-on-findings when no matching findings are reported", async () => {
-    const repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-
-    const result = await runDiffwarden(repo, [
-      "--target",
-      "uncommitted",
-      "--reviewer",
-      "fake",
-      "--cwd",
-      repo,
-      "--fail-on-findings",
-      "P2",
-    ]);
-
-    expect(result.stdout).toContain("# Code Review");
-    expect(result.stderr).toBe("");
   });
 
   it("exits 1 after writing output when findings meet the fail-on-findings threshold", async () => {
@@ -220,61 +151,13 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("still honors --fail-on-findings and --out in NDJSON mode", async () => {
-    const repo = createRepo();
-    const outputPath = path.join(repo, "review.json");
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-
-    try {
-      await runDiffwarden(
-        repo,
-        [
-          "--target",
-          "uncommitted",
-          "--reviewer",
-          "fake",
-          "--cwd",
-          repo,
-          "--format",
-          "ndjson",
-          "--out",
-          outputPath,
-          "--fail-on-findings",
-          "P2",
-        ],
-        {
-          DIFFWARDEN_FAKE_FINDING_PATH: path.join(repo, "tracked.txt"),
-        },
-      );
-      throw new Error("Expected diffwarden to exit 1");
-    } catch (error) {
-      if (!isExecError(error)) {
-        throw error;
-      }
-      expect(error.code).toBe(1);
-      expect(error.stderr).toBe("");
-      const events = parseNdjson(error.stdout);
-      expect(events.at(-1)?.type).toBe("final_result");
-      const outArtifact = JSON.parse(readFileSync(outputPath, "utf8"));
-      expect(outArtifact.result.findings[0]).toMatchObject({
-        title: "[P2] Fake finding",
-        priority: 2,
-      });
-    }
-  });
-
   it("rejects --format ndjson combined with --verbose", async () => {
-    const repo = createRepo();
-    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
-
     await expect(
-      runDiffwarden(repo, [
+      runDiffwarden(process.cwd(), [
         "--target",
         "uncommitted",
         "--reviewer",
         "fake",
-        "--cwd",
-        repo,
         "--format",
         "ndjson",
         "--verbose",
@@ -282,26 +165,6 @@ describe("diffwarden CLI e2e", () => {
     ).rejects.toMatchObject({
       code: 2,
       stderr: expect.stringContaining("--verbose is not compatible with --format ndjson"),
-    });
-  });
-
-  it("returns a CLI error for invalid fail-on-findings thresholds", async () => {
-    const repo = createRepo();
-
-    await expect(
-      runDiffwarden(repo, [
-        "--target",
-        "uncommitted",
-        "--reviewer",
-        "fake",
-        "--cwd",
-        repo,
-        "--fail-on-findings",
-        "P4",
-      ]),
-    ).rejects.toMatchObject({
-      code: 2,
-      stderr: expect.stringContaining("Invalid --fail-on-findings value"),
     });
   });
 
@@ -380,26 +243,6 @@ describe("diffwarden CLI e2e", () => {
       ],
     });
     expect(report).not.toHaveProperty("artifact");
-  });
-
-  it("validates report options before resolving reviewers", async () => {
-    const repo = createRepo();
-
-    await expect(
-      runDiffwarden(repo, [
-        "--target",
-        "uncommitted",
-        "--reviewer",
-        "not-a-reviewer",
-        "--cwd",
-        repo,
-        "--report-scope",
-        "workspace",
-      ]),
-    ).rejects.toMatchObject({
-      code: 2,
-      stderr: expect.stringContaining("Invalid --report-scope value"),
-    });
   });
 
   it("writes stdout before surfacing report write failures", async () => {
@@ -536,17 +379,6 @@ describe("diffwarden CLI e2e", () => {
     await expect(runDiffwarden(repo, ["reviewers", "list", "--cwd", repo])).rejects.toMatchObject({
       code: 2,
       stderr: expect.stringContaining("No diffwarden config found"),
-    });
-  });
-
-  it("returns a CLI error for unsupported targets", async () => {
-    const repo = createRepo();
-
-    await expect(
-      runDiffwarden(repo, ["--target", "pr:1", "--reviewer", "fake", "--cwd", repo]),
-    ).rejects.toMatchObject({
-      code: 2,
-      stderr: expect.stringContaining("Invalid target: pr:1"),
     });
   });
 });

@@ -84,9 +84,12 @@ reviewer. These tests exercise the CLI entry point, Git target resolution, Markd
 JSON output, and CLI error handling.
 
 Keep e2e tests focused on built-binary behavior that smaller tiers cannot prove: CLI startup,
-config loading, output framing, report writes, exit codes, and a few real target-resolution paths.
-When an e2e case only re-checks parser, renderer, fake-reviewer, or resolver internals, move the
-coverage to unit, process, or real-Git canaries instead.
+config loading, output framing, report writes, exit codes, and a small number of real
+target-resolution paths. The e2e suite should stay close to canaries for version output,
+Markdown/JSON/NDJSON review output, fail-on-findings, report writes, doctor output, reviewer-list
+redaction, and one representative CLI error path. When an e2e case only re-checks parser,
+renderer, fake-reviewer, or resolver internals, move the coverage to unit, process, or real-Git
+canaries instead.
 
 ## Live Smoke Tests
 
