@@ -1,6 +1,6 @@
 {
   "name": "diffwarden",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "description": "A small CLI for agent-callable code review.",
   "type": "module",
