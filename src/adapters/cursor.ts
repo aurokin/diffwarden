@@ -78,7 +78,12 @@ export function createCursorAdapter(
           ...modelResolutionMetadata({
             requested: input.reviewer.model,
             resolved: modelPreflight.canonicalModelId,
-            source: input.reviewer.model === undefined ? "adapter-default" : "adapter-selection",
+            source:
+              input.reviewer.model === undefined
+                ? "adapter-default"
+                : input.reviewer.model === modelPreflight.canonicalModelId
+                  ? (input.reviewer.modelSource ?? "requested")
+                  : "adapter-selection",
           }),
           ...(input.reviewer.effort !== undefined
             ? {
@@ -148,7 +153,7 @@ export function createCursorAdapter(
                 result.model === undefined
                   ? input.reviewer.model === undefined
                     ? "adapter-default"
-                    : "requested"
+                    : (input.reviewer.modelSource ?? "requested")
                   : "provider-result",
             }),
             durationMs: result.durationMs,

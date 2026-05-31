@@ -10,6 +10,8 @@ import type { ReviewAdapterOutput, ReviewAdapterPreflightResult } from "./types.
 export type ResolutionSource =
   | "adapter-default"
   | "adapter-selection"
+  | "config"
+  | "env"
   | "provider-init"
   | "provider-result"
   | "requested"

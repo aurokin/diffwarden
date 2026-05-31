@@ -182,7 +182,7 @@ function cliSelectionMetadata(
   reviewer: ReviewReviewerConfig,
 ): Record<string, string> {
   const model = providerQualifiedModel(reviewer);
-  const effort = cliEffortResolution(engine, reviewer.effort);
+  const effort = cliEffortResolution(engine, reviewer);
 
   return {
     ...(reviewer.model !== undefined ? { model: reviewer.model } : {}),
@@ -190,7 +190,7 @@ function cliSelectionMetadata(
       ? modelResolutionMetadata({
           requested: model,
           resolved: model,
-          source: "requested",
+          source: reviewer.modelSource ?? "requested",
         })
       : {}),
     ...(reviewer.effort !== undefined ? { effort: reviewer.effort } : {}),
@@ -207,8 +207,9 @@ function cliSelectionMetadata(
 
 function cliEffortResolution(
   engine: CliEngine,
-  effort: string | undefined,
+  reviewer: ReviewReviewerConfig,
 ): { resolved?: string; source: ResolutionSource } | undefined {
+  const effort = reviewer.effort;
   if (effort === undefined) {
     return undefined;
   }
@@ -222,7 +223,7 @@ function cliEffortResolution(
   const resolved = cliResolvedEffort(engine, effort);
   return {
     resolved,
-    source: resolved === effort ? "requested" : "adapter-selection",
+    source: resolved === effort ? (reviewer.effortSource ?? "requested") : "adapter-selection",
   };
 }
 

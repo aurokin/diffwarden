@@ -24,6 +24,7 @@ import { resolveGitTarget } from "./core/git.js";
 import { type MacosDoctorReport, runMacosDoctor } from "./core/macos.js";
 import { renderJson, renderMarkdown } from "./core/render.js";
 import { resolveReportingOptions, writeReviewReport } from "./core/reporting.js";
+import type { ReviewerOverrideSource } from "./core/reviewer.js";
 import {
   type ReviewerPreflightReport,
   runReviewEvents,
@@ -56,6 +57,11 @@ type ReviewerListEntry = {
   provider?: string;
   model?: string;
   effort?: string;
+};
+
+type OverrideSelection = {
+  value: string;
+  source: ReviewerOverrideSource;
 };
 
 program
@@ -148,8 +154,8 @@ program
         (reviewerOptions.reviewers === undefined
           ? loadedConfig?.config.defaultReviewerSet
           : undefined);
-      const model = options.model ?? envOptions.model;
-      const effort = options.effort ?? envOptions.effort;
+      const model = overrideSelection(options.model, envOptions.model);
+      const effort = overrideSelection(options.effort, envOptions.effort);
       const timeoutSeconds = cliTimeoutSeconds ?? envOptions.timeoutSeconds;
       const reportingOptions = resolveReportingOptions({
         cwd: options.cwd,
@@ -168,8 +174,8 @@ program
         cwd: options.cwd,
         resolved,
         ...reviewerOptions,
-        ...(model !== undefined ? { model } : {}),
-        ...(effort !== undefined ? { effort } : {}),
+        ...(model !== undefined ? { model: model.value, modelSource: model.source } : {}),
+        ...(effort !== undefined ? { effort: effort.value, effortSource: effort.source } : {}),
         ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
         ...(options.strict === true ? { strict: true } : {}),
         ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
@@ -236,8 +242,8 @@ program
           targetSpec: options.target,
           ...reviewerOptions,
           ...(provenanceReviewerSet !== undefined ? { reviewerSet: provenanceReviewerSet } : {}),
-          ...(model !== undefined ? { model } : {}),
-          ...(effort !== undefined ? { effort } : {}),
+          ...(model !== undefined ? { model: model.value } : {}),
+          ...(effort !== undefined ? { effort: effort.value } : {}),
           ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
           strict: options.strict === true,
           ...(options.failOnFindings !== undefined
@@ -309,19 +315,13 @@ program
         envOptions,
         allowEnvReviewerSelection: loadedConfig !== undefined,
       });
+      const model = overrideSelection(resolvedOptions.model, envOptions.model);
+      const effort = overrideSelection(resolvedOptions.effort, envOptions.effort);
       const report = await runReviewerPreflightReport({
         cwd: resolvedOptions.cwd,
         ...reviewerOptions,
-        ...(resolvedOptions.model !== undefined
-          ? { model: resolvedOptions.model }
-          : envOptions.model !== undefined
-            ? { model: envOptions.model }
-            : {}),
-        ...(resolvedOptions.effort !== undefined
-          ? { effort: resolvedOptions.effort }
-          : envOptions.effort !== undefined
-            ? { effort: envOptions.effort }
-            : {}),
+        ...(model !== undefined ? { model: model.value, modelSource: model.source } : {}),
+        ...(effort !== undefined ? { effort: effort.value, effortSource: effort.source } : {}),
         ...(cliTimeoutSeconds !== undefined
           ? { timeoutSeconds: cliTimeoutSeconds }
           : envOptions.timeoutSeconds !== undefined
@@ -667,6 +667,19 @@ function resolveDoctorOptions(options: {
     cwd: globalOptions.cwd ?? options.cwd,
     format: globalOptions.format ?? options.format,
   };
+}
+
+function overrideSelection(
+  cliValue: string | undefined,
+  envValue: string | undefined,
+): OverrideSelection | undefined {
+  if (cliValue !== undefined) {
+    return { value: cliValue, source: "requested" };
+  }
+  if (envValue !== undefined) {
+    return { value: envValue, source: "env" };
+  }
+  return undefined;
 }
 
 function normalizeArgv(argv: string[]): string[] {

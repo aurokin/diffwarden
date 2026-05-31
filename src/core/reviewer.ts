@@ -7,7 +7,7 @@ import {
   reviewerTransportDefaults,
   validateReviewerCapabilityOverrides,
 } from "../adapters/capabilities.js";
-import type { ReviewReviewerConfig } from "../adapters/types.js";
+import type { ReviewReviewerConfig, ReviewReviewerValueSource } from "../adapters/types.js";
 import type { DiffwardenConfig } from "./config.js";
 import { invalidCli, invalidConfig } from "./errors.js";
 
@@ -20,10 +20,14 @@ export type ParsedReviewerSpec = {
   profile?: string;
 };
 
+export type ReviewerOverrideSource = Extract<ReviewReviewerValueSource, "env" | "requested">;
+
 export type ResolveReviewerOptions = {
   spec: string;
   model?: string;
+  modelSource?: ReviewerOverrideSource;
   effort?: string;
+  effortSource?: ReviewerOverrideSource;
   timeoutSeconds?: number;
   config?: DiffwardenConfig;
 };
@@ -32,7 +36,9 @@ export type ResolveReviewersOptions = {
   reviewers?: string[];
   reviewerSet?: string;
   model?: string;
+  modelSource?: ReviewerOverrideSource;
   effort?: string;
+  effortSource?: ReviewerOverrideSource;
   timeoutSeconds?: number;
   config?: DiffwardenConfig;
 };
@@ -52,7 +58,9 @@ export function resolveReviewerConfigs(options: ResolveReviewersOptions): Review
     resolveReviewerConfig({
       spec,
       ...(options.model !== undefined ? { model: options.model } : {}),
+      ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
       ...(options.effort !== undefined ? { effort: options.effort } : {}),
+      ...(options.effortSource !== undefined ? { effortSource: options.effortSource } : {}),
       ...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
       ...(options.config !== undefined ? { config: options.config } : {}),
     }),
@@ -94,12 +102,21 @@ export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewRe
   }
 
   const timeoutSeconds = options.timeoutSeconds ?? options.config?.timeoutSeconds;
+  const defaults = reviewerCapabilityDefaults(parsed.sdk, options.model);
+  const modelSource =
+    defaults.model === undefined
+      ? undefined
+      : options.model === undefined
+        ? "adapter-default"
+        : (options.modelSource ?? "requested");
 
   return validateReviewerCapabilityOverrides({
     id: parsed.sdk,
     sdk: parsed.sdk,
-    ...reviewerCapabilityDefaults(parsed.sdk, options.model),
+    ...defaults,
+    ...(modelSource !== undefined ? { modelSource } : {}),
     ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    ...(options.effort !== undefined ? { effortSource: options.effortSource ?? "requested" } : {}),
     ...reviewerTimeout(timeoutSeconds),
     readonly: true,
   });
@@ -192,8 +209,14 @@ function materializeConfiguredReviewer(
   configured: NonNullable<DiffwardenConfig["reviewers"]>[number],
   options: ResolveReviewerOptions,
 ): ReviewReviewerConfig {
-  const model = options.model ?? configured.model ?? defaultReviewerModel(configured.sdk);
-  const effort = options.effort ?? configured.effort;
+  const modelSelection = configuredModelSelection(configured, options.model, options.modelSource);
+  const effortSelection = configuredEffortSelection(
+    configured,
+    options.effort,
+    options.effortSource,
+  );
+  const model = modelSelection?.value;
+  const effort = effortSelection?.value;
 
   validateConfiguredModel(configured, model);
   validateConfiguredEffort(configured, effort);
@@ -220,7 +243,9 @@ function materializeConfiguredReviewer(
     ...(configured.profile !== undefined ? { profile: configured.profile } : {}),
     ...(configured.provider !== undefined ? { provider: configured.provider } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(modelSelection !== undefined ? { modelSource: modelSelection.source } : {}),
     ...(effort !== undefined ? { effort } : {}),
+    ...(effortSelection !== undefined ? { effortSource: effortSelection.source } : {}),
     ...(configured.modelCatalog !== undefined ? { modelCatalog: configured.modelCatalog } : {}),
     ...(configured.effortCatalog !== undefined ? { effortCatalog: configured.effortCatalog } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
@@ -234,6 +259,36 @@ function materializeConfiguredReviewer(
       : {}),
     ...(configured.sdkOptions !== undefined ? { sdkOptions: configured.sdkOptions } : {}),
   });
+}
+
+function configuredModelSelection(
+  configured: NonNullable<DiffwardenConfig["reviewers"]>[number],
+  override: string | undefined,
+  overrideSource: ReviewerOverrideSource | undefined,
+): { value: string; source: "adapter-default" | "config" | ReviewerOverrideSource } | undefined {
+  if (override !== undefined) {
+    return { value: override, source: overrideSource ?? "requested" };
+  }
+  if (configured.model !== undefined) {
+    return { value: configured.model, source: "config" };
+  }
+  const defaultModel = defaultReviewerModel(configured.sdk);
+  return defaultModel === undefined
+    ? undefined
+    : { value: defaultModel, source: "adapter-default" };
+}
+
+function configuredEffortSelection(
+  configured: NonNullable<DiffwardenConfig["reviewers"]>[number],
+  override: string | undefined,
+  overrideSource: ReviewerOverrideSource | undefined,
+): { value: string; source: "config" | ReviewerOverrideSource } | undefined {
+  if (override !== undefined) {
+    return { value: override, source: overrideSource ?? "requested" };
+  }
+  return configured.effort === undefined
+    ? undefined
+    : { value: configured.effort, source: "config" };
 }
 
 function findConfiguredReviewerById(

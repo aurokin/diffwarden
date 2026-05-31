@@ -193,7 +193,7 @@ async function prepareClaudeAdapter(
         ...(modelPreflight.model.supportedEffortLevels !== undefined
           ? { supportedEffortLevels: modelPreflight.model.supportedEffortLevels }
           : {}),
-        ...claudeEffortMetadata(input.reviewer.effort),
+        ...claudeEffortMetadata(input.reviewer),
         authMode: runtime.authMode,
         authPreference: runtime.authPreference,
         authMethod: runtime.authMethod,
@@ -578,7 +578,7 @@ function claudeOutputMetadata(options: {
     sessionId: options.result.session_id,
     model,
     ...claudeModelResolutionMetadata(options.input.reviewer, model),
-    ...claudeEffortMetadata(options.input.reviewer.effort),
+    ...claudeEffortMetadata(options.input.reviewer),
     durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
     totalCostUsd: sumKnownNumbers(
       options.previousResult?.total_cost_usd,
@@ -611,7 +611,8 @@ function claudeModelResolutionMetadata(
   return modelResolutionMetadata({
     requested: reviewer.model,
     resolved: resolvedModel,
-    source: reviewer.model === undefined ? "adapter-default" : "requested",
+    source:
+      reviewer.model === undefined ? "adapter-default" : (reviewer.modelSource ?? "requested"),
   });
 }
 
@@ -657,17 +658,24 @@ function claudeQueryEffortOptions(effort: string | undefined): Partial<ClaudeQue
   };
 }
 
-function claudeEffortMetadata(effort: string | undefined): Record<string, string> {
+function claudeEffortMetadata(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+): Record<string, string> {
+  const effort = reviewer.effort;
   if (effort === undefined) {
     return {};
   }
+  const resolvedEffort = effort === "off" ? "off" : claudeNativeEffort(effort);
 
   return {
-    effort: effort === "off" ? "off" : claudeNativeEffort(effort),
+    effort: resolvedEffort,
     ...effortResolutionMetadata({
       requested: effort,
-      resolved: effort === "off" ? "off" : claudeNativeEffort(effort),
-      source: effort === "off" ? "adapter-selection" : "requested",
+      resolved: resolvedEffort,
+      source:
+        effort === "off" || resolvedEffort !== effort
+          ? "adapter-selection"
+          : (reviewer.effortSource ?? "requested"),
     }),
   };
 }

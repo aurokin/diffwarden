@@ -24,6 +24,7 @@ import type {
   ReviewAdapterOutput,
   ReviewAdapterPreflightInput,
   ReviewAdapterPreflightResult,
+  ReviewReviewerValueSource,
 } from "./types.js";
 
 const piPackageName = "@earendil-works/pi-coding-agent";
@@ -62,7 +63,11 @@ export function createPiAdapter(
         input.reviewer.model,
         input.reviewer.provider,
       );
-      const effort = resolvePiEffort(selectedModel, input.reviewer.effort);
+      const effort = resolvePiEffort(
+        selectedModel,
+        input.reviewer.effort,
+        input.reviewer.effortSource,
+      );
 
       const metadata: ReviewAdapterPreflightResult["metadata"] = sdkPreflightMetadata("pi", {
         availableModelCount: availableModels.length,
@@ -129,7 +134,11 @@ export function createPiAdapter(
         input.reviewer.model,
         input.reviewer.provider,
       );
-      const effort = resolvePiEffort(selectedModel, input.reviewer.effort);
+      const effort = resolvePiEffort(
+        selectedModel,
+        input.reviewer.effort,
+        input.reviewer.effortSource,
+      );
 
       try {
         const sessionManager = sdk.SessionManager.inMemory(input.cwd);
@@ -140,7 +149,9 @@ export function createPiAdapter(
           ...piSessionEffortOptions(effort),
           scopedModels: scopedModels.map((model) => ({
             model,
-            ...piSessionEffortOptions(resolvePiEffort(model, input.reviewer.effort)),
+            ...piSessionEffortOptions(
+              resolvePiEffort(model, input.reviewer.effort, input.reviewer.effortSource),
+            ),
           })),
           tools: ["read", "grep", "find", "ls", "review_output"],
           customTools: [reviewOutputTool],
@@ -615,14 +626,21 @@ function piModelResolutionMetadata(
   return modelResolutionMetadata({
     requested: reviewer.model,
     resolved: formatPiModel(selectedModel),
-    source: reviewer.model === undefined ? "adapter-selection" : "requested",
+    source:
+      reviewer.model === undefined ? "adapter-selection" : (reviewer.modelSource ?? "requested"),
   });
 }
 
 function resolvePiEffort(
   model: PiModel,
   requestedEffort: string | undefined,
-): { requested?: PiThinkingLevel; effective?: PiThinkingLevel; supported?: PiThinkingLevel[] } {
+  source: ReviewReviewerValueSource | undefined,
+): {
+  requested?: PiThinkingLevel;
+  effective?: PiThinkingLevel;
+  supported?: PiThinkingLevel[];
+  source?: Extract<ReviewReviewerValueSource, "config" | "env" | "requested">;
+} {
   if (!isPiThinkingLevel(requestedEffort)) {
     return {};
   }
@@ -632,6 +650,7 @@ function resolvePiEffort(
     requested: requestedEffort,
     effective: clampPiThinkingLevel(supported, requestedEffort),
     supported,
+    ...(source === "config" || source === "env" || source === "requested" ? { source } : {}),
   };
 }
 
@@ -645,6 +664,7 @@ function piEffortMetadata(effort: {
   requested?: PiThinkingLevel;
   effective?: PiThinkingLevel;
   supported?: PiThinkingLevel[];
+  source?: Extract<ReviewReviewerValueSource, "config" | "env" | "requested">;
 }): Record<string, string | string[]> {
   if (effort.requested === undefined) {
     return {};
@@ -655,7 +675,10 @@ function piEffortMetadata(effort: {
     ...effortResolutionMetadata({
       requested: effort.requested,
       resolved: effort.effective ?? effort.requested,
-      source: "adapter-selection",
+      source:
+        effort.effective === effort.requested
+          ? (effort.source ?? "requested")
+          : "adapter-selection",
     }),
     ...(effort.effective !== undefined ? { effectiveEffort: effort.effective } : {}),
     ...(effort.supported !== undefined ? { supportedEfforts: effort.supported } : {}),

@@ -48,6 +48,14 @@ resolution fields when the runtime exposes enough information:
 - `resolvedModel` / `resolvedEffort`: the effective value Diffwarden can prove was selected.
 - `modelResolutionSource` / `effortResolutionSource`: where that resolution came from.
 
+Resolution sources rank by provenance. Provider-observed sources such as `provider-init` and
+`provider-result` are runtime evidence. `config` means the value came from Diffwarden reviewer
+configuration; it is clearer than treating configured values as direct CLI requests, but it is
+still lower confidence than runtime evidence. `env` means the value came from
+`DIFFWARDEN_MODEL` or `DIFFWARDEN_EFFORT`. `requested` means the value came from a per-run CLI
+override. `adapter-default` and `adapter-selection` mean Diffwarden selected or translated the
+value locally.
+
 Current SDK coverage:
 
 | Adapter | Model resolution | Effort resolution |
@@ -58,11 +66,12 @@ Current SDK coverage:
 | Droid SDK | Reads the effective spec-mode model from `session.initResult.settings`. | Reads the effective spec-mode reasoning effort from `session.initResult.settings`. |
 
 CLI transports always report deterministic values that Diffwarden passes on the command line:
-`requestedModel` / `requestedEffort` preserve configured overrides, and `resolvedModel` /
-`resolvedEffort` reflect CLI-native values when Diffwarden can prove them. When a CLI emits
-stable machine-readable runtime JSON or JSONL metadata, provider-observed `resolved*` fields
-take precedence over deterministic argv metadata. CLI defaults remain omitted when the
-executable does not expose a structured runtime value.
+`requestedModel` / `requestedEffort` preserve configured or per-run overrides, and
+`resolvedModel` / `resolvedEffort` reflect CLI-native values when Diffwarden can prove them.
+Configured overrides use the `config` source. Environment defaults use `env`. Per-run overrides
+use `requested`. When a CLI emits stable machine-readable runtime JSON or JSONL metadata,
+provider-observed `resolved*` fields take precedence over deterministic argv metadata. CLI
+defaults remain omitted when the executable does not expose a structured runtime value.
 
 The Codex app-server transport follows the same metadata convention. It additionally records
 `transport: "app-server"`, `ephemeral: true`, `execEnabled: true`, `appServerMode`,

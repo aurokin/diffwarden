@@ -24,7 +24,7 @@ import type { ReviewErrorCode } from "./errors.js";
 import type { ResolvedDiff } from "./git.js";
 import { parseReviewOutput } from "./parse.js";
 import { buildReviewPrompt } from "./prompt.js";
-import { resolveReviewerConfigs } from "./reviewer.js";
+import { type ReviewerOverrideSource, resolveReviewerConfigs } from "./reviewer.js";
 import type {
   ParseMode,
   ReviewArtifact,
@@ -44,7 +44,9 @@ export type RunReviewOptions = {
   reviewers?: string[];
   reviewerSet?: string;
   model?: string;
+  modelSource?: ReviewerOverrideSource;
   effort?: string;
+  effortSource?: ReviewerOverrideSource;
   timeoutSeconds?: number;
   strict?: boolean;
   config?: DiffwardenConfig;
@@ -99,7 +101,9 @@ export async function* runReviewEvents(
         : {}),
     ...(options.reviewerSet !== undefined ? { reviewerSet: options.reviewerSet } : {}),
     ...(options.model !== undefined ? { model: options.model } : {}),
+    ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
     ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    ...(options.effortSource !== undefined ? { effortSource: options.effortSource } : {}),
     ...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
     ...(options.config !== undefined ? { config: options.config } : {}),
   });
@@ -404,7 +408,9 @@ export async function runReviewerPreflightReport(
         : {}),
     ...(options.reviewerSet !== undefined ? { reviewerSet: options.reviewerSet } : {}),
     ...(options.model !== undefined ? { model: options.model } : {}),
+    ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
     ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    ...(options.effortSource !== undefined ? { effortSource: options.effortSource } : {}),
     ...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
     ...(options.config !== undefined ? { config: options.config } : {}),
   });

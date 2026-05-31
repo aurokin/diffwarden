@@ -86,6 +86,7 @@ describe("resolveReviewerConfig", () => {
       profile: "openrouter-high",
       provider: "openrouter",
       model: "anthropic/claude-sonnet",
+      modelSource: "config",
       modelCatalog: ["anthropic/claude-sonnet"],
       readonly: true,
       providerOptions: { baseUrlEnv: "OPENROUTER_BASE_URL" },
@@ -122,6 +123,7 @@ describe("resolveReviewerConfig", () => {
       id: "claude-configured",
       sdk: "claude",
       model: "sonnet",
+      modelSource: "adapter-default",
       readonly: true,
     });
 
@@ -136,6 +138,7 @@ describe("resolveReviewerConfig", () => {
       id: "cursor-configured",
       sdk: "cursor",
       model: "composer-2.5",
+      modelSource: "adapter-default",
       readonly: true,
     });
   });
@@ -222,6 +225,47 @@ describe("resolveReviewerConfig", () => {
       id: "pi",
       sdk: "pi",
       effort: "high",
+      effortSource: "requested",
+    });
+  });
+
+  it("marks configured model and effort values as config-sourced", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "pi-openrouter-high",
+        config: {
+          reviewers: [
+            {
+              id: "pi-openrouter-high",
+              sdk: "pi",
+              model: "anthropic/claude-sonnet",
+              effort: "high",
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      model: "anthropic/claude-sonnet",
+      modelSource: "config",
+      effort: "high",
+      effortSource: "config",
+    });
+  });
+
+  it("marks environment model and effort values as env-sourced", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "pi",
+        model: "anthropic/claude-sonnet-4-5",
+        modelSource: "env",
+        effort: "high",
+        effortSource: "env",
+      }),
+    ).toMatchObject({
+      model: "anthropic/claude-sonnet-4-5",
+      modelSource: "env",
+      effort: "high",
+      effortSource: "env",
     });
   });
 
@@ -235,6 +279,7 @@ describe("resolveReviewerConfig", () => {
       id: "pi",
       sdk: "pi",
       model: "anthropic/claude-sonnet-4-5",
+      modelSource: "requested",
       readonly: true,
     });
   });

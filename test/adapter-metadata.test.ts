@@ -66,12 +66,12 @@ describe("SDK adapter metadata", () => {
       effortResolutionMetadata({
         requested: "xhigh",
         resolved: "max",
-        source: "requested",
+        source: "config",
       }),
     ).toEqual({
       requestedEffort: "xhigh",
       resolvedEffort: "max",
-      effortResolutionSource: "requested",
+      effortResolutionSource: "config",
     });
   });
 

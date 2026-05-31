@@ -107,6 +107,7 @@ describe("runReview", () => {
           sdk: "pi",
           readonly: true,
           model: "anthropic/claude-sonnet-4-5",
+          modelSource: "requested",
         },
       },
       {
@@ -116,7 +117,48 @@ describe("runReview", () => {
           sdk: "pi",
           readonly: true,
           model: "anthropic/claude-sonnet-4-5",
+          modelSource: "requested",
         },
+      },
+    ]);
+  });
+
+  it("passes environment-sourced model and effort provenance to adapters", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    const piAdapter = createMockAdapter("pi");
+
+    await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      model: "anthropic/claude-sonnet-4-5",
+      modelSource: "env",
+      effort: "high",
+      effortSource: "env",
+      adapters: {
+        pi: piAdapter,
+      },
+    });
+
+    expect(piAdapter.calls).toEqual([
+      {
+        phase: "preflight",
+        reviewer: expect.objectContaining({
+          model: "anthropic/claude-sonnet-4-5",
+          modelSource: "env",
+          effort: "high",
+          effortSource: "env",
+        }),
+      },
+      {
+        phase: "run",
+        reviewer: expect.objectContaining({
+          model: "anthropic/claude-sonnet-4-5",
+          modelSource: "env",
+          effort: "high",
+          effortSource: "env",
+        }),
       },
     ]);
   });

@@ -222,6 +222,7 @@ describe("claudeAdapter", () => {
         sdk: "claude",
         model: "sonnet",
         effort: "xhigh",
+        effortSource: "config",
         readonly: true,
       },
       readonly: true,
@@ -251,7 +252,7 @@ describe("claudeAdapter", () => {
       effort: "max",
       requestedEffort: "xhigh",
       resolvedEffort: "max",
-      effortResolutionSource: "requested",
+      effortResolutionSource: "adapter-selection",
       supportedEffortLevels: ["low", "medium", "high", "max"],
     });
     expect(calls[0]?.options?.abortController).toBeInstanceOf(AbortController);
@@ -507,7 +508,7 @@ describe("claudeAdapter", () => {
       effort: "max",
       requestedEffort: "xhigh",
       resolvedEffort: "max",
-      effortResolutionSource: "requested",
+      effortResolutionSource: "adapter-selection",
       requestedModel: "sonnet",
       resolvedModel: "sonnet",
       modelResolutionSource: "requested",

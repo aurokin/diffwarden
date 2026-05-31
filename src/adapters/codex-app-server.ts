@@ -1429,7 +1429,7 @@ function codexAppServerSelectionMetadata(
       ? modelResolutionMetadata({
           requested: model,
           resolved: model,
-          source: "requested",
+          source: reviewer.modelSource ?? "requested",
         })
       : {}),
     ...(reviewer.effort !== undefined ? { effort: reviewer.effort } : {}),
@@ -1437,7 +1437,7 @@ function codexAppServerSelectionMetadata(
       ? effortResolutionMetadata({
           requested: reviewer.effort,
           ...(effort !== undefined ? { resolved: effort } : {}),
-          source: codexAppServerEffortSource(reviewer.effort),
+          source: codexAppServerEffortSource(reviewer),
         })
       : {}),
   };
@@ -1450,8 +1450,8 @@ function codexAppServerEffort(effort: string): string {
   return effort;
 }
 
-function codexAppServerEffortSource(effort: string): ResolutionSource {
-  return effort === "off" ? "adapter-selection" : "requested";
+function codexAppServerEffortSource(reviewer: ReviewReviewerConfig): ResolutionSource {
+  return reviewer.effort === "off" ? "adapter-selection" : (reviewer.effortSource ?? "requested");
 }
 
 function codexAppServerRunContext(value: unknown): CodexAppServerRunContext | undefined {

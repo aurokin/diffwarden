@@ -1,5 +1,7 @@
 import type { ReviewTargetResolved } from "../core/schema.js";
 
+export type ReviewReviewerValueSource = "adapter-default" | "config" | "env" | "requested";
+
 export type ReviewAdapterInput = {
   cwd: string;
   reviewer: ReviewReviewerConfig;
@@ -31,7 +33,9 @@ export type ReviewReviewerConfig = {
   profile?: string;
   provider?: string;
   model?: string;
+  modelSource?: ReviewReviewerValueSource;
   effort?: string;
+  effortSource?: ReviewReviewerValueSource;
   modelCatalog?: string[];
   effortCatalog?: string[];
   timeoutMs?: number;

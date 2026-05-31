@@ -124,6 +124,42 @@ describe("createCliAdapter", () => {
     });
   });
 
+  it("labels deterministic CLI metadata sourced from reviewer config", async () => {
+    const harness = createHarness("codex");
+    const adapter = createCliAdapter("codex");
+    const reviewer = createReviewer("codex", harness.executable, {
+      model: "configured-model",
+      modelSource: "config",
+      effort: "high",
+      effortSource: "config",
+    });
+
+    const preflight = await adapter.preflight?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: harness.env,
+    });
+    const output = await adapter.run(createInput(reviewer, harness));
+
+    expect(preflight?.metadata).toMatchObject({
+      requestedModel: "configured-model",
+      resolvedModel: "configured-model",
+      modelResolutionSource: "config",
+      requestedEffort: "high",
+      resolvedEffort: "high",
+      effortResolutionSource: "config",
+    });
+    expect(output.metadata).toMatchObject({
+      requestedModel: "configured-model",
+      resolvedModel: "configured-model",
+      modelResolutionSource: "config",
+      requestedEffort: "high",
+      resolvedEffort: "high",
+      effortResolutionSource: "config",
+    });
+  });
+
   it("prefers Claude Code auth for Claude CLI runs and strips API credentials", async () => {
     const harness = createHarness("claude");
     const adapter = createCliAdapter("claude");
