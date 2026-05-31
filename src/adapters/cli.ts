@@ -17,6 +17,7 @@ import { codexCliWebSearchPolicy, codexWebSearchMetadata } from "./codex-options
 import {
   type ResolutionSource,
   effortResolutionMetadata,
+  mergeResolutionMetadataRecords,
   modelResolutionMetadata,
 } from "./metadata.js";
 import type {
@@ -57,13 +58,15 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
         }
         const result = await runCli(invocation, input);
         const output = await spec.parseOutput(result, invocation);
-        output.metadata = {
-          ...cliSelectionMetadata(engine, input.reviewer),
-          ...output.metadata,
-          transport: "cli",
-          executable: result.executable,
-          stderr: trimForMetadata(result.stderr),
-        };
+        output.metadata = mergeResolutionMetadataRecords(
+          cliSelectionMetadata(engine, input.reviewer),
+          output.metadata,
+          {
+            transport: "cli",
+            executable: result.executable,
+            stderr: trimForMetadata(result.stderr),
+          },
+        );
         return output;
       } finally {
         await rm(tempDir, { force: true, recursive: true });

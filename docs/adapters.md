@@ -49,12 +49,14 @@ resolution fields when the runtime exposes enough information:
 - `modelResolutionSource` / `effortResolutionSource`: where that resolution came from.
 
 Resolution sources rank by provenance. Provider-observed sources such as `provider-init` and
-`provider-result` are runtime evidence. `config` means the value came from Diffwarden reviewer
-configuration; it is clearer than treating configured values as direct CLI requests, but it is
-still lower confidence than runtime evidence. `env` means the value came from
-`DIFFWARDEN_MODEL` or `DIFFWARDEN_EFFORT`. `requested` means the value came from a per-run CLI
-override. `adapter-default` and `adapter-selection` mean Diffwarden selected or translated the
-value locally.
+`provider-result` are runtime evidence. `provider-local` means provider-owned local settings or
+session files supplied the value; it can fill gaps but should not override explicit selected
+values by itself. `config` means the value came from Diffwarden reviewer configuration; it is
+clearer than treating configured values as direct CLI requests, but it is still lower confidence
+than runtime evidence. `env` means the value came from `DIFFWARDEN_MODEL` or
+`DIFFWARDEN_EFFORT`. `requested` means the value came from a per-run CLI override.
+`adapter-default` and `adapter-selection` mean Diffwarden selected or translated the value
+locally.
 
 Current SDK coverage:
 

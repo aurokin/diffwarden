@@ -149,7 +149,7 @@ JSON/JSONL metadata take precedence when available. Claude CLI's single-model `m
 result is used only when no explicit runtime model field is present, and is normalized to remove
 display-only formatting such as a trailing context-window suffix. Droid CLI stdout currently
 omits model and effort fields, but Diffwarden can read Droid's local session settings file from
-the returned `session_id` and report those values as provider-init metadata when the file is
+the returned `session_id` and report those values as provider-local metadata when the file is
 available and Diffwarden did not already select model or effort from config, env, or per-run
 overrides. Droid lookup starts with the encoded cwd directory and falls back to a one-level
 session-id search under `~/.factory/sessions` for path-encoding compatibility. When explicit

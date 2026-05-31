@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { reviewerSdkValues } from "../src/adapters/capabilities.js";
 import {
   effortResolutionMetadata,
+  mergeEffortResolutionMetadata,
+  mergeModelResolutionMetadata,
+  mergeResolutionMetadataRecords,
   modelResolutionMetadata,
   sdkOutputMetadata,
   sdkPreflightMetadata,
@@ -72,6 +75,89 @@ describe("SDK adapter metadata", () => {
       requestedEffort: "xhigh",
       resolvedEffort: "max",
       effortResolutionSource: "config",
+    });
+  });
+
+  it("merges model evidence by provenance while preserving request intent", () => {
+    expect(
+      mergeResolutionMetadataRecords(
+        {
+          requestedModel: "configured-model",
+          resolvedModel: "configured-model",
+          modelResolutionSource: "config",
+        },
+        {
+          resolvedModel: "runtime-model",
+          modelResolutionSource: "provider-result",
+        },
+      ),
+    ).toMatchObject({
+      requestedModel: "configured-model",
+      resolvedModel: "runtime-model",
+      modelResolutionSource: "provider-result",
+    });
+
+    expect(
+      mergeResolutionMetadataRecords(
+        {
+          requestedModel: "configured-model",
+          resolvedModel: "configured-model",
+          modelResolutionSource: "config",
+        },
+        {
+          resolvedModel: "session-model",
+          modelResolutionSource: "provider-local",
+        },
+      ),
+    ).toMatchObject({
+      requestedModel: "configured-model",
+      resolvedModel: "configured-model",
+      modelResolutionSource: "config",
+    });
+  });
+
+  it("uses provider-local evidence as a fallback ahead of adapter defaults", () => {
+    expect(
+      mergeModelResolutionMetadata({
+        evidence: [
+          { value: "adapter-default-model", source: "adapter-default" },
+          { value: "provider-settings-model", source: "provider-local" },
+        ],
+      }),
+    ).toEqual({
+      resolvedModel: "provider-settings-model",
+      modelResolutionSource: "provider-local",
+    });
+  });
+
+  it("uses valued fallback evidence ahead of valueless selected effort", () => {
+    expect(
+      mergeResolutionMetadataRecords(
+        {
+          requestedEffort: "off",
+          effortResolutionSource: "adapter-selection",
+        },
+        {
+          resolvedEffort: "high",
+          effortResolutionSource: "provider-local",
+        },
+      ),
+    ).toMatchObject({
+      requestedEffort: "off",
+      resolvedEffort: "high",
+      effortResolutionSource: "provider-local",
+    });
+  });
+
+  it("represents unsupported values without inventing a resolved value", () => {
+    expect(
+      mergeEffortResolutionMetadata({
+        requested: "high",
+        evidence: [{ source: "unsupported" }],
+      }),
+    ).toEqual({
+      requestedEffort: "high",
+      effortResolutionSource: "unsupported",
     });
   });
 
