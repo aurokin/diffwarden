@@ -334,33 +334,67 @@ describe("cliSpecs", () => {
       },
     });
 
-    await expect(
-      cliSpecs.pi.parseOutput(
-        runResult({
-          stdout: [
-            JSON.stringify({
-              type: "session_start",
-              model: "pi-runtime",
-              thinkingLevel: "medium",
-            }),
-            JSON.stringify({ type: "message", message: { role: "toolResult", content: "skip" } }),
-            JSON.stringify({ type: "message", message: { role: "assistant", content: "first" } }),
-            JSON.stringify({ type: "message", message: { role: "assistant", content: "second" } }),
-          ].join("\n"),
+    const claudeOutput = await cliSpecs.claude.parseOutput(
+      runResult({
+        stdout: JSON.stringify({
+          type: "result",
+          result: "Hello. What would you like to work on?",
+          modelUsage: {
+            "claude-opus-4-8[1m]": {
+              inputTokens: 1763,
+              outputTokens: 88,
+            },
+          },
         }),
-        { executable: "pi", args: [], captureMode: "text" },
-      ),
-    ).resolves.toMatchObject({
+      }),
+      { executable: "claude", args: [], captureMode: "native-structured" },
+    );
+    expect(claudeOutput).toMatchObject({
+      text: "Hello. What would you like to work on?",
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "tool-restricted",
+        resolvedModel: "claude-opus-4-8",
+        modelResolutionSource: "provider-result",
+      },
+    });
+    expect(claudeOutput.metadata).not.toHaveProperty("resolvedEffort");
+
+    const piOutput = await cliSpecs.pi.parseOutput(
+      runResult({
+        stdout: [
+          JSON.stringify({
+            type: "session",
+            version: 3,
+            cwd: "/tmp/probe",
+          }),
+          JSON.stringify({
+            type: "message_start",
+            message: {
+              role: "assistant",
+              content: [],
+              api: "openai-codex-responses",
+              provider: "openai-codex",
+              model: "gpt-5.5",
+            },
+          }),
+          JSON.stringify({ type: "message", message: { role: "toolResult", content: "skip" } }),
+          JSON.stringify({ type: "message", message: { role: "assistant", content: "first" } }),
+          JSON.stringify({ type: "message", message: { role: "assistant", content: "second" } }),
+        ].join("\n"),
+      }),
+      { executable: "pi", args: [], captureMode: "text" },
+    );
+    expect(piOutput).toMatchObject({
       text: "first\nsecond",
       metadata: {
         captureMode: "text",
         readonlyCapability: "tool-restricted",
-        resolvedModel: "pi-runtime",
-        modelResolutionSource: "provider-init",
-        resolvedEffort: "medium",
-        effortResolutionSource: "provider-init",
+        resolvedModel: "gpt-5.5",
+        modelResolutionSource: "provider-result",
       },
     });
+    expect(piOutput.metadata).not.toHaveProperty("resolvedEffort");
 
     await expect(
       cliSpecs.antigravity.parseOutput(runResult({ stdout: "plain text\n" }), {

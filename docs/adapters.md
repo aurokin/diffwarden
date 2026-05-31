@@ -328,7 +328,14 @@ maps `minimal` to `low` and `xhigh` to `max`; Droid and Grok map `minimal` to `l
 OpenCode, Gemini, and Cursor record exact requested values where those overrides are supported.
 If stdout contains stable JSON or JSONL runtime fields such as `model`, `modelId`,
 `reasoningEffort`, or `model_reasoning_effort`, those provider-observed values replace the
-deterministic resolved values. Antigravity rejects model and effort overrides.
+deterministic resolved values. When no explicit runtime model field is present, Claude CLI also
+reports the runtime model as the single `modelUsage` key in its final JSON result; Diffwarden
+strips display-only formatting such as a trailing context-window suffix before reporting it. Pi
+CLI reports the runtime model in assistant message records. Those values are runtime-result
+evidence, not startup configuration proof.
+Diffwarden does not infer effort for Claude or Pi CLI unless the CLI emits an explicit runtime
+effort field. Gemini remains supported, but new runtime-metadata extraction work should not build
+additional Gemini-specific behavior. Antigravity rejects model and effort overrides.
 
 ## Live Test Controls
 

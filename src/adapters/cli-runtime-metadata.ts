@@ -122,11 +122,19 @@ function resolutionSource(
   }
 
   const type = stringValue(record.type ?? record.event ?? record.kind ?? record.name);
-  if (type !== undefined && /init|initialized|start|started|session|config|system/i.test(type)) {
+  if (type !== undefined && providerInitEventType(type)) {
     return "provider-init";
   }
 
   return "provider-result";
+}
+
+function providerInitEventType(type: string): boolean {
+  const normalized = type.toLowerCase();
+  return (
+    /(^|[._-])(init|initialized|config|configured|system)([._-]|$)/.test(normalized) ||
+    /^(session|thread|runtime)([._-]|$)/.test(normalized)
+  );
 }
 
 function strongerResolution(current: Resolution | undefined, next: Resolution): Resolution {
@@ -153,7 +161,12 @@ function extractModel(record: JsonRecord, depth = 0): string | undefined {
     }
   }
 
-  return extractNested(record, extractModel, depth);
+  const nestedModel = extractNested(record, extractModel, depth);
+  if (nestedModel !== undefined) {
+    return nestedModel;
+  }
+
+  return singleModelUsageModel(record);
 }
 
 function extractEffort(record: JsonRecord, depth = 0): string | undefined {
@@ -224,6 +237,52 @@ function settingsRecord(record: JsonRecord): JsonRecord | undefined {
     record.spec_mode_reasoning_effort !== undefined
     ? record
     : undefined;
+}
+
+function singleModelUsageModel(record: JsonRecord): string | undefined {
+  if (!isRecord(record.modelUsage)) {
+    return undefined;
+  }
+
+  const models = Object.keys(record.modelUsage)
+    .map(cleanModelUsageModel)
+    .filter((model) => model.length > 0);
+  return models.length === 1 ? models[0] : undefined;
+}
+
+function cleanModelUsageModel(model: string): string {
+  return stripAnsiSgr(model)
+    .replace(/\[[^\]]+\]$/g, "")
+    .trim();
+}
+
+function stripAnsiSgr(value: string): string {
+  const escapeChar = String.fromCharCode(27);
+  let stripped = "";
+  let index = 0;
+
+  while (index < value.length) {
+    if (value[index] !== escapeChar || value[index + 1] !== "[") {
+      stripped += value[index] ?? "";
+      index += 1;
+      continue;
+    }
+
+    let end = index + 2;
+    while (end < value.length && /[0-9;]/.test(value[end] ?? "")) {
+      end += 1;
+    }
+
+    if (value[end] === "m") {
+      index = end + 1;
+      continue;
+    }
+
+    stripped += value[index] ?? "";
+    index += 1;
+  }
+
+  return stripped;
 }
 
 function modelString(value: unknown): string | undefined {

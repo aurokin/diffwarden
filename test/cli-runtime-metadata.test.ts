@@ -44,6 +44,107 @@ describe("CLI runtime metadata extraction", () => {
     });
   });
 
+  it("extracts Claude CLI runtime model from single-model usage keys", () => {
+    const metadata = cliRuntimeResolutionMetadata(
+      JSON.stringify({
+        type: "result",
+        result: "Hello. How can I help?",
+        usage: {
+          input_tokens: 1763,
+          output_tokens: 88,
+        },
+        modelUsage: {
+          "claude-opus-4-8[1m]": {
+            inputTokens: 1763,
+            outputTokens: 88,
+          },
+        },
+      }),
+    );
+
+    expect(metadata).toEqual({
+      resolvedModel: "claude-opus-4-8",
+      modelResolutionSource: "provider-result",
+    });
+  });
+
+  it("normalizes Claude CLI model usage display keys before reporting them", () => {
+    expect(
+      cliRuntimeResolutionMetadata(
+        JSON.stringify({
+          type: "result",
+          modelUsage: {
+            "\u001b[2mclaude-sonnet-4-6[1m]\u001b[0m": {},
+          },
+        }),
+      ),
+    ).toEqual({
+      resolvedModel: "claude-sonnet-4-6",
+      modelResolutionSource: "provider-result",
+    });
+  });
+
+  it("prefers explicit runtime model fields over usage accounting keys", () => {
+    expect(
+      cliRuntimeResolutionMetadata(
+        JSON.stringify({
+          type: "result",
+          model: "selected-model",
+          modelUsage: {
+            "fallback[1m]": {},
+          },
+        }),
+      ),
+    ).toEqual({
+      resolvedModel: "selected-model",
+      modelResolutionSource: "provider-result",
+    });
+  });
+
+  it("does not infer Claude CLI runtime model from ambiguous usage keys", () => {
+    expect(
+      cliRuntimeResolutionMetadata(JSON.stringify({ type: "result", modelUsage: {} })),
+    ).toEqual({});
+    expect(
+      cliRuntimeResolutionMetadata(
+        JSON.stringify({
+          type: "result",
+          modelUsage: {
+            "claude-sonnet-4-6": {},
+            "claude-opus-4-8[1m]": {},
+          },
+        }),
+      ),
+    ).toEqual({});
+  });
+
+  it("extracts Pi CLI runtime model from nested assistant message records", () => {
+    const metadata = cliRuntimeResolutionMetadata(
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          cwd: "/tmp/probe",
+        }),
+        JSON.stringify({
+          type: "message_start",
+          message: {
+            role: "assistant",
+            content: [],
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            model: "gpt-5.5",
+          },
+        }),
+      ].join("\n"),
+    );
+
+    expect(metadata).toEqual({
+      resolvedModel: "gpt-5.5",
+      modelResolutionSource: "provider-result",
+    });
+  });
+
   it("prefers provider-result metadata over provider-init metadata", () => {
     const metadata = cliRuntimeResolutionMetadata(
       [

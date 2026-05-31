@@ -145,8 +145,13 @@ is useful provenance but lower confidence than provider-observed runtime metadat
 the value came from `DIFFWARDEN_MODEL` or `DIFFWARDEN_EFFORT`. SDK adapters prefer
 provider-observed values where available. CLI adapters report deterministic values that
 Diffwarden passes on the command line, but provider-observed values from stable runtime
-JSON/JSONL metadata take precedence when available. CLI adapters omit default model resolution
-when the executable does not expose a stable machine-readable runtime value.
+JSON/JSONL metadata take precedence when available. Claude CLI's single-model `modelUsage`
+result is used only when no explicit runtime model field is present, and is normalized to remove
+display-only formatting such as a trailing context-window suffix. Pi CLI's assistant
+`message.model` records are treated as runtime-result evidence, not startup configuration proof.
+CLI adapters omit default model resolution when the executable does not expose a stable
+machine-readable runtime value. Gemini remains supported, but no new metadata-specific behavior
+is being added for it.
 
 Reports also promote these fields into each reviewer summary as `model_resolution` and
 `effort_resolution` objects. Run adapter metadata is preferred; preflight metadata is used only
