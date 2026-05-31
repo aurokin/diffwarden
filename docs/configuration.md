@@ -148,6 +148,10 @@ Diffwarden passes on the command line, but provider-observed values from stable 
 JSON/JSONL metadata take precedence when available. CLI adapters omit default model resolution
 when the executable does not expose a stable machine-readable runtime value.
 
+Reports also promote these fields into each reviewer summary as `model_resolution` and
+`effort_resolution` objects. Run adapter metadata is preferred; preflight metadata is used only
+when run metadata is unavailable.
+
 Privacy mode affects review content, not run provenance. `full` reports include the full
 `ReviewArtifact`, which can contain source-adjacent review text. `metadata` reports omit the
 artifact and finding bodies while retaining titles, locations, priorities, confidence scores,

@@ -118,7 +118,9 @@ export type ReviewReportReviewer = {
   profile?: string;
   provider?: string;
   model?: string;
+  model_resolution?: ReviewReportValueResolution;
   effort?: string;
+  effort_resolution?: ReviewReportValueResolution;
   status: "success" | "failed";
   elapsed_ms?: number;
   usage?: unknown;
@@ -128,6 +130,12 @@ export type ReviewReportReviewer = {
   finding_counts_by_priority: FindingCountsByPriority;
   findings: ReviewReportFinding[];
   error?: NonNullable<ReviewReviewerArtifact["error"]>;
+};
+
+export type ReviewReportValueResolution = {
+  requested?: string;
+  resolved?: string;
+  source?: string;
 };
 
 export type ReviewReportProvenanceInput = {
@@ -297,6 +305,16 @@ function createReviewerReport(
   mode: ReportingMode,
 ): ReviewReportReviewer {
   const findings = (reviewer.result?.findings ?? []).map((finding) => reportFinding(finding, mode));
+  const modelResolution = reportValueResolution(reviewer, {
+    requested: "requestedModel",
+    resolved: "resolvedModel",
+    source: "modelResolutionSource",
+  });
+  const effortResolution = reportValueResolution(reviewer, {
+    requested: "requestedEffort",
+    resolved: "resolvedEffort",
+    source: "effortResolutionSource",
+  });
 
   return {
     id: reviewer.id,
@@ -305,7 +323,9 @@ function createReviewerReport(
     ...(reviewer.profile !== undefined ? { profile: reviewer.profile } : {}),
     ...(reviewer.provider !== undefined ? { provider: reviewer.provider } : {}),
     ...(reviewer.model !== undefined ? { model: reviewer.model } : {}),
+    ...(modelResolution !== undefined ? { model_resolution: modelResolution } : {}),
     ...(reviewer.effort !== undefined ? { effort: reviewer.effort } : {}),
+    ...(effortResolution !== undefined ? { effort_resolution: effortResolution } : {}),
     status: reviewer.status === "failed" ? "failed" : "success",
     ...(reviewer.timing_ms !== undefined ? { elapsed_ms: reviewer.timing_ms } : {}),
     ...(reviewer.usage !== undefined ? { usage: reviewer.usage } : {}),
@@ -320,6 +340,39 @@ function createReviewerReport(
     findings,
     ...(reviewer.error !== undefined ? { error: reviewer.error } : {}),
   };
+}
+
+function reportValueResolution(
+  reviewer: ReviewReviewerArtifact,
+  fields: {
+    requested: string;
+    resolved: string;
+    source: string;
+  },
+): ReviewReportValueResolution | undefined {
+  const metadata = reviewer.adapter_metadata ?? reviewer.preflight?.metadata;
+  if (metadata === undefined) {
+    return undefined;
+  }
+
+  const resolution = {
+    ...stringMetadataField(metadata, fields.requested, "requested"),
+    ...stringMetadataField(metadata, fields.resolved, "resolved"),
+    ...stringMetadataField(metadata, fields.source, "source"),
+  };
+
+  return Object.keys(resolution).length === 0 ? undefined : resolution;
+}
+
+function stringMetadataField<K extends keyof ReviewReportValueResolution>(
+  metadata: Record<string, unknown>,
+  metadataKey: string,
+  reportKey: K,
+): Pick<ReviewReportValueResolution, K> {
+  const value = metadata[metadataKey];
+  return typeof value === "string"
+    ? ({ [reportKey]: value } as Pick<ReviewReportValueResolution, K>)
+    : ({} as Pick<ReviewReportValueResolution, K>);
 }
 
 function reportProvenance(

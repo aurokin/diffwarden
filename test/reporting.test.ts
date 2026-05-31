@@ -203,9 +203,28 @@ describe("createReviewReport", () => {
       },
       adapter_metadata: {
         sdkVersion: "pi-sdk-test",
+        requestedModel: "anthropic/claude-sonnet",
+        resolvedModel: "openrouter/anthropic/claude-sonnet",
+        modelResolutionSource: "provider-result",
+        requestedEffort: "high",
+        resolvedEffort: "medium",
+        effortResolutionSource: "provider-result",
       },
       preflight_metadata: {
         readonlyCapability: "tool-restricted",
+        requestedModel: "anthropic/claude-sonnet",
+        resolvedModel: "anthropic/claude-sonnet",
+        modelResolutionSource: "config",
+      },
+      model_resolution: {
+        requested: "anthropic/claude-sonnet",
+        resolved: "openrouter/anthropic/claude-sonnet",
+        source: "provider-result",
+      },
+      effort_resolution: {
+        requested: "high",
+        resolved: "medium",
+        source: "provider-result",
       },
       finding_count: 1,
     });
@@ -252,6 +271,39 @@ describe("createReviewReport", () => {
       },
     });
   });
+
+  it("falls back to preflight value resolution when run metadata is unavailable", () => {
+    const artifact = reviewArtifact();
+    const reviewer = artifact.reviewers?.[0];
+    if (reviewer === undefined) {
+      throw new Error("missing reviewer fixture");
+    }
+    reviewer.adapter_metadata = undefined;
+    reviewer.preflight = {
+      checks: [{ name: "mock", status: "passed" }],
+      metadata: {
+        requestedModel: "sonnet",
+        resolvedModel: "claude-sonnet-4-5",
+        modelResolutionSource: "adapter-selection",
+      },
+    };
+
+    const report = createReviewReport({
+      artifact,
+      reporting: {
+        scope: "global",
+        mode: "metadata",
+      },
+      runId: "run-1",
+    });
+
+    expect(report.reviewers[0]?.model_resolution).toEqual({
+      requested: "sonnet",
+      resolved: "claude-sonnet-4-5",
+      source: "adapter-selection",
+    });
+    expect(report.reviewers[0]?.effort_resolution).toBeUndefined();
+  });
 });
 
 describe("writeReviewReport", () => {
@@ -296,6 +348,9 @@ function reviewArtifact(): ReviewArtifact {
           checks: [{ name: "mock", status: "passed" }],
           metadata: {
             readonlyCapability: "tool-restricted",
+            requestedModel: "anthropic/claude-sonnet",
+            resolvedModel: "anthropic/claude-sonnet",
+            modelResolutionSource: "config",
           },
         },
         usage: {
@@ -304,6 +359,12 @@ function reviewArtifact(): ReviewArtifact {
         },
         adapter_metadata: {
           sdkVersion: "pi-sdk-test",
+          requestedModel: "anthropic/claude-sonnet",
+          resolvedModel: "openrouter/anthropic/claude-sonnet",
+          modelResolutionSource: "provider-result",
+          requestedEffort: "high",
+          resolvedEffort: "medium",
+          effortResolutionSource: "provider-result",
         },
         result: {
           findings: [
