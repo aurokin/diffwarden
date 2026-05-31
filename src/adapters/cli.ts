@@ -58,8 +58,8 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
         const result = await runCli(invocation, input);
         const output = await spec.parseOutput(result, invocation);
         output.metadata = {
-          ...output.metadata,
           ...cliSelectionMetadata(engine, input.reviewer),
+          ...output.metadata,
           transport: "cli",
           executable: result.executable,
           stderr: trimForMetadata(result.stderr),

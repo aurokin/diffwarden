@@ -94,6 +94,36 @@ describe("createCliAdapter", () => {
     expect(invocation.stdin).toBe("review prompt");
   });
 
+  it("prefers provider-observed CLI metadata over deterministic request metadata", async () => {
+    const harness = createHarness("codex");
+    const adapter = createCliAdapter("codex");
+    const reviewer = createReviewer("codex", harness.executable, {
+      model: "requested-model",
+      effort: "high",
+    });
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_RUNTIME_JSONL: JSON.stringify({
+          type: "session_configured",
+          model: "runtime-model",
+          model_reasoning_effort: "medium",
+        }),
+      },
+    });
+
+    expect(output.metadata).toMatchObject({
+      requestedModel: "requested-model",
+      resolvedModel: "runtime-model",
+      modelResolutionSource: "provider-init",
+      requestedEffort: "high",
+      resolvedEffort: "medium",
+      effortResolutionSource: "provider-init",
+    });
+  });
+
   it("prefers Claude Code auth for Claude CLI runs and strips API credentials", async () => {
     const harness = createHarness("claude");
     const adapter = createCliAdapter("claude");
@@ -358,6 +388,9 @@ fs.writeFileSync(invocationPath, JSON.stringify({
   pid: process.pid,
   stdin,
 }));
+if (process.env.DIFFWARDEN_FAKE_RUNTIME_JSONL) {
+  process.stdout.write(process.env.DIFFWARDEN_FAKE_RUNTIME_JSONL + "\\n");
+}
 if (process.env.DIFFWARDEN_FAKE_EXIT_AUTH === "1") {
   process.stderr.write("not logged in: API key required");
   process.exit(1);

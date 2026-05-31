@@ -40,6 +40,7 @@ describe("cliSpecs", () => {
         "-c",
         'model_reasoning_effort="high"',
         "exec",
+        "--json",
         "--sandbox",
         "read-only",
         "--ephemeral",
@@ -289,7 +290,16 @@ describe("cliSpecs", () => {
     writeReviewOutput(codexInvocation.outputPath ?? "");
 
     await expect(
-      cliSpecs.codex.parseOutput(runResult({ stdout: "" }), codexInvocation),
+      cliSpecs.codex.parseOutput(
+        runResult({
+          stdout: JSON.stringify({
+            type: "session_configured",
+            model: "codex-runtime",
+            model_reasoning_effort: "high",
+          }),
+        }),
+        codexInvocation,
+      ),
     ).resolves.toMatchObject({
       structured: {
         overall_correctness: "patch is correct",
@@ -298,24 +308,41 @@ describe("cliSpecs", () => {
       metadata: {
         captureMode: "native-structured",
         readonlyCapability: "enforced",
+        resolvedModel: "codex-runtime",
+        modelResolutionSource: "provider-init",
+        resolvedEffort: "high",
+        effortResolutionSource: "provider-init",
       },
     });
 
     await expect(
-      cliSpecs.gemini.parseOutput(runResult({ stdout: JSON.stringify({ response: "text" }) }), {
-        executable: "gemini",
-        args: [],
-        captureMode: "text",
-      }),
+      cliSpecs.gemini.parseOutput(
+        runResult({ stdout: JSON.stringify({ response: "text", model: "gemini-runtime" }) }),
+        {
+          executable: "gemini",
+          args: [],
+          captureMode: "text",
+        },
+      ),
     ).resolves.toMatchObject({
       text: "text",
-      metadata: { captureMode: "text", readonlyCapability: "tool-restricted" },
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "tool-restricted",
+        resolvedModel: "gemini-runtime",
+        modelResolutionSource: "provider-result",
+      },
     });
 
     await expect(
       cliSpecs.pi.parseOutput(
         runResult({
           stdout: [
+            JSON.stringify({
+              type: "session_start",
+              model: "pi-runtime",
+              thinkingLevel: "medium",
+            }),
             JSON.stringify({ type: "message", message: { role: "toolResult", content: "skip" } }),
             JSON.stringify({ type: "message", message: { role: "assistant", content: "first" } }),
             JSON.stringify({ type: "message", message: { role: "assistant", content: "second" } }),
@@ -325,7 +352,14 @@ describe("cliSpecs", () => {
       ),
     ).resolves.toMatchObject({
       text: "first\nsecond",
-      metadata: { captureMode: "text", readonlyCapability: "tool-restricted" },
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "tool-restricted",
+        resolvedModel: "pi-runtime",
+        modelResolutionSource: "provider-init",
+        resolvedEffort: "medium",
+        effortResolutionSource: "provider-init",
+      },
     });
 
     await expect(

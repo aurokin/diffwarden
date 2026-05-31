@@ -57,10 +57,12 @@ Current SDK coverage:
 | Pi SDK | Reports the selected authenticated provider/model from Pi's model registry. | Reports the requested and clamped Pi thinking level. |
 | Droid SDK | Reads the effective spec-mode model from `session.initResult.settings`. | Reads the effective spec-mode reasoning effort from `session.initResult.settings`. |
 
-CLI transports report deterministic values that Diffwarden passes on the command line:
-`resolvedModel` is set only when a model override is passed, and `resolvedEffort` reflects
-the CLI-native effort value after public-effort mapping. CLI default models remain omitted
-until an executable exposes stable machine-readable runtime metadata.
+CLI transports always report deterministic values that Diffwarden passes on the command line:
+`requestedModel` / `requestedEffort` preserve configured overrides, and `resolvedModel` /
+`resolvedEffort` reflect CLI-native values when Diffwarden can prove them. When a CLI emits
+stable machine-readable runtime JSON or JSONL metadata, provider-observed `resolved*` fields
+take precedence over deterministic argv metadata. CLI defaults remain omitted when the
+executable does not expose a structured runtime value.
 
 The Codex app-server transport follows the same metadata convention. It additionally records
 `transport: "app-server"`, `ephemeral: true`, `execEnabled: true`, `appServerMode`,
@@ -310,12 +312,14 @@ auth with Anthropic API credentials removed, then removes those credentials from
 Capability metadata is conservative. OpenCode, Grok, Antigravity, and Cursor CLI paths
 currently report prompt-only read-only behavior when hard enforcement is not proven.
 
-CLI model and effort metadata is deterministic rather than provider-observed. Diffwarden
-records requested and resolved fields for values it explicitly passes, including provider
-qualified model strings such as `openrouter/anthropic/claude-sonnet`. Effort mappings follow
-the invocation arguments: Claude maps `minimal` to `low` and `xhigh` to `max`; Droid and Grok
-map `minimal` to `low`; Codex, Pi, OpenCode, Gemini, and Cursor record exact requested values
-where those overrides are supported. Antigravity rejects model and effort overrides.
+CLI model and effort metadata is conservative. Diffwarden records requested and resolved fields
+for values it explicitly passes, including provider-qualified model strings such as
+`openrouter/anthropic/claude-sonnet`. Effort mappings follow the invocation arguments: Claude
+maps `minimal` to `low` and `xhigh` to `max`; Droid and Grok map `minimal` to `low`; Codex, Pi,
+OpenCode, Gemini, and Cursor record exact requested values where those overrides are supported.
+If stdout contains stable JSON or JSONL runtime fields such as `model`, `modelId`,
+`reasoningEffort`, or `model_reasoning_effort`, those provider-observed values replace the
+deterministic resolved values. Antigravity rejects model and effort overrides.
 
 ## Live Test Controls
 

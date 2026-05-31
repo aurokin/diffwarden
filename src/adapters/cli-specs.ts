@@ -16,6 +16,7 @@ import {
   pushModelAndEffort,
   pushPromptArg,
 } from "./cli-helpers.js";
+import { cliRuntimeResolutionMetadata } from "./cli-runtime-metadata.js";
 import type { CliEngine, CliSpec } from "./cli-types.js";
 import { droidSessionTag } from "./droid-session.js";
 
@@ -29,6 +30,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       const args = [
         ...codexGlobalArgs(input.reviewer),
         "exec",
+        "--json",
         "--sandbox",
         "read-only",
         "--ephemeral",
@@ -50,12 +52,14 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       };
     },
     async parseOutput(result, invocation) {
+      const runtimeMetadata = cliRuntimeResolutionMetadata(result.stdout);
       const outputPath = invocation.outputPath;
       if (outputPath !== undefined) {
         try {
           return normalizeJsonLikeAdapterOutput(await readFile(outputPath, "utf8"), {
             captureMode: "native-structured",
             readonlyCapability: "enforced",
+            ...runtimeMetadata,
           });
         } catch {
           // Fall through to stdout/stderr handling below.
@@ -63,10 +67,11 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       }
 
       return {
-        text: result.stdout.trim(),
+        text: collectJsonLinesText(result.stdout) || result.stdout.trim(),
         metadata: {
           captureMode: "text",
           readonlyCapability: "enforced",
+          ...runtimeMetadata,
         },
       };
     },
@@ -116,6 +121,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "native-structured",
         readonlyCapability: "tool-restricted",
+        ...cliRuntimeResolutionMetadata(result.stdout),
       });
     },
   },
@@ -146,6 +152,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
         readonlyCapability: "prompt-only",
+        ...cliRuntimeResolutionMetadata(result.stdout),
       });
     },
   },
@@ -168,6 +175,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
         readonlyCapability: "tool-restricted",
+        ...cliRuntimeResolutionMetadata(result.stdout),
       });
     },
   },
@@ -211,6 +219,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         metadata: {
           captureMode: "text",
           readonlyCapability: "prompt-only",
+          ...cliRuntimeResolutionMetadata(result.stdout),
         },
       };
     },
@@ -251,6 +260,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         metadata: {
           captureMode: "text",
           readonlyCapability: "tool-restricted",
+          ...cliRuntimeResolutionMetadata(result.stdout),
         },
       };
     },
@@ -288,6 +298,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
         readonlyCapability: "enforced",
+        ...cliRuntimeResolutionMetadata(result.stdout),
       });
     },
   },
@@ -323,6 +334,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
         readonlyCapability: "prompt-only",
+        ...cliRuntimeResolutionMetadata(result.stdout),
       });
     },
   },
