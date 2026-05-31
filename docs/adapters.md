@@ -313,6 +313,11 @@ SDK-backed families, including Droid, can use `transport: "cli"` from config.
 `agy` binaries. CLI auth is delegated to the underlying executable, so live runs require each
 tool to be logged in or configured through its own environment variables.
 
+Antigravity uses `agy --print` because `agy` print mode expects the prompt as the flag value.
+Diffwarden stores the full assembled review prompt in a temporary file and passes a short print
+prompt telling `agy` to read that file, keeping the diff out of process argv while preserving
+print-mode behavior.
+
 Claude CLI transport uses the same `sdkOptions.authMode` values as the Claude SDK adapter.
 In `auto` mode, Diffwarden checks the selected Claude executable for logged-in Claude Code
 auth with Anthropic API credentials removed, then removes those credentials from the actual

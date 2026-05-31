@@ -113,6 +113,50 @@ describe("cliSpecs", () => {
     expect(invocation.stdin).toBe(expectedStdin);
   });
 
+  it("builds Antigravity prompt-bearing print invocations without stdin", async () => {
+    const tempDir = createTempDir();
+    const promptPath = path.join(tempDir, "antigravity-prompt.txt");
+    const invocation = await cliSpecs.antigravity.buildInvocation(
+      createInput(
+        createReviewer("antigravity", {
+          cliOptions: { printTimeoutSeconds: 180 },
+        }),
+      ),
+      tempDir,
+    );
+
+    expect(invocation).toMatchObject({
+      executable: "agy",
+      args: [
+        "--print",
+        `Read the full Diffwarden review prompt from ${promptPath} and follow it exactly.`,
+        "--print-timeout",
+        "180s",
+        "--sandbox",
+        "--add-dir",
+        tempDir,
+        "--add-dir",
+        "/repo",
+      ],
+      cwd: tempDir,
+      captureMode: "text",
+    });
+    expect(invocation.stdin).toBeUndefined();
+    expect(readFileSync(promptPath, "utf8")).toBe("review prompt");
+  });
+
+  it("stores large Antigravity prompts in a temp file instead of argv", async () => {
+    const tempDir = createTempDir();
+    const prompt = "x".repeat(128 * 1024 + 1);
+    const invocation = await cliSpecs.antigravity.buildInvocation(
+      createInput(createReviewer("antigravity"), { prompt }),
+      tempDir,
+    );
+
+    expect(invocation.args.join(" ")).not.toContain(prompt);
+    expect(readFileSync(path.join(tempDir, "antigravity-prompt.txt"), "utf8")).toBe(prompt);
+  });
+
   it("builds Claude restricted invocations and strips API credentials for Claude Code auth", async () => {
     const tempDir = createTempDir();
     const executable = path.join(tempDir, "claude");
@@ -408,7 +452,7 @@ describe("cliSpecs", () => {
     });
   });
 
-  it("rejects oversized prompt argv input before a CLI is spawned", async () => {
+  it("rejects oversized cursor prompt argv input before a CLI is spawned", async () => {
     await expect(
       cliSpecs.cursor.buildInvocation(
         createInput(createReviewer("cursor"), { prompt: "x".repeat(128 * 1024 + 1) }),

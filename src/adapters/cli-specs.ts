@@ -340,21 +340,31 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
   },
   antigravity: {
     async buildInvocation(input, tempDir) {
+      // agy has no prompt-file flag; a 2026-05-31 live probe confirmed
+      // print mode can read this file.
+      const promptPath = path.join(tempDir, "antigravity-prompt.txt");
+      await writeFile(promptPath, input.prompt, "utf8");
       const printTimeoutSeconds = numberCliOption(input.reviewer, "printTimeoutSeconds") ?? 300;
-      const args = [
-        "--print",
+      const args = ["--print"];
+      pushPromptArg(
+        args,
+        `Read the full Diffwarden review prompt from ${promptPath} and follow it exactly.`,
+        "antigravity",
+      );
+      args.push(
         "--print-timeout",
         `${printTimeoutSeconds}s`,
         "--sandbox",
         "--add-dir",
+        tempDir,
+        "--add-dir",
         input.cwd,
-      ];
+      );
 
       return {
         executable: cliExecutable(input.reviewer, defaultCliExecutable("antigravity")),
         args,
         cwd: tempDir,
-        stdin: input.prompt,
         captureMode: "text",
       };
     },

@@ -82,7 +82,7 @@ SDK-backed reviewers can opt into CLI transport from config:
 | `gemini` CLI | Uses JSON output and plan approval mode. |
 | `opencode` CLI | Uses `opencode run --pure`, provider-qualified model support, effort mapped to variant, and a restrictive `OPENCODE_PERMISSION` environment policy. It remains marked prompt-only until hard read-only enforcement is proven. |
 | `grok` CLI | Uses plan permission mode, disables subagents, disables memory, and disables web search. It remains marked prompt-only until hard read-only enforcement is proven. |
-| `antigravity` CLI | Uses print mode, sandbox mode, and adds the reviewed directory. Model and effort overrides are rejected for this path. |
+| `antigravity` CLI | Uses prompt-bearing print mode with a temp prompt file, sandbox mode, and adds the reviewed directory. Model and effort overrides are rejected for this path. |
 
 ## Common Core Features
 

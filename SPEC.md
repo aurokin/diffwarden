@@ -707,7 +707,7 @@ Implemented CLI families:
 - OpenCode CLI uses JSONL output and `--pure`; its read-only capability is prompt-only until a supported per-run permission-deny path is proven.
 - Pi CLI uses JSON mode, no session, explicit read/list/search tools, and extension/skill/template/theme disabling.
 - Grok CLI uses JSON output, plan mode, disabled web search/subagents/memory, and bounded turns.
-- Antigravity CLI uses print mode and sandbox mode; its read-only capability is prompt-only until stronger executable-level controls are documented.
+- Antigravity CLI uses prompt-bearing print mode with a temp prompt file and sandbox mode; its read-only capability is prompt-only until stronger executable-level controls are documented.
 
 Each CLI adapter must run executable preflight, report `readonlyCapability`, pass `model` and `effort` only where the executable supports them, and return either `{ structured }` or `{ text }` to the common parser.
 

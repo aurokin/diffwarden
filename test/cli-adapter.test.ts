@@ -94,6 +94,29 @@ describe("createCliAdapter", () => {
     expect(invocation.stdin).toBe("review prompt");
   });
 
+  it("runs Antigravity with the prompt-bearing print flag", async () => {
+    const harness = createHarness("antigravity");
+    const adapter = createCliAdapter("antigravity");
+    const reviewer = createReviewer("antigravity", harness.executable);
+
+    const output = await adapter.run(createInput(reviewer, harness));
+    const invocation = harness.readInvocation();
+
+    expect(output.text).toContain("antigravity text");
+    expect(output.metadata).toMatchObject({
+      captureMode: "text",
+      readonlyCapability: "prompt-only",
+    });
+    expect(invocation.args[0]).toBe("--print");
+    expect(invocation.args[1]).toContain("Read the full Diffwarden review prompt from");
+    expect(invocation.args[1]).toContain("antigravity-prompt.txt");
+    expect(invocation.args).toEqual(
+      expect.arrayContaining(["--print-timeout", "300s", "--sandbox", "--add-dir", harness.cwd]),
+    );
+    expect(invocation.args).not.toContain("review prompt");
+    expect(invocation.stdin).toBe("");
+  });
+
   it("prefers provider-observed CLI metadata over deterministic request metadata", async () => {
     const harness = createHarness("codex");
     const adapter = createCliAdapter("codex");
@@ -322,10 +345,13 @@ describe("createCliAdapter", () => {
     }
   });
 
-  it("rejects unsupported Antigravity model overrides", async () => {
+  it.each([
+    ["model", { model: "test-model" }, "model"],
+    ["effort", { effort: "high" }, "effort"],
+  ] as const)("rejects unsupported Antigravity %s overrides", async (_name, extra, message) => {
     const harness = createHarness("antigravity");
     const adapter = createCliAdapter("antigravity");
-    const reviewer = createReviewer("antigravity", harness.executable, { model: "test-model" });
+    const reviewer = createReviewer("antigravity", harness.executable, extra);
 
     await expect(
       adapter.preflight?.({
@@ -336,7 +362,7 @@ describe("createCliAdapter", () => {
       }),
     ).rejects.toMatchObject({
       code: "invalid_cli",
-      message: expect.stringContaining("does not support per-run model overrides"),
+      message: expect.stringContaining(`does not support per-run ${message} overrides`),
     });
   });
 });
