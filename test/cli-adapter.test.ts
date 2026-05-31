@@ -1,4 +1,12 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -180,6 +188,54 @@ describe("createCliAdapter", () => {
       requestedEffort: "high",
       resolvedEffort: "high",
       effortResolutionSource: "config",
+    });
+  });
+
+  it("keeps explicit Droid CLI metadata ahead of local session settings", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const homeDir = path.join(harness.cwd, "home");
+    const sessionId = "33333333-3333-4333-8333-333333333333";
+    const sessionDirectory = path.join(
+      homeDir,
+      ".factory",
+      "sessions",
+      realpathSync(harness.cwd).replace(/[:\\/]/g, "-"),
+    );
+    mkdirSync(sessionDirectory, { recursive: true });
+    writeFileSync(
+      path.join(sessionDirectory, `${sessionId}.settings.json`),
+      JSON.stringify({
+        model: "droid-session-model",
+        reasoningEffort: "medium",
+      }),
+    );
+    const reviewer = createReviewer("droid", harness.executable, {
+      model: "configured-model",
+      modelSource: "config",
+      effort: "high",
+      effortSource: "config",
+    });
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        HOME: homeDir,
+        DIFFWARDEN_FAKE_DROID_SESSION_ID: sessionId,
+      },
+    });
+
+    expect(output.metadata).toMatchObject({
+      requestedModel: "configured-model",
+      resolvedModel: "configured-model",
+      modelResolutionSource: "config",
+      requestedEffort: "high",
+      resolvedEffort: "high",
+      effortResolutionSource: "config",
+      droidSessionId: sessionId,
+      droidSessionModel: "droid-session-model",
+      droidSessionEffort: "medium",
     });
   });
 
@@ -477,7 +533,7 @@ if (engine === "codex") {
 } else if (engine === "gemini") {
   process.stdout.write(JSON.stringify({ response: engine + " text" }));
 } else if (engine === "droid") {
-  process.stdout.write(JSON.stringify({ result: engine + " text" }));
+  process.stdout.write(JSON.stringify({ result: engine + " text", session_id: process.env.DIFFWARDEN_FAKE_DROID_SESSION_ID }));
 } else if (engine === "grok") {
   process.stdout.write(JSON.stringify({ result: engine + " text" }));
 } else if (engine === "opencode" || engine === "pi") {

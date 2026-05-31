@@ -265,6 +265,20 @@ Prefer Droid's CLI transport for routine reviews. It follows the current `droid 
 surface, uses read-only spec mode by default, and keeps Diffwarden on the same runtime path
 as the installed Droid CLI.
 
+The Droid CLI JSON result includes a `session_id` but not model or effort fields. When the
+local session settings file is available under `~/.factory/sessions`, Diffwarden reads that
+Droid-owned settings file to report model and effort when Diffwarden did not already select
+those values from config, env, or per-run overrides. The lookup first uses Droid's encoded cwd
+directory and then falls back to a one-level session-id search under the default sessions
+directory for path-encoding compatibility. If explicit model or non-`off` effort settings were
+passed to Droid, Diffwarden keeps those selected values as the primary resolution and records
+Droid's session values separately as `droidSessionModel` and `droidSessionEffort`. When both
+display names and stable model IDs are present, Diffwarden reports the stable ID. The `off`
+effort value is different: Droid CLI omits an off flag, so session settings may still fill the
+resolved runtime effort while `requestedEffort` remains `off`. If the settings file is
+unavailable, malformed, or stored outside the default sessions directory, Diffwarden keeps the
+review successful and omits those runtime fields rather than inferring defaults from CLI help.
+
 The Droid SDK adapter remains available through `--reviewer droid` or configured native
 profiles. It uses `@factory/droid-sdk`, creates a session, reads resolved model and effort
 settings from the session init result, streams a prompt with native JSON Schema output, and
@@ -333,11 +347,15 @@ maps `minimal` to `low` and `xhigh` to `max`; Droid and Grok map `minimal` to `l
 OpenCode, Gemini, and Cursor record exact requested values where those overrides are supported.
 If stdout contains stable JSON or JSONL runtime fields such as `model`, `modelId`,
 `reasoningEffort`, or `model_reasoning_effort`, those provider-observed values replace the
-deterministic resolved values. When no explicit runtime model field is present, Claude CLI also
-reports the runtime model as the single `modelUsage` key in its final JSON result; Diffwarden
-strips display-only formatting such as a trailing context-window suffix before reporting it. Pi
-CLI reports the runtime model in assistant message records. Those values are runtime-result
-evidence, not startup configuration proof.
+deterministic resolved values. Droid CLI stdout does not currently include these fields, so
+Diffwarden uses the returned `session_id` to read Droid's local session settings file when it is
+available, including a fallback session-id lookup under `~/.factory/sessions` when the project
+path encoding differs. Droid session settings are fallback resolution evidence when Diffwarden
+did not already select a model or effort. When no explicit runtime model field is present,
+Claude CLI also reports the runtime model as the single `modelUsage` key in its final JSON
+result; Diffwarden strips display-only formatting such as a trailing context-window suffix before
+reporting it. Pi CLI reports the runtime model in assistant message records. Claude and Pi CLI
+values are runtime-result evidence, not startup configuration proof.
 Diffwarden does not infer effort for Claude or Pi CLI unless the CLI emits an explicit runtime
 effort field. Gemini remains supported, but new runtime-metadata extraction work should not build
 additional Gemini-specific behavior. Antigravity rejects model and effort overrides.

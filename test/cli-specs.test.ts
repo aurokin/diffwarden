@@ -1,4 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -249,9 +257,12 @@ describe("cliSpecs", () => {
   it("builds Droid and Grok file-prompt invocations", async () => {
     const droidTemp = createTempDir();
     const grokTemp = createTempDir();
+    const homeDir = createTempDir();
 
     const droid = await cliSpecs.droid.buildInvocation(
-      createInput(createReviewer("droid", { model: "test-model", effort: "minimal" })),
+      createInput(createReviewer("droid", { model: "test-model", effort: "minimal" }), {
+        env: { HOME: homeDir },
+      }),
       droidTemp,
     );
     const grok = await cliSpecs.grok.buildInvocation(
@@ -275,6 +286,8 @@ describe("cliSpecs", () => {
         "low",
       ]),
     );
+    expect(droid.droidSessionDirectory).toBe(path.join(homeDir, ".factory", "sessions", "-repo"));
+    expect(droid.droidSessionSettings).toEqual({ promoteModel: false, promoteEffort: false });
     expect(grok.args).toEqual(
       expect.arrayContaining([
         "--prompt-file",
@@ -289,6 +302,79 @@ describe("cliSpecs", () => {
         "low",
       ]),
     );
+  });
+
+  it("canonicalizes Droid session cwd before deriving the Factory session directory", async () => {
+    const homeDir = createTempDir();
+    const targetDir = createTempDir();
+    const linkParent = createTempDir();
+    const linkedCwd = path.join(linkParent, "repo-link");
+    symlinkSync(targetDir, linkedCwd, process.platform === "win32" ? "junction" : "dir");
+
+    const droid = await cliSpecs.droid.buildInvocation(
+      createInput(createReviewer("droid"), {
+        cwd: linkedCwd,
+        env: { HOME: homeDir },
+      }),
+      createTempDir(),
+    );
+
+    expect(droid.args).toEqual(expect.arrayContaining(["--cwd", linkedCwd]));
+    expect(droid.droidSessionDirectory).toBe(
+      path.join(homeDir, ".factory", "sessions", realpathSync(targetDir).replace(/[:\\/]/g, "-")),
+    );
+  });
+
+  it("sanitizes Windows drive letters in Droid session directory candidates", async () => {
+    const homeDir = createTempDir();
+
+    const droid = await cliSpecs.droid.buildInvocation(
+      createInput(createReviewer("droid"), {
+        cwd: String.raw`C:\work\repo`,
+        env: { HOME: homeDir },
+      }),
+      createTempDir(),
+    );
+
+    expect(path.basename(droid.droidSessionDirectory ?? "")).toBe("-C-work-repo");
+  });
+
+  it("allows Droid session settings to resolve runtime effort when off is requested", async () => {
+    const droid = await cliSpecs.droid.buildInvocation(
+      createInput(createReviewer("droid", { effort: "off" }), {
+        env: { HOME: createTempDir() },
+      }),
+      createTempDir(),
+    );
+    const sessionId = "44444444-4444-4444-8444-444444444444";
+    const sessionDirectory = droid.droidSessionDirectory ?? "";
+    mkdirSync(sessionDirectory, { recursive: true });
+    writeFileSync(
+      path.join(sessionDirectory, `${sessionId}.settings.json`),
+      JSON.stringify({
+        reasoningEffort: "high",
+      }),
+    );
+
+    expect(droid.args.join(" ")).not.toContain("--spec-reasoning-effort");
+    expect(droid.droidSessionSettings).toMatchObject({
+      promoteEffort: true,
+    });
+    const output = await cliSpecs.droid.parseOutput(
+      runResult({
+        stdout: JSON.stringify({
+          type: "result",
+          result: "Droid text",
+          session_id: sessionId,
+        }),
+      }),
+      droid,
+    );
+    expect(output.metadata).toMatchObject({
+      resolvedEffort: "high",
+      effortResolutionSource: "provider-init",
+    });
+    expect(output.metadata).not.toHaveProperty("requestedEffort");
   });
 
   it("omits off effort for CLIs that do not pass an off value", async () => {
@@ -440,6 +526,112 @@ describe("cliSpecs", () => {
     });
     expect(piOutput.metadata).not.toHaveProperty("resolvedEffort");
 
+    const droidHome = createTempDir();
+    const droidInvocation = await cliSpecs.droid.buildInvocation(
+      createInput(createReviewer("droid"), { env: { HOME: droidHome } }),
+      createTempDir(),
+    );
+    const droidSessionId = "00000000-0000-4000-8000-000000000000";
+    const droidSessionDirectory = droidInvocation.droidSessionDirectory ?? "";
+    mkdirSync(droidSessionDirectory, { recursive: true });
+    writeFileSync(
+      path.join(droidSessionDirectory, `${droidSessionId}.settings.json`),
+      JSON.stringify({
+        model: "kimi-k2.6",
+        modelId: "kimi-k2.6-id",
+        reasoningEffort: "high",
+        specModeModel: "GPT 5.4 Mini",
+        specModeModelId: "gpt-5.4-mini",
+        specModeReasoningEffort: "high",
+      }),
+    );
+    await expect(
+      cliSpecs.droid.parseOutput(
+        runResult({
+          stdout: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            result: "Droid text",
+            session_id: droidSessionId,
+            usage: {},
+          }),
+        }),
+        droidInvocation,
+      ),
+    ).resolves.toMatchObject({
+      text: "Droid text",
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "enforced",
+        droidSessionId,
+        droidSessionModel: "gpt-5.4-mini",
+        droidSessionEffort: "high",
+        resolvedModel: "gpt-5.4-mini",
+        modelResolutionSource: "provider-init",
+        resolvedEffort: "high",
+        effortResolutionSource: "provider-init",
+      },
+    });
+
+    const droidFallbackSessionId = "22222222-2222-4222-8222-222222222222";
+    const droidFallbackSessionDirectory = path.join(
+      path.dirname(droidSessionDirectory),
+      "alternate-encoded-repo",
+    );
+    mkdirSync(droidFallbackSessionDirectory, { recursive: true });
+    writeFileSync(
+      path.join(droidFallbackSessionDirectory, `${droidFallbackSessionId}.settings.json`),
+      JSON.stringify({
+        modelId: "claude-opus-4-8",
+        specModeModel: "Claude Opus 4.8",
+        reasoningEffort: "medium",
+      }),
+    );
+    await expect(
+      cliSpecs.droid.parseOutput(
+        runResult({
+          stdout: JSON.stringify({
+            type: "result",
+            result: "Droid text from fallback settings",
+            session_id: droidFallbackSessionId,
+          }),
+        }),
+        droidInvocation,
+      ),
+    ).resolves.toMatchObject({
+      text: "Droid text from fallback settings",
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "enforced",
+        droidSessionId: droidFallbackSessionId,
+        droidSessionModel: "claude-opus-4-8",
+        droidSessionEffort: "medium",
+        resolvedModel: "claude-opus-4-8",
+        modelResolutionSource: "provider-init",
+        resolvedEffort: "medium",
+        effortResolutionSource: "provider-init",
+      },
+    });
+
+    const droidOutputWithoutSettings = await cliSpecs.droid.parseOutput(
+      runResult({
+        stdout: JSON.stringify({
+          type: "result",
+          result: "Droid text without settings",
+          session_id: "11111111-1111-4111-8111-111111111111",
+        }),
+      }),
+      droidInvocation,
+    );
+    expect(droidOutputWithoutSettings).toMatchObject({
+      text: "Droid text without settings",
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "enforced",
+      },
+    });
+    expect(droidOutputWithoutSettings.metadata).not.toHaveProperty("resolvedModel");
+
     await expect(
       cliSpecs.antigravity.parseOutput(runResult({ stdout: "plain text\n" }), {
         executable: "antigravity",
@@ -487,16 +679,18 @@ function createReviewer(
 function createInput(
   reviewer: ReviewReviewerConfig,
   options: {
+    cwd?: string;
     env?: NodeJS.ProcessEnv;
     prompt?: string;
   } = {},
 ): ReviewAdapterInput {
+  const cwd = options.cwd ?? "/repo";
   return {
-    cwd: "/repo",
+    cwd,
     reviewer,
     target: {
       kind: "custom",
-      repo_root: "/repo",
+      repo_root: cwd,
       diff_command: "test diff",
       changed_files: ["file.ts"],
     },

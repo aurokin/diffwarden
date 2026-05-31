@@ -147,7 +147,16 @@ provider-observed values where available. CLI adapters report deterministic valu
 Diffwarden passes on the command line, but provider-observed values from stable runtime
 JSON/JSONL metadata take precedence when available. Claude CLI's single-model `modelUsage`
 result is used only when no explicit runtime model field is present, and is normalized to remove
-display-only formatting such as a trailing context-window suffix. Pi CLI's assistant
+display-only formatting such as a trailing context-window suffix. Droid CLI stdout currently
+omits model and effort fields, but Diffwarden can read Droid's local session settings file from
+the returned `session_id` and report those values as provider-init metadata when the file is
+available and Diffwarden did not already select model or effort from config, env, or per-run
+overrides. Droid lookup starts with the encoded cwd directory and falls back to a one-level
+session-id search under `~/.factory/sessions` for path-encoding compatibility. When explicit
+Droid CLI model or non-`off` effort settings are present, Droid session values are retained as
+`droidSessionModel` and `droidSessionEffort` but are not promoted over the selected values.
+Because Droid CLI omits an off effort flag, session settings may still provide the resolved
+runtime effort for `effort: "off"` while preserving `requestedEffort: "off"`. Pi CLI's assistant
 `message.model` records are treated as runtime-result evidence, not startup configuration proof.
 CLI adapters omit default model resolution when the executable does not expose a stable
 machine-readable runtime value. Gemini remains supported, but no new metadata-specific behavior
