@@ -5,7 +5,8 @@ import { invalidCli } from "../core/errors.js";
 import {
   claudeCliEffort,
   cliCapability,
-  cliExecutable,
+  cliExecutableMetadata,
+  cliExecutableSelection,
   droidCliEffort,
   grokCliEffort,
   providerQualifiedModel,
@@ -52,6 +53,10 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
       const tempDir = await mkdtemp(path.join(tmpdir(), "diffwarden-cli-"));
       try {
         const invocation = await spec.buildInvocation(input, tempDir);
+        const executableSelection = cliExecutableSelection(
+          input.reviewer,
+          capability.defaultExecutable,
+        );
         const runContext = cliRunContext(input.runContext);
         if (canUsePreparedExecutable(invocation.executable, input, runContext)) {
           invocation.resolvedExecutable = runContext.resolvedExecutable;
@@ -63,7 +68,7 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
           output.metadata,
           {
             transport: "cli",
-            executable: result.executable,
+            ...cliExecutableMetadata(executableSelection, result.executable),
             stderr: trimForMetadata(result.stderr),
           },
         );
@@ -81,12 +86,12 @@ async function prepareCliAdapter(
   input: ReviewAdapterPreflightInput,
 ): Promise<{ preflight: ReviewAdapterPreflightResult; runContext: CliRunContext }> {
   validateSupportedCliOverrides(engine, input.reviewer);
-  const executable = cliExecutable(input.reviewer, capability.defaultExecutable);
-  const resolvedExecutable = await resolveExecutable(executable, input.env);
+  const executableSelection = cliExecutableSelection(input.reviewer, capability.defaultExecutable);
+  const resolvedExecutable = await resolveExecutable(executableSelection.executable, input.env);
   const metadata: ReviewAdapterPreflightResult["metadata"] = {
     readonlyCapability: capability.readonlyCapability,
     transport: "cli",
-    executable: resolvedExecutable,
+    ...cliExecutableMetadata(executableSelection, resolvedExecutable),
     ...cliSelectionMetadata(engine, input.reviewer),
   };
 
@@ -129,7 +134,7 @@ async function prepareCliAdapter(
     },
     runContext: {
       kind: "cli",
-      requestedExecutable: executable,
+      requestedExecutable: executableSelection.executable,
       resolvedExecutable,
       ...pathContext(input.env),
     },

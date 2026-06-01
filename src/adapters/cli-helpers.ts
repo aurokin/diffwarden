@@ -5,9 +5,36 @@ import type { CliEngine } from "./cli-types.js";
 import { codexCliWebSearchPolicy, codexWebSearchMode } from "./codex-options.js";
 import type { ReviewReviewerConfig } from "./types.js";
 
+export type CliExecutableSource = "adapter-default" | "config";
+
+export type CliExecutableSelection = {
+  executable: string;
+  source: CliExecutableSource;
+};
+
 export function cliExecutable(reviewer: ReviewReviewerConfig, fallback: string): string {
+  return cliExecutableSelection(reviewer, fallback).executable;
+}
+
+export function cliExecutableSelection(
+  reviewer: ReviewReviewerConfig,
+  fallback: string,
+): CliExecutableSelection {
   const executable = reviewer.cliOptions?.executable;
-  return typeof executable === "string" && executable.trim() ? executable : fallback;
+  return typeof executable === "string" && executable.trim()
+    ? { executable: executable.trim(), source: "config" }
+    : { executable: fallback, source: "adapter-default" };
+}
+
+export function cliExecutableMetadata(
+  selection: CliExecutableSelection,
+  resolvedExecutable: string,
+): Record<string, string> {
+  return {
+    executable: resolvedExecutable,
+    requestedExecutable: selection.executable,
+    executableSource: selection.source,
+  };
 }
 
 export function cliCapability(

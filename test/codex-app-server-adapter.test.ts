@@ -160,6 +160,8 @@ describe("createCodexAppServerAdapter", () => {
       transport: "app-server",
       readonlyCapability: "enforced",
       executable: harness.executable,
+      requestedExecutable: harness.executable,
+      executableSource: "config",
       execEnabled: true,
       ephemeral: true,
       requestedModel: "gpt-test",
@@ -190,6 +192,8 @@ describe("createCodexAppServerAdapter", () => {
     expect(output.metadata).toMatchObject({
       transport: "app-server",
       executable: harness.executable,
+      requestedExecutable: harness.executable,
+      executableSource: "config",
       execEnabled: true,
       ephemeral: true,
       codexReviewMode: "structured",

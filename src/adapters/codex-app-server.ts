@@ -21,7 +21,11 @@ import { missingAuth, missingRequirement, reviewerFailed } from "../core/errors.
 import { reviewResultStrictJsonSchema } from "../core/schema.js";
 import type { ReviewTargetResolved } from "../core/schema.js";
 import { version } from "../version.js";
-import { cliExecutable } from "./cli-helpers.js";
+import {
+  type CliExecutableSelection,
+  cliExecutableMetadata,
+  cliExecutableSelection,
+} from "./cli-helpers.js";
 import { resolveExecutable, trimForMetadata } from "./cli-process.js";
 import {
   type CodexAppServerReviewMode,
@@ -113,16 +117,17 @@ export function createCodexAppServerAdapter(): ReviewAdapter {
     },
     async run(input) {
       const runContext = codexAppServerRunContext(input.runContext);
+      const executableSelection = codexAppServerExecutableSelection(input.reviewer);
       const options = codexAppServerOptions(input.reviewer, input.env);
       const executable =
         runContext !== undefined &&
-        runContext.requestedExecutable === codexAppServerExecutable(input.reviewer) &&
+        runContext.requestedExecutable === executableSelection.executable &&
         runContext.mode === options.mode &&
         runContext.codexHome === options.codexHome &&
         runContext.path === pathContext(input.env).path
           ? runContext.resolvedExecutable
-          : await resolveExecutable(codexAppServerExecutable(input.reviewer), input.env);
-      const session = new CodexAppServerSession(input, executable, options);
+          : await resolveExecutable(executableSelection.executable, input.env);
+      const session = new CodexAppServerSession(input, executable, executableSelection, options);
       return await session.run();
     },
   };
@@ -131,15 +136,15 @@ export function createCodexAppServerAdapter(): ReviewAdapter {
 async function prepareCodexAppServerAdapter(
   input: ReviewAdapterPreflightInput,
 ): Promise<{ preflight: ReviewAdapterPreflightResult; runContext: CodexAppServerRunContext }> {
-  const executable = codexAppServerExecutable(input.reviewer);
-  const resolvedExecutable = await resolveExecutable(executable, input.env);
+  const executableSelection = codexAppServerExecutableSelection(input.reviewer);
+  const resolvedExecutable = await resolveExecutable(executableSelection.executable, input.env);
   const options = codexAppServerOptions(input.reviewer, input.env);
   await assertCodexAuthAvailable(authHomeForMode(options, input.env));
 
   const metadata: ReviewAdapterPreflightResult["metadata"] = {
     readonlyCapability: "enforced",
     transport: "app-server",
-    executable: resolvedExecutable,
+    ...cliExecutableMetadata(executableSelection, resolvedExecutable),
     execEnabled: true,
     ephemeral: true,
     appServerMode: options.mode,
@@ -226,7 +231,7 @@ async function prepareCodexAppServerAdapter(
     },
     runContext: {
       kind: "codex-app-server",
-      requestedExecutable: executable,
+      requestedExecutable: executableSelection.executable,
       resolvedExecutable,
       mode: options.mode,
       codexHome: options.codexHome,
@@ -251,6 +256,7 @@ class CodexAppServerSession {
   constructor(
     private readonly input: ReviewAdapterInput,
     private readonly executable: string,
+    private readonly executableSelection: CliExecutableSelection,
     private readonly options: CodexAppServerOptions,
   ) {}
 
@@ -352,6 +358,7 @@ class CodexAppServerSession {
       ephemeral: true,
       ...codexAppServerReviewModeMetadata(this.options),
       ...connection.metadata,
+      ...cliExecutableMetadata(this.executableSelection, connection.metadata.executable),
       stderr: trimForMetadata(connection.stderr()),
       ...codexAppServerWebSearchMetadata(this.options),
       ...codexAppServerSelectionMetadata(this.input.reviewer),
@@ -394,6 +401,7 @@ class CodexAppServerSession {
         ephemeral: true,
         ...codexAppServerReviewModeMetadata(this.options),
         ...connection.metadata,
+        ...cliExecutableMetadata(this.executableSelection, connection.metadata.executable),
         stderr: trimForMetadata(connection.stderr()),
         ...codexAppServerWebSearchMetadata(this.options),
         ...codexAppServerSelectionMetadata(this.input.reviewer),
@@ -1400,8 +1408,8 @@ function codexDeveloperInstructions(): string {
   ].join("\n");
 }
 
-function codexAppServerExecutable(reviewer: ReviewReviewerConfig): string {
-  return cliExecutable(reviewer, "codex");
+function codexAppServerExecutableSelection(reviewer: ReviewReviewerConfig): CliExecutableSelection {
+  return cliExecutableSelection(reviewer, "codex");
 }
 
 function codexAppServerThreadModelOptions(reviewer: ReviewReviewerConfig): {

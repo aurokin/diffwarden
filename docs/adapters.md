@@ -370,6 +370,16 @@ Inspect local tool availability:
 pnpm live:doctor
 ```
 
+`live:doctor` resolves CLI executables using explicit `DIFFWARDEN_LIVE_*_EXECUTABLE`
+environment overrides first, then matching executable-backed Diffwarden reviewer config, then
+adapter defaults.
+Each row reports the source so stale PATH shims are easier to distinguish from configured
+executables. For Antigravity, prefer a real `agy` CLI path such as `/Users/auro/.local/bin/agy`
+over a shim that points into the macOS app bundle.
+The Droid doctor rows are transport-specific: use `DIFFWARDEN_LIVE_DROID_SDK_EXECUTABLE` for
+the SDK row and `DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE` for the CLI row. The legacy
+`DIFFWARDEN_LIVE_DROID_EXECUTABLE` override is still accepted by the Droid CLI row.
+
 Set `INTEGRATION_DISABLE` with any SDK names that should remain disabled during broader
 live test runs.
 

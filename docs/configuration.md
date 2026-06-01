@@ -137,6 +137,12 @@ when the adapter provides them. Adapter and executable version data are therefor
 SDK adapters record SDK/version details where they already discover them, while CLI adapters do
 not run extra `--version` probes solely for reporting.
 
+Executable-backed adapters include the resolved `executable` path plus `requestedExecutable`
+and `executableSource`. `executableSource: "config"` means the executable string came from
+reviewer `cliOptions.executable`; `adapter-default` means Diffwarden used the built-in executable
+name and resolved it from `PATH`. These fields describe Diffwarden's launcher selection, not a
+provider-observed runtime value.
+
 Adapter metadata may include `requestedModel`, `resolvedModel`, `modelResolutionSource`,
 `requestedEffort`, `resolvedEffort`, and `effortResolutionSource`. These fields preserve the
 requested config/CLI value separately from the value Diffwarden can prove was selected.
