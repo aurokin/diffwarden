@@ -125,8 +125,9 @@ describe("live doctor executable provenance", () => {
     });
   });
 
-  it("uses later configured executables from the active reviewer set", async () => {
+  it("reports defaulted and configured executables from the active reviewer set", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    executableFixture("agy");
     const executable = executableFixture("agy-active");
     writeConfig({
       defaultReviewerSet: "primary",
@@ -144,14 +145,13 @@ describe("live doctor executable provenance", () => {
       ],
     });
 
-    const row = await antigravityRow({ PATH: "" });
+    const row = await antigravityRow({ PATH: testRoot() });
 
     expect(row).toMatchObject({
-      status: `found: ${executable}`,
-      executable,
-      resolvedExecutable: executable,
+      status: "found multiple active executables",
       executableSource: "config",
-      executableSourceDetail: "reviewer agy-active",
+      executableSourceDetail:
+        "multiple active reviewers: agy-default (adapter-default), agy-active (config)",
     });
   });
 
@@ -177,9 +177,34 @@ describe("live doctor executable provenance", () => {
     const row = await antigravityRow({ PATH: "" });
 
     expect(row).toMatchObject({
-      status: "found multiple configured executables",
+      status: "found multiple active executables",
       executableSource: "config",
-      executableSourceDetail: "multiple active reviewers: agy-a, agy-b",
+      executableSourceDetail: "multiple active reviewers: agy-a (config), agy-b (config)",
+    });
+  });
+
+  it("keeps built-in reviewers active when reporting configured executables", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    executableFixture("agy");
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["antigravity", "agy-active"] },
+      reviewers: [
+        {
+          id: "agy-active",
+          engine: "antigravity",
+          cliOptions: { executable: executableFixture("agy-active") },
+        },
+      ],
+    });
+
+    const row = await antigravityRow({ PATH: testRoot() });
+
+    expect(row).toMatchObject({
+      status: "found multiple active executables",
+      executableSource: "config",
+      executableSourceDetail:
+        "multiple active reviewers: antigravity (adapter-default), agy-active (config)",
     });
   });
 
@@ -384,6 +409,81 @@ describe("live doctor executable provenance", () => {
     expect(row).toMatchObject({
       status: `found: ${executable}`,
       executable: "agy",
+      resolvedExecutable: executable,
+      executableSource: "adapter-default",
+    });
+  });
+
+  it("warns and falls back when active reviewer-set specs are malformed", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = executableFixture("codex");
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["codex:bad:spec"] },
+      reviewers: [
+        {
+          id: "codex:bad:spec",
+          engine: "codex",
+          transport: "cli",
+          cliOptions: { executable: executableFixture("codex-config") },
+        },
+      ],
+    });
+
+    const rows = await collectLiveDoctorRows({
+      cwd: testRoot(),
+      repoRoot: testRoot(),
+      env: { PATH: testRoot() },
+    });
+    const configRow = rows.find((candidate) => candidate.id === "config");
+    const row = rows.find((candidate) => candidate.id === "codex");
+
+    expect(configRow).toMatchObject({
+      kind: "config",
+      status: "ignored invalid config",
+      auth: "Invalid reviewer spec: codex:bad:spec",
+    });
+    expect(row).toMatchObject({
+      status: `found: ${executable}`,
+      executable: "codex",
+      resolvedExecutable: executable,
+      executableSource: "adapter-default",
+    });
+  });
+
+  it("warns and falls back when active reviewer-set profile specs are invalid", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = executableFixture("codex");
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["codex:bad/profile"] },
+      reviewers: [
+        {
+          id: "codex-config",
+          engine: "codex",
+          transport: "cli",
+          profile: "bad/profile",
+          cliOptions: { executable: executableFixture("codex-config") },
+        },
+      ],
+    });
+
+    const rows = await collectLiveDoctorRows({
+      cwd: testRoot(),
+      repoRoot: testRoot(),
+      env: { PATH: testRoot() },
+    });
+    const configRow = rows.find((candidate) => candidate.id === "config");
+    const row = rows.find((candidate) => candidate.id === "codex");
+
+    expect(configRow).toMatchObject({
+      kind: "config",
+      status: "ignored invalid config",
+      auth: "Invalid reviewer profile in spec: codex:bad/profile",
+    });
+    expect(row).toMatchObject({
+      status: `found: ${executable}`,
+      executable: "codex",
       resolvedExecutable: executable,
       executableSource: "adapter-default",
     });

@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultReviewerTransport, isReviewerSdk } from "../src/adapters/capabilities.js";
 import type { ReviewerSdk, ReviewerTransport } from "../src/adapters/capabilities.js";
-import type { ReviewReviewerConfig } from "../src/adapters/types.js";
 import { loadDiffwardenConfig } from "../src/core/config.js";
 import type { DiffwardenConfig } from "../src/core/config.js";
 
@@ -26,9 +25,18 @@ type CliCheck = Check & {
 
 type ConfiguredReviewer = NonNullable<DiffwardenConfig["reviewers"]>[number];
 
-type ConfiguredExecutable = {
+type ActiveReviewer = {
+  id: string;
+  sdk: ReviewerSdk;
+  transport?: ReviewerTransport | undefined;
+  cliOptions?: Record<string, unknown> | undefined;
+  sdkOptions?: Record<string, unknown> | undefined;
+};
+
+type ActiveExecutable = {
   executable: string;
   reviewerId: string;
+  source: Extract<LiveDoctorSelectionSource, "adapter-default" | "config">;
 };
 
 type ExecutableSelection =
@@ -39,8 +47,8 @@ type ExecutableSelection =
       detail?: string;
     }
   | {
-      kind: "multiple-config";
-      executables: ConfiguredExecutable[];
+      kind: "multiple-active";
+      executables: ActiveExecutable[];
     };
 
 export type LiveDoctorSelectionSource = "adapter-default" | "config" | "env";
@@ -177,8 +185,8 @@ export async function collectLiveDoctorRows(options: {
       }
 
       const selection = selectExecutable(check, env, activeReviewers);
-      if (selection.kind === "multiple-config") {
-        return await multipleConfiguredExecutableRow(check, selection.executables, env, auth);
+      if (selection.kind === "multiple-active") {
+        return await multipleActiveExecutableRow(check, selection.executables, env, auth);
       }
 
       const resolved = await resolveExecutable(selection.executable, env);
@@ -222,7 +230,7 @@ async function main(): Promise<void> {
 function selectExecutable(
   check: CliCheck,
   env: NodeJS.ProcessEnv,
-  activeReviewers: ConfiguredReviewer[] | undefined,
+  activeReviewers: ActiveReviewer[] | undefined,
 ): ExecutableSelection {
   const envExecutable = executableEnvOverride(check, env);
   if (envExecutable !== undefined) {
@@ -234,7 +242,12 @@ function selectExecutable(
     };
   }
 
-  const configured = configuredExecutables(activeReviewers, check.engine, check.configTransports);
+  const configured = activeExecutableSelection(
+    activeReviewers,
+    check.engine,
+    check.configTransports,
+    check.executable,
+  );
   if (configured !== undefined) {
     return configured;
   }
@@ -262,16 +275,17 @@ function executableEnvOverride(
   return undefined;
 }
 
-function configuredExecutables(
-  activeReviewers: ConfiguredReviewer[] | undefined,
+function activeExecutableSelection(
+  activeReviewers: ActiveReviewer[] | undefined,
   engine: ReviewerSdk,
   configTransports: ReviewerTransport[] | undefined,
+  fallbackExecutable: string,
 ): ExecutableSelection | undefined {
   if (activeReviewers === undefined) {
     return undefined;
   }
 
-  const executables: ConfiguredExecutable[] = [];
+  const executables: ActiveExecutable[] = [];
   for (const reviewer of activeReviewers) {
     const transport = effectiveTransport(reviewer);
     if (
@@ -283,12 +297,18 @@ function configuredExecutables(
     }
 
     const executable = configuredReviewerExecutable(reviewer, transport);
-    if (executable !== undefined) {
-      executables.push({ executable, reviewerId: reviewer.id });
-    }
+    executables.push(
+      executable === undefined
+        ? {
+            executable: fallbackExecutable,
+            reviewerId: reviewer.id,
+            source: "adapter-default",
+          }
+        : { executable, reviewerId: reviewer.id, source: "config" },
+    );
   }
 
-  const distinctExecutables = uniqueConfiguredExecutables(executables);
+  const distinctExecutables = uniqueActiveExecutables(executables);
   if (distinctExecutables.length === 0) {
     return undefined;
   }
@@ -300,12 +320,12 @@ function configuredExecutables(
     return {
       kind: "single",
       executable: configured.executable,
-      source: "config",
-      detail: `reviewer ${configured.reviewerId}`,
+      source: configured.source,
+      ...(configured.source === "config" ? { detail: `reviewer ${configured.reviewerId}` } : {}),
     };
   }
 
-  return { kind: "multiple-config", executables: distinctExecutables };
+  return { kind: "multiple-active", executables: distinctExecutables };
 }
 
 function isExecutableBackedTransport(engine: ReviewerSdk, transport: ReviewerTransport): boolean {
@@ -325,9 +345,9 @@ function configuredTransportMatches(
     : configTransports.some((candidate) => candidate === transport);
 }
 
-async function multipleConfiguredExecutableRow(
+async function multipleActiveExecutableRow(
   check: CliCheck,
-  executables: ConfiguredExecutable[],
+  executables: ActiveExecutable[],
   env: NodeJS.ProcessEnv,
   auth: string,
 ): Promise<LiveDoctorRow> {
@@ -345,12 +365,12 @@ async function multipleConfiguredExecutableRow(
     auth,
     executableSource: "config",
     executableSourceDetail: `multiple active reviewers: ${executables
-      .map((entry) => entry.reviewerId)
+      .map((entry) => `${entry.reviewerId} (${entry.source})`)
       .join(", ")}`,
     status:
       missing === undefined
-        ? "found multiple configured executables"
-        : `missing configured executable: ${missing.executable}`,
+        ? "found multiple active executables"
+        : `missing active executable: ${missing.executable}`,
   };
 }
 
@@ -359,7 +379,7 @@ function checkAuth(check: Check, env: NodeJS.ProcessEnv): string {
 }
 
 function configuredReviewerExecutable(
-  reviewer: ConfiguredReviewer,
+  reviewer: ActiveReviewer,
   transport: ReviewerTransport,
 ): string | undefined {
   const cliExecutable = stringValue(reviewer.cliOptions?.executable);
@@ -371,10 +391,11 @@ function configuredReviewerExecutable(
     : undefined;
 }
 
-function uniqueConfiguredExecutables(executables: ConfiguredExecutable[]): ConfiguredExecutable[] {
-  const unique = new Map<string, ConfiguredExecutable>();
+function uniqueActiveExecutables(executables: ActiveExecutable[]): ActiveExecutable[] {
+  const unique = new Map<string, ActiveExecutable>();
   for (const executable of executables) {
-    if (!unique.has(executable.executable)) {
+    const existing = unique.get(executable.executable);
+    if (existing === undefined || existing.source === "adapter-default") {
       unique.set(executable.executable, executable);
     }
   }
@@ -385,7 +406,7 @@ async function loadConfigForDoctor(options: {
   cwd: string;
   repoRoot?: string;
   env: NodeJS.ProcessEnv;
-}): Promise<{ activeReviewers?: ConfiguredReviewer[]; warning?: LiveDoctorRow }> {
+}): Promise<{ activeReviewers?: ActiveReviewer[]; warning?: LiveDoctorRow }> {
   try {
     const loaded = await loadDiffwardenConfig({
       cwd: options.cwd,
@@ -407,7 +428,7 @@ async function loadConfigForDoctor(options: {
   }
 }
 
-function activeConfiguredReviewers(config: DiffwardenConfig): ConfiguredReviewer[] {
+function activeConfiguredReviewers(config: DiffwardenConfig): ActiveReviewer[] {
   const reviewers = config.reviewers ?? [];
   if (config.defaultReviewerSet === undefined) {
     return reviewers;
@@ -433,12 +454,23 @@ function activeConfiguredReviewers(config: DiffwardenConfig): ConfiguredReviewer
 function configuredReviewerBySpec(
   reviewers: ConfiguredReviewer[],
   spec: string,
-): { valid: true; reviewer?: ConfiguredReviewer } | { valid: false; error: string } {
+): { valid: true; reviewer?: ActiveReviewer } | { valid: false; error: string } {
+  if (spec.length === 0) {
+    return { valid: false, error: "Reviewer spec cannot be empty" };
+  }
+
   const parts = spec.split(":");
+  if (parts.length > 2) {
+    return { valid: false, error: `Invalid reviewer spec: ${spec}` };
+  }
+
   const [sdk, profile] = parts;
   if (parts.length <= 2 && isReviewerSdk(sdk)) {
     if (profile === undefined) {
-      return { valid: true };
+      return { valid: true, reviewer: builtInReviewer(spec, sdk) };
+    }
+    if (!isValidProfileName(profile)) {
+      return { valid: false, error: `Invalid reviewer profile in spec: ${spec}` };
     }
     const reviewer = reviewers.find(
       (candidate) => candidate.sdk === sdk && candidate.profile === profile,
@@ -454,9 +486,18 @@ function configuredReviewerBySpec(
     : { valid: true, reviewer };
 }
 
-function effectiveTransport(
-  reviewer: Pick<ReviewReviewerConfig, "sdk" | "transport">,
-): ReviewerTransport {
+function builtInReviewer(id: string, sdk: ReviewerSdk): ActiveReviewer {
+  return { id, sdk };
+}
+
+function isValidProfileName(profile: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(profile);
+}
+
+function effectiveTransport(reviewer: {
+  sdk: ReviewerSdk;
+  transport?: ReviewerTransport | undefined;
+}): ReviewerTransport {
   return reviewer.transport ?? defaultReviewerTransport(reviewer.sdk) ?? "sdk";
 }
 
