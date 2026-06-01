@@ -135,10 +135,7 @@ const checks: Check[] = [
     engine: "droid",
     configTransports: ["cli"],
     executable: "droid",
-    executableEnvNames: [
-      "DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE",
-      "DIFFWARDEN_LIVE_DROID_EXECUTABLE",
-    ],
+    executableEnvNames: ["DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE"],
     auth: "delegated to CLI",
   },
   {

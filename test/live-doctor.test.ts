@@ -293,13 +293,13 @@ describe("live doctor executable provenance", () => {
       DIFFWARDEN_LIVE_DROID_SDK_EXECUTABLE: sdkExecutable,
       DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE: cliExecutable,
     });
-    const legacyCliRow = await doctorRow("droid-cli", {
-      PATH: testRoot(),
-      DIFFWARDEN_LIVE_DROID_EXECUTABLE: cliExecutable,
-    });
     const sdkWithoutSpecificOverride = await doctorRow("droid-sdk", {
       PATH: testRoot(),
-      DIFFWARDEN_LIVE_DROID_EXECUTABLE: cliExecutable,
+      DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE: cliExecutable,
+    });
+    const cliWithoutSpecificOverride = await doctorRow("droid-cli", {
+      PATH: testRoot(),
+      DIFFWARDEN_LIVE_DROID_SDK_EXECUTABLE: sdkExecutable,
     });
 
     expect(sdkRow).toMatchObject({
@@ -314,13 +314,13 @@ describe("live doctor executable provenance", () => {
       executableSource: "env",
       executableSourceDetail: "DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE",
     });
-    expect(legacyCliRow).toMatchObject({
-      status: `found: ${cliExecutable}`,
-      executable: cliExecutable,
-      executableSource: "env",
-      executableSourceDetail: "DIFFWARDEN_LIVE_DROID_EXECUTABLE",
-    });
     expect(sdkWithoutSpecificOverride).toMatchObject({
+      status: `found: ${pathExecutable}`,
+      executable: "droid",
+      resolvedExecutable: pathExecutable,
+      executableSource: "adapter-default",
+    });
+    expect(cliWithoutSpecificOverride).toMatchObject({
       status: `found: ${pathExecutable}`,
       executable: "droid",
       resolvedExecutable: pathExecutable,

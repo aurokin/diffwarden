@@ -280,7 +280,7 @@ describe("droidAdapter", () => {
       const reviewer = createReviewer({
         ...optionalString("model", process.env.DIFFWARDEN_LIVE_DROID_MODEL),
         ...optionalString("effort", process.env.DIFFWARDEN_LIVE_DROID_EFFORT),
-        ...cliOptions(process.env.DIFFWARDEN_LIVE_DROID_EXECUTABLE),
+        ...cliOptions(process.env.DIFFWARDEN_LIVE_DROID_SDK_EXECUTABLE),
         ...sdkOptions(process.env.DIFFWARDEN_LIVE_DROID_MACHINE_ID),
       });
 

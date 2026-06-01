@@ -377,8 +377,7 @@ Each row reports the source so stale PATH shims are easier to distinguish from c
 executables. For Antigravity, prefer a real `agy` CLI path such as `/Users/auro/.local/bin/agy`
 over a shim that points into the macOS app bundle.
 The Droid doctor rows are transport-specific: use `DIFFWARDEN_LIVE_DROID_SDK_EXECUTABLE` for
-the SDK row and `DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE` for the CLI row. The legacy
-`DIFFWARDEN_LIVE_DROID_EXECUTABLE` override is still accepted by the Droid CLI row.
+the SDK row and `DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE` for the CLI row.
 
 Set `INTEGRATION_DISABLE` with any SDK names that should remain disabled during broader
 live test runs.
@@ -397,7 +396,8 @@ Override CLI executable paths with engine-specific variables when a binary is no
 
 ```bash
 DIFFWARDEN_LIVE_PI_EXECUTABLE=/Users/auro/.local/share/mise/installs/npm-earendil-works-pi-coding-agent/latest/bin/pi
-DIFFWARDEN_LIVE_DROID_EXECUTABLE=/Users/auro/.local/bin/droid
+DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE=/Users/auro/.local/bin/droid
+DIFFWARDEN_LIVE_DROID_SDK_EXECUTABLE=/Users/auro/.local/bin/droid
 DIFFWARDEN_LIVE_DROID_MACHINE_ID=YOUR_DROID_COMPUTER_ID
 DIFFWARDEN_LIVE_ANTIGRAVITY_EXECUTABLE=/Users/auro/.local/bin/agy
 ```
