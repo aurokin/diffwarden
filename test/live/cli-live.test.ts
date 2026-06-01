@@ -71,6 +71,9 @@ function liveCliReviewer(engine: CliEngine): ReviewReviewerConfig {
 }
 
 function liveEnv(engine: CliEngine, suffix: string): string | undefined {
+  if (engine === "droid" && suffix === "EXECUTABLE") {
+    return process.env.DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE;
+  }
   return process.env[`DIFFWARDEN_LIVE_${engine.toUpperCase()}_${suffix}`];
 }
 

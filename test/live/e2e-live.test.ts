@@ -30,7 +30,7 @@ describe("live diffwarden CLI e2e", () => {
         DIFFWARDEN_LIVE_DROID_PROVIDER: "factory",
         DIFFWARDEN_LIVE_DROID_MODEL: "claude-opus-4-7",
         DIFFWARDEN_LIVE_DROID_EFFORT: "high",
-        DIFFWARDEN_LIVE_DROID_EXECUTABLE: "/opt/droid",
+        DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE: "/opt/droid",
       }),
     );
 
@@ -128,6 +128,9 @@ function liveEnv(
   suffix: "PROVIDER" | "MODEL" | "EFFORT" | "EXECUTABLE",
   env: NodeJS.ProcessEnv,
 ): string | undefined {
+  if (reviewer === "droid" && suffix === "EXECUTABLE") {
+    return env.DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE;
+  }
   return env[`DIFFWARDEN_LIVE_${reviewer.toUpperCase()}_${suffix}`];
 }
 

@@ -304,6 +304,80 @@ describe("createReviewReport", () => {
     });
     expect(report.reviewers[0]?.effort_resolution).toBeUndefined();
   });
+
+  it("merges preflight intent with run-time resolution evidence", () => {
+    const artifact = reviewArtifact();
+    const reviewer = artifact.reviewers?.[0];
+    if (reviewer === undefined) {
+      throw new Error("missing reviewer fixture");
+    }
+    reviewer.preflight = {
+      checks: [{ name: "mock", status: "passed" }],
+      metadata: {
+        requestedModel: "configured-model",
+        resolvedModel: "configured-model",
+        modelResolutionSource: "config",
+      },
+    };
+    reviewer.adapter_metadata = {
+      resolvedModel: "runtime-model",
+      modelResolutionSource: "provider-result",
+    };
+
+    const report = createReviewReport({
+      artifact,
+      reporting: {
+        scope: "global",
+        mode: "metadata",
+      },
+      runId: "run-1",
+    });
+
+    expect(report.reviewers[0]?.model_resolution).toEqual({
+      requested: "configured-model",
+      resolved: "runtime-model",
+      source: "provider-result",
+    });
+  });
+
+  it("keeps selected preflight values ahead of lower-confidence provider-local run evidence", () => {
+    const artifact = reviewArtifact();
+    const reviewer = artifact.reviewers?.[0];
+    if (reviewer === undefined) {
+      throw new Error("missing reviewer fixture");
+    }
+    reviewer.preflight = {
+      checks: [{ name: "mock", status: "passed" }],
+      metadata: {
+        requestedModel: "configured-model",
+        resolvedModel: "configured-model",
+        modelResolutionSource: "config",
+      },
+    };
+    reviewer.adapter_metadata = {
+      droidSessionModel: "session-model",
+      resolvedModel: "session-model",
+      modelResolutionSource: "provider-local",
+    };
+
+    const report = createReviewReport({
+      artifact,
+      reporting: {
+        scope: "global",
+        mode: "metadata",
+      },
+      runId: "run-1",
+    });
+
+    expect(report.reviewers[0]?.model_resolution).toEqual({
+      requested: "configured-model",
+      resolved: "configured-model",
+      source: "config",
+    });
+    expect(report.reviewers[0]?.adapter_metadata).toMatchObject({
+      droidSessionModel: "session-model",
+    });
+  });
 });
 
 describe("writeReviewReport", () => {

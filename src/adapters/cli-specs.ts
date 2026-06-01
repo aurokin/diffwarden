@@ -294,10 +294,6 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         executable: cliExecutable(input.reviewer, defaultCliExecutable("droid")),
         args,
         droidSessionDirectory: await droidCliSessionDirectory(input.cwd, input.env),
-        droidSessionSettings: {
-          promoteModel: input.reviewer.model === undefined,
-          promoteEffort: input.reviewer.effort === undefined || input.reviewer.effort === "off",
-        },
         captureMode: "text",
       };
     },
@@ -305,7 +301,6 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       const settingsMetadata = await droidCliSessionSettingsMetadata(
         result.stdout,
         invocation.droidSessionDirectory,
-        invocation.droidSessionSettings,
       );
       return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
@@ -396,7 +391,6 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
 async function droidCliSessionSettingsMetadata(
   stdout: string,
   sessionDirectory: string | undefined,
-  options: { promoteModel?: boolean; promoteEffort?: boolean } = {},
 ): Promise<Record<string, string>> {
   const sessionId = droidCliSessionId(stdout);
   if (sessionId === undefined || sessionDirectory === undefined) {
@@ -410,18 +404,16 @@ async function droidCliSessionSettingsMetadata(
 
   const model = droidSettingsModel(settings);
   const effort = stringValue(settings.specModeReasoningEffort ?? settings.reasoningEffort);
-  const promoteModel = options.promoteModel ?? true;
-  const promoteEffort = options.promoteEffort ?? true;
 
   return {
     droidSessionId: sessionId,
     ...(model !== undefined ? { droidSessionModel: model } : {}),
     ...(effort !== undefined ? { droidSessionEffort: effort } : {}),
-    ...(model !== undefined && promoteModel
-      ? modelResolutionMetadata({ resolved: model, source: "provider-init" })
+    ...(model !== undefined
+      ? modelResolutionMetadata({ resolved: model, source: "provider-local" })
       : {}),
-    ...(effort !== undefined && promoteEffort
-      ? effortResolutionMetadata({ resolved: effort, source: "provider-init" })
+    ...(effort !== undefined
+      ? effortResolutionMetadata({ resolved: effort, source: "provider-local" })
       : {}),
   };
 }

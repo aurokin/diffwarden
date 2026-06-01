@@ -12,10 +12,6 @@ export type CliInvocation = {
   stdin?: string;
   outputPath?: string;
   droidSessionDirectory?: string;
-  droidSessionSettings?: {
-    promoteModel?: boolean;
-    promoteEffort?: boolean;
-  };
   captureMode: NonNullable<ReviewAdapterOutput["metadata"]>["captureMode"];
 };
 

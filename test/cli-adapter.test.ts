@@ -44,6 +44,9 @@ describe("createCliAdapter", () => {
 
     expect(preflight?.metadata?.readonlyCapability).toBe("enforced");
     expect(preflight?.metadata).toMatchObject({
+      executable: harness.executable,
+      requestedExecutable: harness.executable,
+      executableSource: "config",
       model: "gpt-test",
       requestedModel: "gpt-test",
       resolvedModel: "gpt-test",
@@ -61,6 +64,9 @@ describe("createCliAdapter", () => {
     });
     expect(output.metadata).toMatchObject({
       captureMode: "native-structured",
+      executable: harness.executable,
+      requestedExecutable: harness.executable,
+      executableSource: "config",
       model: "gpt-test",
       requestedModel: "gpt-test",
       resolvedModel: "gpt-test",
@@ -100,6 +106,36 @@ describe("createCliAdapter", () => {
       modelResolutionSource: "requested",
     });
     expect(invocation.stdin).toBe("review prompt");
+  });
+
+  it("records adapter-default executable provenance when no executable is configured", async () => {
+    const harness = createHarness("gemini");
+    const adapter = createCliAdapter("gemini");
+    const reviewer: ReviewReviewerConfig = {
+      id: "gemini",
+      sdk: "gemini",
+      transport: "cli",
+      readonly: true,
+    };
+
+    const preflight = await adapter.preflight?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: harness.env,
+    });
+    const output = await adapter.run(createInput(reviewer, harness));
+
+    expect(preflight?.metadata).toMatchObject({
+      executable: harness.executable,
+      requestedExecutable: "gemini",
+      executableSource: "adapter-default",
+    });
+    expect(output.metadata).toMatchObject({
+      executable: harness.executable,
+      requestedExecutable: "gemini",
+      executableSource: "adapter-default",
+    });
   });
 
   it("runs Antigravity with the prompt-bearing print flag", async () => {

@@ -49,6 +49,8 @@ else is stored there.
 Prefer stable installed reviewer executables in `cliOptions.executable`. Avoid pointing
 Diffwarden at generated temp scripts, changing build outputs, or downloaded binaries that still
 carry quarantine metadata.
+For Antigravity, point to the installed `agy` CLI executable, not a stale shim or path inside
+`/Applications/Antigravity.app`.
 
 Good:
 

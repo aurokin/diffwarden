@@ -287,7 +287,6 @@ describe("cliSpecs", () => {
       ]),
     );
     expect(droid.droidSessionDirectory).toBe(path.join(homeDir, ".factory", "sessions", "-repo"));
-    expect(droid.droidSessionSettings).toEqual({ promoteModel: false, promoteEffort: false });
     expect(grok.args).toEqual(
       expect.arrayContaining([
         "--prompt-file",
@@ -357,9 +356,6 @@ describe("cliSpecs", () => {
     );
 
     expect(droid.args.join(" ")).not.toContain("--spec-reasoning-effort");
-    expect(droid.droidSessionSettings).toMatchObject({
-      promoteEffort: true,
-    });
     const output = await cliSpecs.droid.parseOutput(
       runResult({
         stdout: JSON.stringify({
@@ -372,7 +368,7 @@ describe("cliSpecs", () => {
     );
     expect(output.metadata).toMatchObject({
       resolvedEffort: "high",
-      effortResolutionSource: "provider-init",
+      effortResolutionSource: "provider-local",
     });
     expect(output.metadata).not.toHaveProperty("requestedEffort");
   });
@@ -567,9 +563,9 @@ describe("cliSpecs", () => {
         droidSessionModel: "gpt-5.4-mini",
         droidSessionEffort: "high",
         resolvedModel: "gpt-5.4-mini",
-        modelResolutionSource: "provider-init",
+        modelResolutionSource: "provider-local",
         resolvedEffort: "high",
-        effortResolutionSource: "provider-init",
+        effortResolutionSource: "provider-local",
       },
     });
 
@@ -607,9 +603,9 @@ describe("cliSpecs", () => {
         droidSessionModel: "claude-opus-4-8",
         droidSessionEffort: "medium",
         resolvedModel: "claude-opus-4-8",
-        modelResolutionSource: "provider-init",
+        modelResolutionSource: "provider-local",
         resolvedEffort: "medium",
-        effortResolutionSource: "provider-init",
+        effortResolutionSource: "provider-local",
       },
     });
 

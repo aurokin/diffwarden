@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { mergeResolutionMetadataRecords } from "../adapters/metadata.js";
 import type { DiffwardenConfig } from "./config.js";
 import { invalidCli } from "./errors.js";
 import type {
@@ -350,8 +351,11 @@ function reportValueResolution(
     source: string;
   },
 ): ReviewReportValueResolution | undefined {
-  const metadata = reviewer.adapter_metadata ?? reviewer.preflight?.metadata;
-  if (metadata === undefined) {
+  const metadata = mergeResolutionMetadataRecords(
+    reviewer.preflight?.metadata,
+    reviewer.adapter_metadata,
+  );
+  if (Object.keys(metadata).length === 0) {
     return undefined;
   }
 
