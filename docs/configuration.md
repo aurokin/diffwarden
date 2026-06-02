@@ -139,8 +139,9 @@ not run extra `--version` probes solely for reporting.
 
 Executable-backed adapters include the resolved `executable` path plus `requestedExecutable`
 and `executableSource`. `executableSource: "config"` means the executable string came from
-reviewer `cliOptions.executable`; `adapter-default` means Diffwarden used the built-in executable
-name and resolved it from `PATH`. These fields describe Diffwarden's launcher selection, not a
+reviewer executable config, usually `cliOptions.executable` and for Droid SDK
+`sdkOptions.executable`; `adapter-default` means Diffwarden used the built-in executable name
+and resolved it from `PATH`. These fields describe Diffwarden's launcher selection, not a
 provider-observed runtime value.
 
 Adapter metadata may include `requestedModel`, `resolvedModel`, `modelResolutionSource`,
@@ -262,6 +263,16 @@ history matters. Codex CLI disables Codex web search by default with
 `web_search = "disabled"`; set `cliOptions.webSearch` to `"enabled"` or `"inherit"` when a
 reviewer should use a different policy.
 
+OpenCode CLI receives prompts on stdin and uses a generated `diffwarden-review-*` agent in
+low-tool mode by default. Diffwarden supplies the patch in the prompt, allows only `read`,
+`glob`, and `grep` through both `OPENCODE_CONFIG_CONTENT` and `OPENCODE_PERMISSION`, denies all
+other OpenCode tool permissions, and tells OpenCode not to run the patch provenance command.
+Diffwarden does not inject an OpenCode step cap; the reviewer timeout is the run-level
+circuit breaker. Set `cliOptions.agent` to select an existing primary OpenCode agent. If
+`cliOptions.agent` is set, or if `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG`, or
+`OPENCODE_CONFIG_DIR` is already present in the effective environment passed to OpenCode,
+Diffwarden does not inject the generated agent config.
+
 ```json
 {
   "reviewers": [
@@ -288,6 +299,7 @@ reviewer should use a different policy.
       "engine": "droid",
       "transport": "native",
       "sdkOptions": {
+        "executable": "/Users/auro/.local/bin/droid",
         "machineId": "YOUR_DROID_COMPUTER_ID"
       }
     }

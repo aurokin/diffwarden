@@ -382,13 +382,18 @@ function configuredReviewerExecutable(
   reviewer: ActiveReviewer,
   transport: ReviewerTransport,
 ): string | undefined {
+  if (reviewer.sdk === "droid" && transport === "sdk") {
+    return (
+      stringValue(reviewer.sdkOptions?.executable) ?? stringValue(reviewer.cliOptions?.executable)
+    );
+  }
+
   const cliExecutable = stringValue(reviewer.cliOptions?.executable);
   if (cliExecutable !== undefined) {
     return cliExecutable;
   }
-  return reviewer.sdk === "droid" && transport === "sdk"
-    ? stringValue(reviewer.sdkOptions?.executable)
-    : undefined;
+
+  return undefined;
 }
 
 function uniqueActiveExecutables(executables: ActiveExecutable[]): ActiveExecutable[] {

@@ -282,8 +282,17 @@ async function checkDroidExecutable(
 }
 
 function droidExecutable(reviewer: ReviewReviewerConfig): string {
-  const executable = reviewer.cliOptions?.executable ?? reviewer.sdkOptions?.executable;
-  return typeof executable === "string" && executable.trim() ? executable : defaultDroidExecutable;
+  const sdkExecutable = reviewer.sdkOptions?.executable;
+  if (typeof sdkExecutable === "string" && sdkExecutable.trim()) {
+    return sdkExecutable;
+  }
+
+  const cliExecutable = reviewer.cliOptions?.executable;
+  if (typeof cliExecutable === "string" && cliExecutable.trim()) {
+    return cliExecutable;
+  }
+
+  return defaultDroidExecutable;
 }
 
 function droidMachineId(reviewer: ReviewReviewerConfig): string | undefined {

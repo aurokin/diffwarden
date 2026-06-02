@@ -261,6 +261,60 @@ describe("live doctor executable provenance", () => {
     });
   });
 
+  it("uses Droid SDK cliOptions executable as a legacy fallback", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = executableFixture("droid-cli-fallback");
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["droid-sdk-local"] },
+      reviewers: [
+        {
+          id: "droid-sdk-local",
+          engine: "droid",
+          cliOptions: { executable },
+        },
+      ],
+    });
+
+    const row = await doctorRow("droid-sdk", { PATH: "" });
+
+    expect(row).toMatchObject({
+      status: `found: ${executable}`,
+      executable,
+      resolvedExecutable: executable,
+      executableSource: "config",
+      executableSourceDetail: "reviewer droid-sdk-local",
+    });
+  });
+
+  it("prefers Droid SDK executable overrides over CLI executable overrides for SDK rows", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const sdkExecutable = executableFixture("droid-sdk-local");
+    const cliExecutable = executableFixture("droid-cli-local");
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["droid-sdk-local"] },
+      reviewers: [
+        {
+          id: "droid-sdk-local",
+          engine: "droid",
+          sdkOptions: { executable: sdkExecutable },
+          cliOptions: { executable: cliExecutable },
+        },
+      ],
+    });
+
+    const row = await doctorRow("droid-sdk", { PATH: "" });
+
+    expect(row).toMatchObject({
+      status: `found: ${sdkExecutable}`,
+      executable: sdkExecutable,
+      resolvedExecutable: sdkExecutable,
+      executableSource: "config",
+      executableSourceDetail: "reviewer droid-sdk-local",
+    });
+  });
+
   it("keeps Droid SDK and CLI executable config on their own rows", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
     const sdkExecutable = executableFixture("droid-sdk-local");
@@ -588,7 +642,15 @@ async function antigravityRow(env: NodeJS.ProcessEnv) {
 }
 
 async function doctorRow(id: string, env: NodeJS.ProcessEnv) {
-  const rows = await collectLiveDoctorRows({ cwd: testRoot(), repoRoot: testRoot(), env });
+  const rows = await collectLiveDoctorRows({
+    cwd: testRoot(),
+    repoRoot: testRoot(),
+    env: {
+      HOME: testRoot(),
+      XDG_CONFIG_HOME: path.join(testRoot(), ".config"),
+      ...env,
+    },
+  });
   const row = rows.find((candidate) => candidate.id === id);
   if (row === undefined) {
     throw new Error(`missing ${id} doctor row`);

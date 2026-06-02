@@ -56,6 +56,11 @@ export function numberCliOption(reviewer: ReviewReviewerConfig, key: string): nu
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+export function stringCliOption(reviewer: ReviewReviewerConfig, key: string): string | undefined {
+  const value = reviewer.cliOptions?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 export function codexGlobalArgs(reviewer: ReviewReviewerConfig): string[] {
   const args: string[] = [];
   pushModel(args, reviewer);

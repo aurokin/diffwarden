@@ -16,6 +16,10 @@ Legend:
 - `prompt-only`: Diffwarden asks for read-only review behavior, but hard enforcement is not
   proven for that adapter path.
 
+For the cross-transport tool policy, including the rule that reviewer timeout is the
+run-level circuit breaker instead of tool-call or step caps, see
+[`adapters.md`](./adapters.md#tool-policy-guidelines).
+
 ## Reviewer Selection
 
 | Reviewer spec | Engine | Default transport | Alternate transport | Default executable | Default model |
@@ -80,7 +84,7 @@ SDK-backed reviewers can opt into CLI transport from config:
 | `droid` SDK | Uses Factory Droid spec interaction mode, autonomy off, JSON-schema output, optional `sdkOptions.machineId`, and Diffwarden session tags. SDK sessions still appear in Factory session history. |
 | `droid` CLI | Uses `droid exec --use-spec`, JSON output, Diffwarden session tags, and model/effort flags where provided. This is the recommended Droid path for routine reviews. |
 | `gemini` CLI | Uses JSON output and plan approval mode. |
-| `opencode` CLI | Uses `opencode run --pure`, provider-qualified model support, effort mapped to variant, and a restrictive `OPENCODE_PERMISSION` environment policy. It remains marked prompt-only until hard read-only enforcement is proven. |
+| `opencode` CLI | Uses `opencode run --pure`, stdin prompt input, provider-qualified model support, effort mapped to variant, a generated low-tool `diffwarden-review-*` agent, and an `OPENCODE_PERMISSION` policy that allows only `read`, `glob`, and `grep` by default. It remains marked prompt-only until hard read-only enforcement is proven. |
 | `grok` CLI | Uses plan permission mode, disables subagents, disables memory, and disables web search. It remains marked prompt-only until hard read-only enforcement is proven. |
 | `antigravity` CLI | Uses prompt-bearing print mode with a temp prompt file, sandbox mode, and adds the reviewed directory. Model and effort overrides are rejected for this path. |
 

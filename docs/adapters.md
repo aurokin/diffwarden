@@ -39,6 +39,32 @@ Codex also has an opt-in app-server transport:
 
 SDK-backed families can also opt into CLI transport through config.
 
+## Tool Policy Guidelines
+
+Reviewer adapters should expose the smallest useful read-only tool surface whenever the
+underlying SDK, app-server, or CLI allows it. The reviewed patch remains the source of truth,
+but reviewers need enough local context to inspect surrounding code, tests, and helper APIs.
+
+Preferred tools are direct file and repository inspection primitives: read files, list or glob
+files, grep/search text, and equivalent read-only repository queries. Avoid write-capable tools,
+patch/edit tools, shell execution, external publishing, browser/web fetch, task spawning,
+subagents, memory/session mutation, and broad plugin surfaces unless a provider transport cannot
+perform a useful review without them. If shell access is the only practical inspection path,
+constrain it to read-only commands and document the weaker enforcement level.
+
+Do not impose adapter-specific tool-call, turn, or step caps for normal reviews. Diffwarden's
+reviewer timeout is the run-level circuit breaker. Tool budgets can stop a real review before
+the model has enough evidence, especially on providers that use several small read/search turns.
+If a provider has an unavoidable native cap, surface that as a transport limitation rather than
+treating it as Diffwarden policy.
+
+Every adapter should document its effective read-only capability as one of:
+
+- `enforced`: the transport provides a native read-only mode, sandbox, or spec mode.
+- `tool-restricted`: Diffwarden exposes only read-oriented tools, but enforcement depends on
+  the provider runtime.
+- `prompt-only`: Diffwarden asks for read-only behavior, but hard enforcement is not proven.
+
 ## Model And Effort Metadata
 
 Adapters keep the legacy `model` and `effort` metadata fields and also report explicit
@@ -324,10 +350,21 @@ Codex CLI sets `web_search = "disabled"` by default to match Codex review mode. 
 `cliOptions.webSearch` to `"enabled"` to opt into live search, or `"inherit"` to leave
 Codex's configured default untouched.
 
+OpenCode CLI receives the review prompt on stdin, adds transport-specific guidance to use the
+embedded patch first, uses a generated low-tool `diffwarden-review-*` agent by default, and injects
+`OPENCODE_CONFIG_CONTENT` with a generated agent that allows only `read`, `glob`, and `grep`
+while denying every other tool permission unless the caller already supplied
+OpenCode config through `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, or
+selected `cliOptions.agent`. Diffwarden also sets `OPENCODE_PERMISSION` with the same tool
+policy for the spawned process. Diffwarden does not inject an OpenCode step cap; the configured
+reviewer timeout is the run-level circuit breaker. Set `cliOptions.agent` to use an existing
+primary OpenCode agent.
+
 SDK-backed families, including Droid, can use `transport: "cli"` from config.
-`cliOptions.executable` can point at non-standard installs, such as local `pi`, `droid`, or
-`agy` binaries. CLI auth is delegated to the underlying executable, so live runs require each
-tool to be logged in or configured through its own environment variables.
+`cliOptions.executable` can point at non-standard CLI installs, such as local `pi`, `droid`, or
+`agy` binaries. Droid SDK reviewers use `sdkOptions.executable`, with `cliOptions.executable`
+kept as a legacy fallback. CLI auth is delegated to the underlying executable, so live runs
+require each tool to be logged in or configured through its own environment variables.
 
 Antigravity uses `agy --print` because `agy` print mode expects the prompt as the flag value.
 Diffwarden stores the full assembled review prompt in a temporary file and passes a short print

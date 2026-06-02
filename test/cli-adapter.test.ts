@@ -108,6 +108,56 @@ describe("createCliAdapter", () => {
     expect(invocation.stdin).toBe("review prompt");
   });
 
+  it("runs Opencode with stdin prompt input and low-tool review agent config", async () => {
+    const harness = createHarness("opencode");
+    const adapter = createCliAdapter("opencode");
+    const reviewer = createReviewer("opencode", harness.executable);
+
+    const output = await adapter.run(createInput(reviewer, harness));
+    const invocation = harness.readInvocation();
+
+    expect(output.text).toContain("opencode first");
+    expect(output.metadata).toMatchObject({
+      captureMode: "text",
+      readonlyCapability: "prompt-only",
+    });
+    expect(invocation.args).toEqual([
+      "run",
+      "--pure",
+      "--format",
+      "json",
+      "--dir",
+      harness.cwd,
+      "--agent",
+      expect.stringMatching(/^diffwarden-review-[0-9a-f-]{36}$/),
+    ]);
+    const agent = invocation.args[invocation.args.indexOf("--agent") + 1] ?? "";
+    expect(invocation.stdin).toContain("OpenCode transport note:");
+    expect(invocation.stdin).toContain("Only read, glob, and grep are available");
+    expect(invocation.stdin).toContain("review prompt");
+    const config = JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT ?? "{}");
+    expect(config).toMatchObject({
+      agent: {
+        [agent]: {
+          mode: "primary",
+          permission: {
+            "*": "deny",
+            read: "allow",
+            glob: "allow",
+            grep: "allow",
+          },
+        },
+      },
+    });
+    expect(config.agent[agent]).not.toHaveProperty("steps");
+    expect(JSON.parse(invocation.env.OPENCODE_PERMISSION ?? "{}")).toEqual({
+      "*": "deny",
+      read: "allow",
+      glob: "allow",
+      grep: "allow",
+    });
+  });
+
   it("records adapter-default executable provenance when no executable is configured", async () => {
     const harness = createHarness("gemini");
     const adapter = createCliAdapter("gemini");
@@ -537,6 +587,7 @@ fs.writeFileSync(invocationPath, JSON.stringify({
   env: {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+    OPENCODE_CONFIG_CONTENT: process.env.OPENCODE_CONFIG_CONTENT,
     OPENCODE_PERMISSION: process.env.OPENCODE_PERMISSION,
   },
   pid: process.pid,

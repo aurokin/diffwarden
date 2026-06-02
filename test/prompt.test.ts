@@ -21,6 +21,10 @@ describe("buildReviewPrompt", () => {
     expect(prompt).toContain(
       '"patch is correct" only when existing code and tests should continue',
     );
+    expect(prompt).toContain(
+      "The patch to review is included below. Use it as the source of truth.",
+    );
+    expect(prompt).toContain("Patch provenance command:");
     expect(prompt).toContain("Only report bugs introduced by this diff.");
     expect(prompt).toContain("Patch:");
     expect(prompt).toContain("diff --git a/tracked.txt b/tracked.txt");

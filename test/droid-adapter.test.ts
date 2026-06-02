@@ -61,6 +61,58 @@ describe("droidAdapter", () => {
     );
   });
 
+  it("prefers sdkOptions executable over cliOptions executable for SDK transport", async () => {
+    const calls: unknown[] = [];
+    const adapter = createDroidAdapter({
+      loadSdk: async () => mockDroidSdk(calls),
+      checkExecutable: async (executable) => {
+        calls.push({ executable });
+        return executable;
+      },
+    });
+
+    const preflight = await adapter.preflight?.({
+      cwd: "/repo",
+      reviewer: createReviewer({
+        cliOptions: { executable: "/opt/droid-cli" },
+        sdkOptions: { executable: "/opt/droid-sdk" },
+      }),
+      readonly: true,
+      env: {},
+    });
+
+    expect(preflight?.metadata).toMatchObject({
+      executable: "/opt/droid-sdk",
+    });
+    expect(calls).toContainEqual(expect.objectContaining({ executable: "/opt/droid-sdk" }));
+  });
+
+  it("falls back to cliOptions executable when sdkOptions executable is blank", async () => {
+    const calls: unknown[] = [];
+    const adapter = createDroidAdapter({
+      loadSdk: async () => mockDroidSdk(calls),
+      checkExecutable: async (executable) => {
+        calls.push({ executable });
+        return executable;
+      },
+    });
+
+    const preflight = await adapter.preflight?.({
+      cwd: "/repo",
+      reviewer: createReviewer({
+        cliOptions: { executable: "/opt/droid-cli" },
+        sdkOptions: { executable: "   " },
+      }),
+      readonly: true,
+      env: {},
+    });
+
+    expect(preflight?.metadata).toMatchObject({
+      executable: "/opt/droid-cli",
+    });
+    expect(calls).toContainEqual(expect.objectContaining({ executable: "/opt/droid-cli" }));
+  });
+
   it("preflights auth against the supplied environment", async () => {
     const adapter = createDroidAdapter({
       loadSdk: async () => mockDroidSdk([]),

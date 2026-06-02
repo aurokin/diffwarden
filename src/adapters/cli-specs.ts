@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -16,11 +17,72 @@ import {
   pushModel,
   pushModelAndEffort,
   pushPromptArg,
+  stringCliOption,
 } from "./cli-helpers.js";
 import { cliRuntimeResolutionMetadata } from "./cli-runtime-metadata.js";
 import type { CliEngine, CliSpec } from "./cli-types.js";
 import { droidSessionTag } from "./droid-session.js";
 import { effortResolutionMetadata, modelResolutionMetadata } from "./metadata.js";
+import type { ReviewAdapterInput } from "./types.js";
+
+const opencodeGeneratedAgentPrefix = "diffwarden-review";
+
+function opencodeReviewPermission(): Record<string, "allow" | "deny"> {
+  return {
+    "*": "deny",
+    read: "allow",
+    glob: "allow",
+    grep: "allow",
+  };
+}
+
+function opencodeInjectedConfig(
+  input: ReviewAdapterInput,
+): { agent: string; content: string } | undefined {
+  const requestedAgent = stringCliOption(input.reviewer, "agent");
+  if (requestedAgent !== undefined && requestedAgent !== opencodeGeneratedAgentPrefix) {
+    return undefined;
+  }
+
+  const effectiveEnv = input.env ?? process.env;
+  if (opencodeConfigEnvPresent(effectiveEnv)) {
+    return undefined;
+  }
+
+  const agent = `${opencodeGeneratedAgentPrefix}-${randomUUID()}`;
+  return {
+    agent,
+    content: JSON.stringify({
+      agent: {
+        [agent]: {
+          mode: "primary",
+          description: "Low-tool read-only agent used by Diffwarden review runs.",
+          permission: opencodeReviewPermission(),
+        },
+      },
+    }),
+  };
+}
+
+function opencodeConfigEnvPresent(env: NodeJS.ProcessEnv): boolean {
+  return (
+    env.OPENCODE_CONFIG_CONTENT !== undefined ||
+    env.OPENCODE_CONFIG !== undefined ||
+    env.OPENCODE_CONFIG_DIR !== undefined
+  );
+}
+
+function opencodeReviewPrompt(prompt: string): string {
+  return [
+    "OpenCode transport note:",
+    "- The complete patch is included below; treat it as the source of truth for diff-backed reviews.",
+    "- Do not run the patch provenance command.",
+    "- Only read, glob, and grep are available for local context; do not edit, write, run shell commands, start tasks, or fetch web content.",
+    "- Return the final ReviewResult JSON as soon as you have enough evidence.",
+    "",
+    prompt,
+  ].join("\n");
+}
 
 export const cliSpecs: Record<CliEngine, CliSpec> = {
   codex: {
@@ -184,6 +246,11 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
   opencode: {
     async buildInvocation(input) {
       const args = ["run", "--pure", "--format", "json", "--dir", input.cwd];
+      const injectedConfig = opencodeInjectedConfig(input);
+      const agent = injectedConfig?.agent ?? stringCliOption(input.reviewer, "agent");
+      if (agent !== undefined) {
+        args.push("--agent", agent);
+      }
       const model = providerQualifiedModel(input.reviewer);
       if (model !== undefined) {
         args.push("--model", model);
@@ -191,33 +258,24 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       if (input.reviewer.effort !== undefined && input.reviewer.effort !== "off") {
         args.push("--variant", input.reviewer.effort);
       }
-      pushPromptArg(args, input.prompt, "opencode");
 
       return {
         executable: cliExecutable(input.reviewer, defaultCliExecutable("opencode")),
         args,
+        stdin: opencodeReviewPrompt(input.prompt),
         env: {
-          OPENCODE_PERMISSION: JSON.stringify({
-            "*": "deny",
-            read: "allow",
-            glob: "allow",
-            grep: "allow",
-            list: "allow",
-            edit: "deny",
-            write: "deny",
-            bash: "deny",
-            task: "deny",
-            todowrite: "deny",
-            webfetch: "deny",
-            websearch: "deny",
-          }),
+          OPENCODE_PERMISSION: JSON.stringify(opencodeReviewPermission()),
+          ...(injectedConfig !== undefined
+            ? { OPENCODE_CONFIG_CONTENT: injectedConfig.content }
+            : {}),
         },
         captureMode: "text",
       };
     },
     async parseOutput(result) {
+      const text = collectJsonLinesText(result.stdout) || result.stdout.trim();
       return {
-        text: collectJsonLinesText(result.stdout) || result.stdout.trim(),
+        text,
         metadata: {
           captureMode: "text",
           readonlyCapability: "prompt-only",

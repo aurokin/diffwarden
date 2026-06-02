@@ -226,18 +226,39 @@ describe("cliSpecs", () => {
       "json",
       "--dir",
       "/repo",
+      "--agent",
+      expect.stringMatching(/^diffwarden-review-[0-9a-f-]{36}$/),
       "--model",
       "openrouter/anthropic/claude-sonnet",
       "--variant",
       "high",
-      "review prompt",
     ]);
-    expect(JSON.parse(opencode.env?.OPENCODE_PERMISSION ?? "{}")).toMatchObject({
+    const opencodeAgent = opencode.args[opencode.args.indexOf("--agent") + 1] ?? "";
+    expect(opencode.stdin).toContain("OpenCode transport note:");
+    expect(opencode.stdin).toContain("Do not run the patch provenance command.");
+    expect(opencode.stdin).toContain("Only read, glob, and grep are available");
+    expect(opencode.stdin).toContain("review prompt");
+    expect(JSON.parse(opencode.env?.OPENCODE_PERMISSION ?? "{}")).toEqual({
       "*": "deny",
       read: "allow",
-      edit: "deny",
-      bash: "deny",
+      glob: "allow",
+      grep: "allow",
     });
+    const opencodeConfig = JSON.parse(opencode.env?.OPENCODE_CONFIG_CONTENT ?? "{}");
+    expect(opencodeConfig).toMatchObject({
+      agent: {
+        [opencodeAgent]: {
+          mode: "primary",
+          permission: {
+            "*": "deny",
+            read: "allow",
+            glob: "allow",
+            grep: "allow",
+          },
+        },
+      },
+    });
+    expect(opencodeConfig.agent[opencodeAgent]).not.toHaveProperty("steps");
     expect(pi.args).toEqual(
       expect.arrayContaining([
         "--print",
@@ -252,6 +273,90 @@ describe("cliSpecs", () => {
       ]),
     );
     expect(pi.stdin).toBe("review prompt");
+  });
+
+  it("preserves Opencode config content from the effective inherited environment", async () => {
+    const reviewer = createReviewer("opencode");
+    const explicitConfig = JSON.stringify({ agent: { custom: { mode: "primary" } } });
+    const explicit = await cliSpecs.opencode.buildInvocation(
+      createInput(reviewer, { env: { OPENCODE_CONFIG_CONTENT: explicitConfig } }),
+      createTempDir(),
+    );
+
+    expect(explicit.env?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+
+    const previousAmbient = process.env.OPENCODE_CONFIG_CONTENT;
+    process.env.OPENCODE_CONFIG_CONTENT = explicitConfig;
+    try {
+      const ambient = await cliSpecs.opencode.buildInvocation(
+        createInput(reviewer),
+        createTempDir(),
+      );
+      const isolated = await cliSpecs.opencode.buildInvocation(
+        createInput(reviewer, { env: { PATH: process.env.PATH ?? "" } }),
+        createTempDir(),
+      );
+
+      expect(ambient.env?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+      expect(isolated.env?.OPENCODE_CONFIG_CONTENT).toBeDefined();
+    } finally {
+      if (previousAmbient === undefined) {
+        Reflect.deleteProperty(process.env, "OPENCODE_CONFIG_CONTENT");
+      } else {
+        process.env.OPENCODE_CONFIG_CONTENT = previousAmbient;
+      }
+    }
+  });
+
+  it("does not inject a generated Opencode agent when config file env is present", async () => {
+    for (const env of [
+      { OPENCODE_CONFIG: "/config/opencode.json" },
+      { OPENCODE_CONFIG_DIR: "/config/opencode" },
+    ]) {
+      const invocation = await cliSpecs.opencode.buildInvocation(
+        createInput(createReviewer("opencode"), { env }),
+        createTempDir(),
+      );
+
+      expect(invocation.args).not.toContain("--agent");
+      expect(invocation.env?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    }
+  });
+
+  it("does not inject a generated Opencode agent when cliOptions selects one", async () => {
+    const invocation = await cliSpecs.opencode.buildInvocation(
+      createInput(createReviewer("opencode", { cliOptions: { agent: "existing-reviewer" } })),
+      createTempDir(),
+    );
+
+    expect(invocation.args).toContain("existing-reviewer");
+    expect(invocation.env?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(JSON.parse(invocation.env?.OPENCODE_PERMISSION ?? "{}")).toEqual({
+      "*": "deny",
+      read: "allow",
+      glob: "allow",
+      grep: "allow",
+    });
+  });
+
+  it("treats the legacy Opencode review agent name as a generated-agent alias", async () => {
+    const invocation = await cliSpecs.opencode.buildInvocation(
+      createInput(createReviewer("opencode", { cliOptions: { agent: "diffwarden-review" } })),
+      createTempDir(),
+    );
+    const agent = invocation.args[invocation.args.indexOf("--agent") + 1] ?? "";
+    const config = JSON.parse(invocation.env?.OPENCODE_CONFIG_CONTENT ?? "{}");
+
+    expect(agent).toMatch(/^diffwarden-review-[0-9a-f-]{36}$/);
+    expect(agent).not.toBe("diffwarden-review");
+    expect(config.agent[agent]).toMatchObject({
+      permission: {
+        "*": "deny",
+        read: "allow",
+        glob: "allow",
+        grep: "allow",
+      },
+    });
   });
 
   it("builds Droid and Grok file-prompt invocations", async () => {
