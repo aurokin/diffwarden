@@ -359,6 +359,96 @@ describe("cliSpecs", () => {
     });
   });
 
+  it("classifies Opencode JSON error events as reviewer failures", async () => {
+    await expect(
+      cliSpecs.opencode.parseOutput(
+        runResult({
+          stdout: JSON.stringify({
+            type: "error",
+            error: {
+              name: "APIError",
+              data: {
+                message: "Insufficient balance.",
+              },
+            },
+          }),
+        }),
+        { executable: "opencode", args: [], captureMode: "text" },
+      ),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("APIError: Insufficient balance."),
+    });
+  });
+
+  it("keeps Opencode text output after a recoverable JSON error event", async () => {
+    await expect(
+      cliSpecs.opencode.parseOutput(
+        runResult({
+          stdout: [
+            JSON.stringify({
+              type: "error",
+              error: {
+                name: "ToolError",
+                message: "Recoverable tool failure.",
+              },
+            }),
+            JSON.stringify({
+              type: "text",
+              part: {
+                type: "text",
+                text: "review text",
+              },
+            }),
+          ].join("\n"),
+        }),
+        { executable: "opencode", args: [], captureMode: "text" },
+      ),
+    ).resolves.toMatchObject({
+      text: "review text",
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "prompt-only",
+      },
+    });
+  });
+
+  it("keeps Opencode structured review output after a recoverable JSON error event", async () => {
+    const review = {
+      findings: [],
+      overall_correctness: "patch is correct" as const,
+      overall_explanation: "ok",
+      overall_confidence_score: 1,
+    };
+
+    await expect(
+      cliSpecs.opencode.parseOutput(
+        runResult({
+          stdout: [
+            JSON.stringify({
+              type: "error",
+              error: {
+                name: "ToolError",
+                message: "Recoverable tool failure.",
+              },
+            }),
+            JSON.stringify({
+              type: "result",
+              result: review,
+            }),
+          ].join("\n"),
+        }),
+        { executable: "opencode", args: [], captureMode: "text" },
+      ),
+    ).resolves.toMatchObject({
+      structured: review,
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "prompt-only",
+      },
+    });
+  });
+
   it("builds Droid and Grok file-prompt invocations", async () => {
     const droidTemp = createTempDir();
     const grokTemp = createTempDir();

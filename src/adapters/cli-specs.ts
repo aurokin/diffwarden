@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { collectJsonLinesText, normalizeJsonLikeAdapterOutput } from "../core/adapter-output.js";
+import {
+  collectJsonLinesText,
+  normalizeJsonLikeAdapterOutput,
+  unwrapStructuredReview,
+} from "../core/adapter-output.js";
+import { reviewerFailed } from "../core/errors.js";
 import { reviewResultJsonSchema, reviewResultStrictJsonSchema } from "../core/schema.js";
 import { claudeCliEnv, resolveClaudeRuntime } from "./claude.js";
 import {
@@ -70,6 +75,73 @@ function opencodeConfigEnvPresent(env: NodeJS.ProcessEnv): boolean {
     env.OPENCODE_CONFIG !== undefined ||
     env.OPENCODE_CONFIG_DIR !== undefined
   );
+}
+
+function opencodeErrorMessage(raw: string): string | undefined {
+  for (const event of opencodeJsonLineEvents(raw)) {
+    const message = opencodeErrorEventMessage(event);
+    if (message !== undefined) {
+      return message;
+    }
+  }
+
+  return undefined;
+}
+
+function opencodeJsonLineEvents(raw: string): unknown[] {
+  const events: unknown[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      events.push(JSON.parse(trimmed));
+    } catch {
+      // Non-JSON text is handled by the normal text fallback.
+    }
+  }
+
+  return events;
+}
+
+function opencodeErrorEventMessage(event: unknown): string | undefined {
+  if (!isRecord(event) || event.type !== "error") {
+    return undefined;
+  }
+
+  return opencodeErrorDetail(event.error) ?? stringValue(event.message) ?? JSON.stringify(event);
+}
+
+function opencodeStructuredReview(raw: string): unknown | undefined {
+  for (const event of opencodeJsonLineEvents(raw)) {
+    const review = unwrapStructuredReview(event);
+    if (review !== undefined) {
+      return review;
+    }
+  }
+
+  return undefined;
+}
+
+function opencodeErrorDetail(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const nested =
+    stringValue(value.message) ??
+    opencodeErrorDetail(value.data) ??
+    opencodeErrorDetail(value.error) ??
+    stringValue(value.responseBody);
+  const name = stringValue(value.name);
+  if (name !== undefined && nested !== undefined) {
+    return `${name}: ${nested}`;
+  }
+  return nested ?? name;
 }
 
 function opencodeReviewPrompt(prompt: string): string {
@@ -273,14 +345,28 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       };
     },
     async parseOutput(result) {
-      const text = collectJsonLinesText(result.stdout) || result.stdout.trim();
+      const metadata = {
+        captureMode: "text" as const,
+        readonlyCapability: "prompt-only" as const,
+        ...cliRuntimeResolutionMetadata(result.stdout),
+      };
+      const structured = opencodeStructuredReview(result.stdout);
+      if (structured !== undefined) {
+        return {
+          structured,
+          metadata,
+        };
+      }
+
+      const text = collectJsonLinesText(result.stdout);
+      const errorMessage = opencodeErrorMessage(result.stdout);
+      if (!text && errorMessage !== undefined) {
+        throw reviewerFailed(`OpenCode reviewer failed: ${errorMessage}`);
+      }
+
       return {
-        text,
-        metadata: {
-          captureMode: "text",
-          readonlyCapability: "prompt-only",
-          ...cliRuntimeResolutionMetadata(result.stdout),
-        },
+        text: text || result.stdout.trim(),
+        metadata,
       };
     },
   },
