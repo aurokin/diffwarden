@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="skills/diffwarden/assets/logo.png" alt="diffwarden logo" width="720">
+  <img src="assets/logo.png" alt="diffwarden logo" width="720">
 </p>
 
 # diffwarden
