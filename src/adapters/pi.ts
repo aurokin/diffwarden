@@ -30,9 +30,18 @@ import type {
 const piPackageName = "@earendil-works/pi-coding-agent";
 const piThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 const piAuthSources = ["isolated", "shared"] as const;
+const piTransportSettings = ["auto", "sse", "websocket", "websocket-cached"] as const;
+const piMessageDeliveryModes = ["all", "one-at-a-time"] as const;
+const defaultPiReviewSettings: Partial<PiSettings> = {
+  transport: "auto",
+  steeringMode: "one-at-a-time",
+  followUpMode: "one-at-a-time",
+};
 
 type PiThinkingLevel = (typeof piThinkingLevels)[number];
 type PiAuthSource = (typeof piAuthSources)[number];
+type PiTransportSetting = (typeof piTransportSettings)[number];
+type PiMessageDeliveryMode = (typeof piMessageDeliveryModes)[number];
 
 type PiAdapterDependencies = {
   loadSdk: () => Promise<PiSdk>;
@@ -68,7 +77,7 @@ export function createPiAdapter(
         input.reviewer.effort,
         input.reviewer.effortSource,
       );
-      const settingsManager = createPiSettingsManager(sdk);
+      const settingsManager = createPiSettingsManager(sdk, input.reviewer);
 
       const metadata: ReviewAdapterPreflightResult["metadata"] = sdkPreflightMetadata("pi", {
         availableModelCount: availableModels.length,
@@ -147,7 +156,7 @@ export function createPiAdapter(
         input.reviewer.effort,
         input.reviewer.effortSource,
       );
-      const settingsManager = createPiSettingsManager(sdk);
+      const settingsManager = createPiSettingsManager(sdk, input.reviewer);
 
       try {
         const sessionManager = sdk.SessionManager.inMemory(input.cwd);
@@ -243,6 +252,10 @@ type PiAuthStorage = {
 type PiSessionManager = unknown;
 type PiResourceLoader = unknown;
 type PiSettingsManager = {
+  getTransport?(): string;
+  getSteeringMode?(): string;
+  getFollowUpMode?(): string;
+  getThinkingBudgets?(): Record<string, number> | undefined;
   getCompactionSettings(): {
     enabled: boolean;
     reserveTokens: number;
@@ -262,6 +275,15 @@ type PiSettingsManager = {
 };
 
 type PiSettings = {
+  transport?: PiTransportSetting;
+  steeringMode?: PiMessageDeliveryMode;
+  followUpMode?: PiMessageDeliveryMode;
+  thinkingBudgets?: {
+    minimal?: number;
+    low?: number;
+    medium?: number;
+    high?: number;
+  };
   compaction?: {
     enabled?: boolean;
     reserveTokens?: number;
@@ -543,15 +565,19 @@ function createPiAuthStorage(sdk: PiSdk, authOptions: NormalizedPiAuthOptions): 
   return sdk.AuthStorage.inMemory();
 }
 
-function createPiSettingsManager(sdk: PiSdk): PiSettingsManager {
+function createPiSettingsManager(
+  sdk: PiSdk,
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+): PiSettingsManager {
   if (sdk.SettingsManager?.inMemory === undefined) {
     throw missingRequirement(
       `${piPackageName} does not expose SettingsManager.inMemory; upgrade the package to use the Pi SDK reviewer`,
     );
   }
 
+  const settings = normalizePiReviewSettings(reviewer);
   try {
-    return sdk.SettingsManager.inMemory();
+    return sdk.SettingsManager.inMemory(settings);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw reviewerFailed(`Pi reviewer settings setup failed: ${detail}`);
@@ -562,12 +588,31 @@ function piSettingsMetadata(settingsManager: PiSettingsManager): Record<string, 
   const retry = settingsManager.getRetrySettings();
   const providerRetry = settingsManager.getProviderRetrySettings();
   const compaction = settingsManager.getCompactionSettings();
+  const transport = settingsManager.getTransport?.();
+  const steeringMode = settingsManager.getSteeringMode?.();
+  const followUpMode = settingsManager.getFollowUpMode?.();
+  const thinkingBudgets = settingsManager.getThinkingBudgets?.();
   const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs?.();
 
   return {
     piSettingsSource: "in-memory",
     piSettingsDiskInheritance: false,
     piTimeoutPolicy: "diffwarden-reviewer-timeout",
+    piTransport: transport ?? null,
+    piTransportSource: transport === undefined ? "not-exposed-by-installed-pi-sdk" : "settings",
+    piSteeringMode: steeringMode ?? null,
+    piSteeringModeSource:
+      steeringMode === undefined ? "not-exposed-by-installed-pi-sdk" : "settings",
+    piFollowUpMode: followUpMode ?? null,
+    piFollowUpModeSource:
+      followUpMode === undefined ? "not-exposed-by-installed-pi-sdk" : "settings",
+    piThinkingBudgets: thinkingBudgets ?? null,
+    piThinkingBudgetsSource:
+      settingsManager.getThinkingBudgets === undefined
+        ? "not-exposed-by-installed-pi-sdk"
+        : thinkingBudgets === undefined
+          ? "unset"
+          : "settings",
     piRetryEnabled: retry.enabled,
     piRetryMaxRetries: retry.maxRetries,
     piRetryBaseDelayMs: retry.baseDelayMs,
@@ -583,6 +628,88 @@ function piSettingsMetadata(settingsManager: PiSettingsManager): Record<string, 
     piHttpIdleTimeoutSource:
       httpIdleTimeoutMs === undefined ? "not-exposed-by-installed-pi-sdk" : "settings",
   };
+}
+
+function normalizePiReviewSettings(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+): Partial<PiSettings> {
+  const rawSettings = reviewer.sdkOptions?.settings;
+  if (rawSettings === undefined) {
+    return defaultPiReviewSettings;
+  }
+  if (!isRecord(rawSettings)) {
+    throw invalidConfig("Pi sdkOptions.settings must be an object");
+  }
+
+  const settings: Partial<PiSettings> = { ...defaultPiReviewSettings };
+  if (rawSettings.transport !== undefined) {
+    settings.transport = piTransportOption(rawSettings.transport, "sdkOptions.settings.transport");
+  }
+  if (rawSettings.steeringMode !== undefined) {
+    settings.steeringMode = piMessageDeliveryModeOption(
+      rawSettings.steeringMode,
+      "sdkOptions.settings.steeringMode",
+    );
+  }
+  if (rawSettings.followUpMode !== undefined) {
+    settings.followUpMode = piMessageDeliveryModeOption(
+      rawSettings.followUpMode,
+      "sdkOptions.settings.followUpMode",
+    );
+  }
+  if (rawSettings.thinkingBudgets !== undefined) {
+    settings.thinkingBudgets = piThinkingBudgetsOption(
+      rawSettings.thinkingBudgets,
+      "sdkOptions.settings.thinkingBudgets",
+    );
+  }
+
+  return settings;
+}
+
+function piTransportOption(value: unknown, name: string): PiTransportSetting {
+  if (!isPiTransportSetting(value)) {
+    throw invalidConfig(`${name} must be one of: ${piTransportSettings.join(", ")}`);
+  }
+  return value;
+}
+
+function piMessageDeliveryModeOption(value: unknown, name: string): PiMessageDeliveryMode {
+  if (!isPiMessageDeliveryMode(value)) {
+    throw invalidConfig(`${name} must be one of: ${piMessageDeliveryModes.join(", ")}`);
+  }
+  return value;
+}
+
+function isPiTransportSetting(value: unknown): value is PiTransportSetting {
+  return typeof value === "string" && piTransportSettings.some((transport) => transport === value);
+}
+
+function isPiMessageDeliveryMode(value: unknown): value is PiMessageDeliveryMode {
+  return typeof value === "string" && piMessageDeliveryModes.some((mode) => mode === value);
+}
+
+function piThinkingBudgetsOption(
+  value: unknown,
+  name: string,
+): NonNullable<PiSettings["thinkingBudgets"]> {
+  if (!isRecord(value)) {
+    throw invalidConfig(`${name} must be an object`);
+  }
+
+  const budgets: NonNullable<PiSettings["thinkingBudgets"]> = {};
+  for (const level of ["minimal", "low", "medium", "high"] as const) {
+    const budget = value[level];
+    if (budget === undefined) {
+      continue;
+    }
+    if (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0) {
+      throw invalidConfig(`${name}.${level} must be a positive number`);
+    }
+    budgets[level] = budget;
+  }
+
+  return budgets;
 }
 
 function piAuthMetadata(authOptions: NormalizedPiAuthOptions): Record<string, string> {
@@ -631,6 +758,10 @@ function optionalStringOption(
   }
 
   return value.trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function selectPiModel(

@@ -271,11 +271,14 @@ The Pi path reports a tool-restricted read-only capability. It passes only `read
 and keeps tests credential-free by default.
 
 Diffwarden passes `SettingsManager.inMemory()` to Pi SDK review sessions. This prevents
-global or project Pi `settings.json` files from changing review retry, provider timeout, or
-compaction behavior. Preflight and output metadata report the Pi-native settings that can
-affect runtime duration: agent retry enabled/max retries/base delay, provider request
-timeout/retry/max retry delay, compaction enabled/reserve/keep-recent tokens, and HTTP idle
-timeout when the installed Pi SDK exposes that getter. With
+global or project Pi `settings.json` files from changing review runtime behavior. Review
+sessions use explicit Pi defaults for `transport: "auto"`, `steeringMode: "one-at-a-time"`,
+and `followUpMode: "one-at-a-time"`. Set `sdkOptions.settings` on the reviewer to override
+Pi SDK runtime fields such as `transport` or `thinkingBudgets` without inheriting settings
+files. Preflight and output metadata report those runtime fields plus the Pi-native settings
+that can affect runtime duration: agent retry enabled/max retries/base delay, provider
+request timeout/retry/max retry delay, compaction enabled/reserve/keep-recent tokens, and
+HTTP idle timeout when the installed Pi SDK exposes that getter. With
 `@earendil-works/pi-coding-agent@0.75.3`, HTTP idle timeout is not exposed through the public
 settings manager, so Diffwarden reports it as unavailable instead of guessing. These are
 Pi-native/provider-native controls, not Diffwarden tool-call or step caps. Diffwarden's

@@ -262,11 +262,44 @@ Diffwarden does not inherit global or project Pi `settings.json` files, and it d
 tool-call, turn, step, or retry caps around Pi. The reviewer timeout configured in Diffwarden
 is the authoritative run-level circuit breaker.
 
-Preflight and output metadata report the effective Pi-native retry/provider/compaction
-settings that Pi will use for the session. Provider request timeout and retry values may
-appear as SDK defaults when Pi leaves them unset. HTTP idle timeout is reported when the
-installed Pi SDK exposes it; otherwise metadata marks it as unavailable rather than inferring
-a value from upstream docs.
+Diffwarden passes explicit Pi runtime defaults for review sessions:
+
+```json
+{
+  "transport": "auto",
+  "steeringMode": "one-at-a-time",
+  "followUpMode": "one-at-a-time"
+}
+```
+
+Set `sdkOptions.settings` on a Pi reviewer when a run needs a different Pi SDK runtime
+setting without inheriting settings files:
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "pi-websocket",
+      "engine": "pi",
+      "sdkOptions": {
+        "settings": {
+          "transport": "websocket",
+          "thinkingBudgets": {
+            "high": 12000
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+Supported `sdkOptions.settings` fields are `transport`, `steeringMode`, `followUpMode`, and
+`thinkingBudgets`. Preflight and output metadata report those runtime settings plus the
+effective Pi-native retry/provider/compaction settings that Pi will use for the session.
+Provider request timeout and retry values may appear as SDK defaults when Pi leaves them
+unset. HTTP idle timeout is reported when the installed Pi SDK exposes it; otherwise metadata
+marks it as unavailable rather than inferring a value from upstream docs.
 
 ## CLI Transport Example
 

@@ -109,6 +109,11 @@ describe("piAdapter", () => {
     });
 
     expect(calls.settingsManagerMode).toBe("inMemory");
+    expect(calls.settingsManagerSettings).toEqual({
+      transport: "auto",
+      steeringMode: "one-at-a-time",
+      followUpMode: "one-at-a-time",
+    });
     expect(preflight?.checks.find((check) => check.name === "settings")?.detail).toContain(
       "isolated in-memory settings",
     );
@@ -116,6 +121,14 @@ describe("piAdapter", () => {
       piSettingsSource: "in-memory",
       piSettingsDiskInheritance: false,
       piTimeoutPolicy: "diffwarden-reviewer-timeout",
+      piTransport: "auto",
+      piTransportSource: "settings",
+      piSteeringMode: "one-at-a-time",
+      piSteeringModeSource: "settings",
+      piFollowUpMode: "one-at-a-time",
+      piFollowUpModeSource: "settings",
+      piThinkingBudgets: null,
+      piThinkingBudgetsSource: "unset",
       piRetryEnabled: true,
       piRetryMaxRetries: 5,
       piRetryBaseDelayMs: 1_500,
@@ -137,6 +150,14 @@ describe("piAdapter", () => {
       piSettingsSource: "in-memory",
       piSettingsDiskInheritance: false,
       piTimeoutPolicy: "diffwarden-reviewer-timeout",
+      piTransport: "auto",
+      piTransportSource: "settings",
+      piSteeringMode: "one-at-a-time",
+      piSteeringModeSource: "settings",
+      piFollowUpMode: "one-at-a-time",
+      piFollowUpModeSource: "settings",
+      piThinkingBudgets: null,
+      piThinkingBudgetsSource: "unset",
       piRetryEnabled: true,
       piRetryMaxRetries: 5,
       piRetryBaseDelayMs: 1_500,
@@ -153,6 +174,74 @@ describe("piAdapter", () => {
     });
     expect(calls.createAgentSession[0]).toMatchObject({
       settingsManager: calls.settingsManager,
+    });
+  });
+
+  it("allows explicit Pi SDK runtime settings without inheriting settings files", async () => {
+    const { adapter, calls } = createMockPiAdapter([{ provider: "test", id: "test-model" }], {
+      settings: {
+        transport: "websocket",
+        steeringMode: "all",
+        followUpMode: "all",
+        thinkingBudgets: { high: 12_000 },
+      },
+    });
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "pi",
+        sdk: "pi",
+        readonly: true,
+        sdkOptions: {
+          settings: {
+            transport: "websocket",
+            steeringMode: "all",
+            followUpMode: "all",
+            thinkingBudgets: { high: 12_000 },
+          },
+        },
+      },
+      readonly: true,
+      env: {},
+    });
+
+    expect(calls.settingsManagerSettings).toEqual({
+      transport: "websocket",
+      steeringMode: "all",
+      followUpMode: "all",
+      thinkingBudgets: { high: 12_000 },
+    });
+    expect(preflight?.metadata).toMatchObject({
+      piSettingsSource: "in-memory",
+      piSettingsDiskInheritance: false,
+      piTransport: "websocket",
+      piSteeringMode: "all",
+      piFollowUpMode: "all",
+      piThinkingBudgets: { high: 12_000 },
+    });
+  });
+
+  it("rejects unsupported Pi SDK runtime settings", async () => {
+    const { adapter } = createMockPiAdapter([{ provider: "test", id: "test-model" }]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "pi",
+          sdk: "pi",
+          readonly: true,
+          sdkOptions: { settings: { transport: "invalid-transport" } },
+        },
+        readonly: true,
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+      message:
+        "sdkOptions.settings.transport must be one of: auto, sse, websocket, websocket-cached",
     });
   });
 
@@ -975,6 +1064,15 @@ type MockPiAuthStorage = {
 };
 
 type MockPiSettings = {
+  transport?: "auto" | "sse" | "websocket" | "websocket-cached";
+  steeringMode?: "all" | "one-at-a-time";
+  followUpMode?: "all" | "one-at-a-time";
+  thinkingBudgets?: {
+    minimal?: number;
+    low?: number;
+    medium?: number;
+    high?: number;
+  };
   retry?: {
     enabled?: boolean;
     maxRetries?: number;
@@ -995,6 +1093,10 @@ type MockPiSettings = {
 };
 
 type MockPiSettingsManager = {
+  getTransport(): string;
+  getSteeringMode(): string;
+  getFollowUpMode(): string;
+  getThinkingBudgets(): Record<string, number> | undefined;
   getRetrySettings(): {
     enabled: boolean;
     maxRetries: number;
@@ -1047,6 +1149,7 @@ function createMockPiAdapter(
     authStorage: MockPiAuthStorage;
     modelRegistry: MockPiModelRegistry;
     settingsManagerMode?: "inMemory";
+    settingsManagerSettings?: MockPiSettings;
     settingsManager: MockPiSettingsManager;
   } = {
     createAgentSession: [],
@@ -1092,8 +1195,11 @@ function createMockPiAdapter(
           },
         },
         SettingsManager: {
-          inMemory() {
+          inMemory(settings?: MockPiSettings) {
             calls.settingsManagerMode = "inMemory";
+            if (settings !== undefined) {
+              calls.settingsManagerSettings = settings;
+            }
             return calls.settingsManager;
           },
         },
@@ -1213,6 +1319,10 @@ function createMockPiAuthStorage(): MockPiAuthStorage {
 }
 
 function createMockPiSettingsManager(settings: MockPiSettings = {}): MockPiSettingsManager {
+  const transport = settings.transport ?? "auto";
+  const steeringMode = settings.steeringMode ?? "one-at-a-time";
+  const followUpMode = settings.followUpMode ?? "one-at-a-time";
+  const thinkingBudgets = settings.thinkingBudgets;
   const retry = {
     enabled: settings.retry?.enabled ?? true,
     maxRetries: settings.retry?.maxRetries ?? 3,
@@ -1233,6 +1343,18 @@ function createMockPiSettingsManager(settings: MockPiSettings = {}): MockPiSetti
     keepRecentTokens: settings.compaction?.keepRecentTokens ?? 20_000,
   };
   const manager: MockPiSettingsManager = {
+    getTransport() {
+      return transport;
+    },
+    getSteeringMode() {
+      return steeringMode;
+    },
+    getFollowUpMode() {
+      return followUpMode;
+    },
+    getThinkingBudgets() {
+      return thinkingBudgets;
+    },
     getRetrySettings() {
       return retry;
     },
