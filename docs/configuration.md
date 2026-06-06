@@ -255,6 +255,19 @@ when an expired OAuth token is refreshed (the same behavior as the Pi CLI). This
 way a review run touches state outside the repository; the default `"isolated"` mode never
 reads or writes `auth.json`.
 
+## Pi SDK Runtime Settings
+
+The Pi SDK adapter always supplies an isolated in-memory `SettingsManager` for review runs.
+Diffwarden does not inherit global or project Pi `settings.json` files, and it does not add
+tool-call, turn, step, or retry caps around Pi. The reviewer timeout configured in Diffwarden
+is the authoritative run-level circuit breaker.
+
+Preflight and output metadata report the effective Pi-native retry/provider/compaction
+settings that Pi will use for the session. Provider request timeout and retry values may
+appear as SDK defaults when Pi leaves them unset. HTTP idle timeout is reported when the
+installed Pi SDK exposes it; otherwise metadata marks it as unavailable rather than inferring
+a value from upstream docs.
+
 ## CLI Transport Example
 
 SDK-backed families can be configured to use a CLI transport.

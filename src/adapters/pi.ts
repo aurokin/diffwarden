@@ -68,6 +68,7 @@ export function createPiAdapter(
         input.reviewer.effort,
         input.reviewer.effortSource,
       );
+      const settingsManager = createPiSettingsManager(sdk);
 
       const metadata: ReviewAdapterPreflightResult["metadata"] = sdkPreflightMetadata("pi", {
         availableModelCount: availableModels.length,
@@ -76,6 +77,7 @@ export function createPiAdapter(
         ...piProviderMetadata(input.reviewer),
         ...piAuthMetadata(authOptions),
         ...piEffortMetadata(effort),
+        ...piSettingsMetadata(settingsManager),
       });
 
       return {
@@ -102,6 +104,12 @@ export function createPiAdapter(
             name: "readonly",
             status: "passed",
             detail: "Pi scaffold will use the read, grep, find, and ls tools for execution.",
+          },
+          {
+            name: "settings",
+            status: "passed",
+            detail:
+              "Pi SDK sessions use isolated in-memory settings; Diffwarden reviewer timeout remains the run-level circuit breaker.",
           },
         ],
         metadata,
@@ -139,6 +147,7 @@ export function createPiAdapter(
         input.reviewer.effort,
         input.reviewer.effortSource,
       );
+      const settingsManager = createPiSettingsManager(sdk);
 
       try {
         const sessionManager = sdk.SessionManager.inMemory(input.cwd);
@@ -157,6 +166,7 @@ export function createPiAdapter(
           customTools: [reviewOutputTool],
           resourceLoader: createExtensionFreeResourceLoader(),
           sessionManager,
+          settingsManager,
           authStorage,
           modelRegistry,
         });
@@ -193,6 +203,7 @@ export function createPiAdapter(
         ...piProviderMetadata(input.reviewer),
         ...piAuthMetadata(authOptions),
         ...piEffortMetadata(effort),
+        ...piSettingsMetadata(settingsManager),
       });
 
       const output = buildStructuredReviewAdapterOutput(capturedReview, {
@@ -220,6 +231,9 @@ type PiSdk = {
   SessionManager: {
     inMemory(cwd?: string): PiSessionManager;
   };
+  SettingsManager?: {
+    inMemory(settings?: Partial<PiSettings>): PiSettingsManager;
+  };
   createAgentSession(options: PiCreateAgentSessionOptions): Promise<PiCreateAgentSessionResult>;
 };
 
@@ -228,6 +242,43 @@ type PiAuthStorage = {
 };
 type PiSessionManager = unknown;
 type PiResourceLoader = unknown;
+type PiSettingsManager = {
+  getCompactionSettings(): {
+    enabled: boolean;
+    reserveTokens: number;
+    keepRecentTokens: number;
+  };
+  getRetrySettings(): {
+    enabled: boolean;
+    maxRetries: number;
+    baseDelayMs: number;
+  };
+  getProviderRetrySettings(): {
+    timeoutMs?: number;
+    maxRetries?: number;
+    maxRetryDelayMs: number;
+  };
+  getHttpIdleTimeoutMs?(): number;
+};
+
+type PiSettings = {
+  compaction?: {
+    enabled?: boolean;
+    reserveTokens?: number;
+    keepRecentTokens?: number;
+  };
+  retry?: {
+    enabled?: boolean;
+    maxRetries?: number;
+    baseDelayMs?: number;
+    provider?: {
+      timeoutMs?: number;
+      maxRetries?: number;
+      maxRetryDelayMs?: number;
+    };
+  };
+  httpIdleTimeoutMs?: number;
+};
 
 type PiModelRegistry = {
   getAvailable(): PiModel[];
@@ -261,6 +312,7 @@ type PiCreateAgentSessionOptions = {
   customTools: PiToolDefinition[];
   resourceLoader: PiResourceLoader;
   sessionManager: PiSessionManager;
+  settingsManager: PiSettingsManager;
   authStorage: PiAuthStorage;
   modelRegistry: PiModelRegistry;
 };
@@ -489,6 +541,48 @@ function createPiAuthStorage(sdk: PiSdk, authOptions: NormalizedPiAuthOptions): 
   }
 
   return sdk.AuthStorage.inMemory();
+}
+
+function createPiSettingsManager(sdk: PiSdk): PiSettingsManager {
+  if (sdk.SettingsManager?.inMemory === undefined) {
+    throw missingRequirement(
+      `${piPackageName} does not expose SettingsManager.inMemory; upgrade the package to use the Pi SDK reviewer`,
+    );
+  }
+
+  try {
+    return sdk.SettingsManager.inMemory();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw reviewerFailed(`Pi reviewer settings setup failed: ${detail}`);
+  }
+}
+
+function piSettingsMetadata(settingsManager: PiSettingsManager): Record<string, unknown> {
+  const retry = settingsManager.getRetrySettings();
+  const providerRetry = settingsManager.getProviderRetrySettings();
+  const compaction = settingsManager.getCompactionSettings();
+  const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs?.();
+
+  return {
+    piSettingsSource: "in-memory",
+    piSettingsDiskInheritance: false,
+    piTimeoutPolicy: "diffwarden-reviewer-timeout",
+    piRetryEnabled: retry.enabled,
+    piRetryMaxRetries: retry.maxRetries,
+    piRetryBaseDelayMs: retry.baseDelayMs,
+    piProviderTimeoutMs: providerRetry.timeoutMs ?? null,
+    piProviderTimeoutSource: providerRetry.timeoutMs === undefined ? "sdk-default" : "settings",
+    piProviderMaxRetries: providerRetry.maxRetries ?? null,
+    piProviderMaxRetriesSource: providerRetry.maxRetries === undefined ? "sdk-default" : "settings",
+    piProviderMaxRetryDelayMs: providerRetry.maxRetryDelayMs,
+    piCompactionEnabled: compaction.enabled,
+    piCompactionReserveTokens: compaction.reserveTokens,
+    piCompactionKeepRecentTokens: compaction.keepRecentTokens,
+    piHttpIdleTimeoutMs: httpIdleTimeoutMs ?? null,
+    piHttpIdleTimeoutSource:
+      httpIdleTimeoutMs === undefined ? "not-exposed-by-installed-pi-sdk" : "settings",
+  };
 }
 
 function piAuthMetadata(authOptions: NormalizedPiAuthOptions): Record<string, string> {

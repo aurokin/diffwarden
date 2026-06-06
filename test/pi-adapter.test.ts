@@ -55,6 +55,7 @@ describe("piAdapter", () => {
       "auth",
       "model",
       "readonly",
+      "settings",
     ]);
     expect(preflight?.metadata).toMatchObject({
       readonlyCapability: "tool-restricted",
@@ -63,6 +64,9 @@ describe("piAdapter", () => {
       model: "test/test-model",
       resolvedModel: "test/test-model",
       modelResolutionSource: "adapter-selection",
+      piSettingsSource: "in-memory",
+      piSettingsDiskInheritance: false,
+      piTimeoutPolicy: "diffwarden-reviewer-timeout",
     });
   });
 
@@ -82,6 +86,100 @@ describe("piAdapter", () => {
     expect(preflight?.checks.find((check) => check.name === "auth")?.detail).toContain(
       "environment-backed auth",
     );
+  });
+
+  it("uses isolated in-memory Pi settings and reports native runtime controls", async () => {
+    const { adapter, calls } = createMockPiAdapter([{ provider: "test", id: "test-model" }], {
+      settings: {
+        retry: { enabled: true, maxRetries: 5, baseDelayMs: 1_500 },
+        providerRetry: { timeoutMs: 120_000, maxRetries: 2, maxRetryDelayMs: 45_000 },
+        compaction: { enabled: true, reserveTokens: 8_192, keepRecentTokens: 10_000 },
+        httpIdleTimeoutMs: 300_000,
+      },
+      async prompt({ tool }) {
+        await tool.execute("tool-call-1", validReview());
+      },
+    });
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: { id: "pi", sdk: "pi", readonly: true },
+      readonly: true,
+      env: {},
+    });
+
+    expect(calls.settingsManagerMode).toBe("inMemory");
+    expect(preflight?.checks.find((check) => check.name === "settings")?.detail).toContain(
+      "isolated in-memory settings",
+    );
+    expect(preflight?.metadata).toMatchObject({
+      piSettingsSource: "in-memory",
+      piSettingsDiskInheritance: false,
+      piTimeoutPolicy: "diffwarden-reviewer-timeout",
+      piRetryEnabled: true,
+      piRetryMaxRetries: 5,
+      piRetryBaseDelayMs: 1_500,
+      piProviderTimeoutMs: 120_000,
+      piProviderTimeoutSource: "settings",
+      piProviderMaxRetries: 2,
+      piProviderMaxRetriesSource: "settings",
+      piProviderMaxRetryDelayMs: 45_000,
+      piCompactionEnabled: true,
+      piCompactionReserveTokens: 8_192,
+      piCompactionKeepRecentTokens: 10_000,
+      piHttpIdleTimeoutMs: 300_000,
+      piHttpIdleTimeoutSource: "settings",
+    });
+
+    const output = await adapter.run(input());
+
+    expect(output.metadata).toMatchObject({
+      piSettingsSource: "in-memory",
+      piSettingsDiskInheritance: false,
+      piTimeoutPolicy: "diffwarden-reviewer-timeout",
+      piRetryEnabled: true,
+      piRetryMaxRetries: 5,
+      piRetryBaseDelayMs: 1_500,
+      piProviderTimeoutMs: 120_000,
+      piProviderTimeoutSource: "settings",
+      piProviderMaxRetries: 2,
+      piProviderMaxRetriesSource: "settings",
+      piProviderMaxRetryDelayMs: 45_000,
+      piCompactionEnabled: true,
+      piCompactionReserveTokens: 8_192,
+      piCompactionKeepRecentTokens: 10_000,
+      piHttpIdleTimeoutMs: 300_000,
+      piHttpIdleTimeoutSource: "settings",
+    });
+    expect(calls.createAgentSession[0]).toMatchObject({
+      settingsManager: calls.settingsManager,
+    });
+  });
+
+  it("reports Pi provider retry SDK defaults when no explicit provider controls are set", async () => {
+    const { adapter } = createMockPiAdapter([{ provider: "test", id: "test-model" }], {
+      settings: {
+        providerRetry: { maxRetryDelayMs: 60_000 },
+        exposeHttpIdleTimeout: false,
+      },
+    });
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: { id: "pi", sdk: "pi", readonly: true },
+      readonly: true,
+      env: {},
+    });
+
+    expect(preflight?.metadata).toMatchObject({
+      piProviderTimeoutMs: null,
+      piProviderTimeoutSource: "sdk-default",
+      piProviderMaxRetries: null,
+      piProviderMaxRetriesSource: "sdk-default",
+      piProviderMaxRetryDelayMs: 60_000,
+      piHttpIdleTimeoutMs: null,
+      piHttpIdleTimeoutSource: "not-exposed-by-installed-pi-sdk",
+    });
   });
 
   it("uses shared CLI auth storage when authSource is shared", async () => {
@@ -412,6 +510,7 @@ describe("piAdapter", () => {
       tools: ["read", "grep", "find", "ls", "review_output"],
       authStorage: calls.authStorage,
       modelRegistry: calls.modelRegistry,
+      settingsManager: calls.settingsManager,
     });
     expect(calls.createAgentSession[0]?.customTools[0]?.name).toBe("review_output");
     expect(calls.createAgentSession[0]?.customTools[0]?.parameters).toBe(reviewResultJsonSchema);
@@ -875,10 +974,50 @@ type MockPiAuthStorage = {
   getRuntimeApiKey(provider: string): string | undefined;
 };
 
+type MockPiSettings = {
+  retry?: {
+    enabled?: boolean;
+    maxRetries?: number;
+    baseDelayMs?: number;
+  };
+  providerRetry?: {
+    timeoutMs?: number;
+    maxRetries?: number;
+    maxRetryDelayMs?: number;
+  };
+  compaction?: {
+    enabled?: boolean;
+    reserveTokens?: number;
+    keepRecentTokens?: number;
+  };
+  httpIdleTimeoutMs?: number;
+  exposeHttpIdleTimeout?: boolean;
+};
+
+type MockPiSettingsManager = {
+  getRetrySettings(): {
+    enabled: boolean;
+    maxRetries: number;
+    baseDelayMs: number;
+  };
+  getProviderRetrySettings(): {
+    timeoutMs?: number;
+    maxRetries?: number;
+    maxRetryDelayMs: number;
+  };
+  getCompactionSettings(): {
+    enabled: boolean;
+    reserveTokens: number;
+    keepRecentTokens: number;
+  };
+  getHttpIdleTimeoutMs?(): number;
+};
+
 function createMockPiAdapter(
   availableModels: MockPiModel[] | ((authStorage: MockPiAuthStorage) => MockPiModel[]),
-  options: { prompt?: MockPiPromptHandler } = {},
+  options: { prompt?: MockPiPromptHandler; settings?: MockPiSettings } = {},
 ) {
+  const settingsManager = createMockPiSettingsManager(options.settings);
   const calls: {
     createAgentSession: Array<{
       cwd: string;
@@ -893,6 +1032,7 @@ function createMockPiAdapter(
       }>;
       resourceLoader: unknown;
       sessionManager: unknown;
+      settingsManager: unknown;
       authStorage: unknown;
       modelRegistry: unknown;
     }>;
@@ -906,12 +1046,15 @@ function createMockPiAdapter(
     authStoragePath?: string | undefined;
     authStorage: MockPiAuthStorage;
     modelRegistry: MockPiModelRegistry;
+    settingsManagerMode?: "inMemory";
+    settingsManager: MockPiSettingsManager;
   } = {
     createAgentSession: [],
     aborted: 0,
     disposed: 0,
     registerProvider: [],
     authStorage: createMockPiAuthStorage(),
+    settingsManager,
     modelRegistry: {
       getAvailable() {
         return typeof availableModels === "function"
@@ -946,6 +1089,12 @@ function createMockPiAdapter(
         SessionManager: {
           inMemory(cwd?: string) {
             return { cwd };
+          },
+        },
+        SettingsManager: {
+          inMemory() {
+            calls.settingsManagerMode = "inMemory";
+            return calls.settingsManager;
           },
         },
         async createAgentSession(sessionOptions) {
@@ -987,6 +1136,7 @@ function createEnvSensitiveMockPiAdapter(options: { prompt?: MockPiPromptHandler
   return createPiAdapter({
     async loadSdk() {
       const authStorage = createMockPiAuthStorage();
+      const settingsManager = createMockPiSettingsManager();
 
       return {
         AuthStorage: {
@@ -1015,6 +1165,11 @@ function createEnvSensitiveMockPiAdapter(options: { prompt?: MockPiPromptHandler
         SessionManager: {
           inMemory(cwd?: string) {
             return { cwd };
+          },
+        },
+        SettingsManager: {
+          inMemory() {
+            return settingsManager;
           },
         },
         async createAgentSession(sessionOptions) {
@@ -1055,6 +1210,45 @@ function createMockPiAuthStorage(): MockPiAuthStorage {
       return runtimeApiKeys.get(provider);
     },
   };
+}
+
+function createMockPiSettingsManager(settings: MockPiSettings = {}): MockPiSettingsManager {
+  const retry = {
+    enabled: settings.retry?.enabled ?? true,
+    maxRetries: settings.retry?.maxRetries ?? 3,
+    baseDelayMs: settings.retry?.baseDelayMs ?? 2000,
+  };
+  const providerRetry = {
+    ...(settings.providerRetry?.timeoutMs !== undefined
+      ? { timeoutMs: settings.providerRetry.timeoutMs }
+      : {}),
+    ...(settings.providerRetry?.maxRetries !== undefined
+      ? { maxRetries: settings.providerRetry.maxRetries }
+      : {}),
+    maxRetryDelayMs: settings.providerRetry?.maxRetryDelayMs ?? 60_000,
+  };
+  const compaction = {
+    enabled: settings.compaction?.enabled ?? true,
+    reserveTokens: settings.compaction?.reserveTokens ?? 16_384,
+    keepRecentTokens: settings.compaction?.keepRecentTokens ?? 20_000,
+  };
+  const manager: MockPiSettingsManager = {
+    getRetrySettings() {
+      return retry;
+    },
+    getProviderRetrySettings() {
+      return providerRetry;
+    },
+    getCompactionSettings() {
+      return compaction;
+    },
+  };
+
+  if (settings.exposeHttpIdleTimeout !== false) {
+    manager.getHttpIdleTimeoutMs = () => settings.httpIdleTimeoutMs ?? 300_000;
+  }
+
+  return manager;
 }
 
 function validReview() {

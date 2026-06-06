@@ -270,6 +270,17 @@ The Pi path reports a tool-restricted read-only capability. It passes only `read
 `find`, `ls`, and `review_output` as active tools, uses an extension-free resource loader,
 and keeps tests credential-free by default.
 
+Diffwarden passes `SettingsManager.inMemory()` to Pi SDK review sessions. This prevents
+global or project Pi `settings.json` files from changing review retry, provider timeout, or
+compaction behavior. Preflight and output metadata report the Pi-native settings that can
+affect runtime duration: agent retry enabled/max retries/base delay, provider request
+timeout/retry/max retry delay, compaction enabled/reserve/keep-recent tokens, and HTTP idle
+timeout when the installed Pi SDK exposes that getter. With
+`@earendil-works/pi-coding-agent@0.75.3`, HTTP idle timeout is not exposed through the public
+settings manager, so Diffwarden reports it as unavailable instead of guessing. These are
+Pi-native/provider-native controls, not Diffwarden tool-call or step caps. Diffwarden's
+reviewer timeout remains the run-level circuit breaker.
+
 Live smoke test:
 
 ```bash
