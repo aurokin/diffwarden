@@ -295,12 +295,13 @@ setting without inheriting settings files:
 ```
 
 Supported `sdkOptions.settings` fields are `transport`, `steeringMode`, `followUpMode`, and
-`thinkingBudgets`; unsupported keys are rejected rather than ignored. Preflight and output
-metadata report those runtime settings plus the effective Pi-native retry/provider/compaction
-settings that Pi will use for the session. Provider request timeout and retry values may
-appear as SDK defaults when Pi leaves them unset. HTTP idle timeout is reported when the
-installed Pi SDK exposes it; otherwise metadata marks it as unavailable rather than inferring
-a value from upstream docs.
+`thinkingBudgets`; unsupported keys are rejected rather than ignored. `thinkingBudgets`
+supports `minimal`, `low`, `medium`, and `high`. Preflight and output metadata report those
+runtime settings plus the effective Pi-native retry/provider/compaction settings that Pi will
+use for the session. Provider request timeout and retry values may appear as SDK defaults when
+Pi leaves them unset. HTTP idle timeout is reported as an SDK default when the installed Pi
+SDK exposes it; otherwise metadata marks it as unavailable rather than inferring a value from
+upstream docs.
 
 ## CLI Transport Example
 

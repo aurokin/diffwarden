@@ -38,6 +38,7 @@ const piReviewSettingsKeys = [
   "followUpMode",
   "thinkingBudgets",
 ] as const;
+const piThinkingBudgetKeys = ["minimal", "low", "medium", "high"] as const;
 const defaultPiReviewSettings: Partial<PiSettings> = {
   transport: "auto",
   steeringMode: "one-at-a-time",
@@ -632,7 +633,7 @@ function piSettingsMetadata(settingsManager: PiSettingsManager): Record<string, 
     piCompactionKeepRecentTokens: compaction.keepRecentTokens,
     piHttpIdleTimeoutMs: httpIdleTimeoutMs ?? null,
     piHttpIdleTimeoutSource:
-      httpIdleTimeoutMs === undefined ? "not-exposed-by-installed-pi-sdk" : "settings",
+      httpIdleTimeoutMs === undefined ? "not-exposed-by-installed-pi-sdk" : "sdk-default",
   };
 }
 
@@ -716,7 +717,15 @@ function piThinkingBudgetsOption(
   }
 
   const budgets: NonNullable<PiSettings["thinkingBudgets"]> = {};
-  for (const level of ["minimal", "low", "medium", "high"] as const) {
+  for (const key of Object.keys(value)) {
+    if (!isPiThinkingBudgetKey(key)) {
+      throw invalidConfig(
+        `${name}.${key} is not supported; supported fields: ${piThinkingBudgetKeys.join(", ")}`,
+      );
+    }
+  }
+
+  for (const level of piThinkingBudgetKeys) {
     const budget = value[level];
     if (budget === undefined) {
       continue;
@@ -728,6 +737,10 @@ function piThinkingBudgetsOption(
   }
 
   return budgets;
+}
+
+function isPiThinkingBudgetKey(value: string): value is (typeof piThinkingBudgetKeys)[number] {
+  return piThinkingBudgetKeys.some((key) => key === value);
 }
 
 function piAuthMetadata(authOptions: NormalizedPiAuthOptions): Record<string, string> {

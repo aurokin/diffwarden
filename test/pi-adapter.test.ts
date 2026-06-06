@@ -141,7 +141,7 @@ describe("piAdapter", () => {
       piCompactionReserveTokens: 8_192,
       piCompactionKeepRecentTokens: 10_000,
       piHttpIdleTimeoutMs: 300_000,
-      piHttpIdleTimeoutSource: "settings",
+      piHttpIdleTimeoutSource: "sdk-default",
     });
 
     const output = await adapter.run(input());
@@ -170,7 +170,7 @@ describe("piAdapter", () => {
       piCompactionReserveTokens: 8_192,
       piCompactionKeepRecentTokens: 10_000,
       piHttpIdleTimeoutMs: 300_000,
-      piHttpIdleTimeoutSource: "settings",
+      piHttpIdleTimeoutSource: "sdk-default",
     });
     expect(calls.createAgentSession[0]).toMatchObject({
       settingsManager: calls.settingsManager,
@@ -265,6 +265,29 @@ describe("piAdapter", () => {
       exitCode: 2,
       message:
         "Pi sdkOptions.settings.compaction is not supported; supported fields: transport, steeringMode, followUpMode, thinkingBudgets",
+    });
+  });
+
+  it("rejects unsupported Pi SDK thinking budget keys instead of ignoring them", async () => {
+    const { adapter } = createMockPiAdapter([{ provider: "test", id: "test-model" }]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "pi",
+          sdk: "pi",
+          readonly: true,
+          sdkOptions: { settings: { thinkingBudgets: { xhigh: 12_000 } } },
+        },
+        readonly: true,
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+      message:
+        "sdkOptions.settings.thinkingBudgets.xhigh is not supported; supported fields: minimal, low, medium, high",
     });
   });
 
