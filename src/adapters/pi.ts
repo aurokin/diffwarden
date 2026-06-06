@@ -18,6 +18,7 @@ import {
   sdkOutputMetadata,
   sdkPreflightMetadata,
 } from "./metadata.js";
+import { piReviewOutputToolName, piSdkReviewTools } from "./pi-tool-policy.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -179,7 +180,7 @@ export function createPiAdapter(
               resolvePiEffort(model, input.reviewer.effort, input.reviewer.effortSource),
             ),
           })),
-          tools: ["read", "grep", "find", "ls", "review_output"],
+          tools: [...piSdkReviewTools],
           customTools: [reviewOutputTool],
           resourceLoader: createExtensionFreeResourceLoader(),
           sessionManager,
@@ -1107,7 +1108,7 @@ function createReviewOutputTool(
   captureError: (message: string) => void,
 ): PiToolDefinition {
   return {
-    name: "review_output",
+    name: piReviewOutputToolName,
     label: "Review Output",
     description: "Return the final structured code review result. Use this as the final action.",
     promptSnippet: "review_output(review): return the final structured review and terminate",

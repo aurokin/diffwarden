@@ -12,6 +12,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cliSpecs } from "../src/adapters/cli-specs.js";
 import type { CliEngine, CliRunResult } from "../src/adapters/cli-types.js";
+import { piCliReviewSurfaceArgs } from "../src/adapters/pi-tool-policy.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 
 let tempDirs: string[] = [];
@@ -259,19 +260,16 @@ describe("cliSpecs", () => {
       },
     });
     expect(opencodeConfig.agent[opencodeAgent]).not.toHaveProperty("steps");
-    expect(pi.args).toEqual(
-      expect.arrayContaining([
-        "--print",
-        "--mode",
-        "json",
-        "--tools",
-        "read,grep,find,ls",
-        "--model",
-        "provider/model",
-        "--thinking",
-        "high",
-      ]),
-    );
+    expect(pi.args).toEqual([
+      "--print",
+      "--mode",
+      "json",
+      ...piCliReviewSurfaceArgs,
+      "--model",
+      "provider/model",
+      "--thinking",
+      "high",
+    ]);
     expect(pi.stdin).toBe("review prompt");
   });
 

@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { piReviewOutputToolName, piSdkReviewTools } from "../src/adapters/pi-tool-policy.js";
 import { createPiAdapter, piAdapter } from "../src/adapters/pi.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
 import { missingRequirement } from "../src/core/errors.js";
@@ -778,12 +779,14 @@ describe("piAdapter", () => {
       cwd: process.cwd(),
       model: reviewModel,
       scopedModels: [{ model: reviewModel }],
-      tools: ["read", "grep", "find", "ls", "review_output"],
+      tools: [...piSdkReviewTools],
       authStorage: calls.authStorage,
       modelRegistry: calls.modelRegistry,
       settingsManager: calls.settingsManager,
     });
-    expect(calls.createAgentSession[0]?.customTools[0]?.name).toBe("review_output");
+    expect(calls.createAgentSession[0]?.customTools.map((tool) => tool.name)).toEqual([
+      piReviewOutputToolName,
+    ]);
     expect(calls.createAgentSession[0]?.customTools[0]?.parameters).toBe(reviewResultJsonSchema);
     const resourceLoader = calls.createAgentSession[0]?.resourceLoader as
       | {
@@ -794,6 +797,8 @@ describe("piAdapter", () => {
           getAgentsFiles(): unknown;
           getSystemPrompt(): unknown;
           getAppendSystemPrompt(): unknown;
+          extendResources(): unknown;
+          reload(): Promise<unknown>;
         }
       | undefined;
     expect(resourceLoader).toMatchObject({
@@ -804,6 +809,8 @@ describe("piAdapter", () => {
       getAgentsFiles: expect.any(Function),
       getSystemPrompt: expect.any(Function),
       getAppendSystemPrompt: expect.any(Function),
+      extendResources: expect.any(Function),
+      reload: expect.any(Function),
     });
     expect(resourceLoader?.getExtensions()).toEqual({
       extensions: [],
@@ -819,6 +826,8 @@ describe("piAdapter", () => {
     expect(resourceLoader?.getAgentsFiles()).toEqual({ agentsFiles: [] });
     expect(resourceLoader?.getSystemPrompt()).toBeUndefined();
     expect(resourceLoader?.getAppendSystemPrompt()).toEqual([]);
+    expect(resourceLoader?.extendResources()).toBeUndefined();
+    await expect(resourceLoader?.reload()).resolves.toBeUndefined();
     expect(calls.disposed).toBe(1);
   });
 

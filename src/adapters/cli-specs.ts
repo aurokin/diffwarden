@@ -28,6 +28,7 @@ import { cliRuntimeResolutionMetadata } from "./cli-runtime-metadata.js";
 import type { CliEngine, CliSpec } from "./cli-types.js";
 import { droidSessionTag } from "./droid-session.js";
 import { effortResolutionMetadata, modelResolutionMetadata } from "./metadata.js";
+import { piCliReviewSurfaceArgs } from "./pi-tool-policy.js";
 import type { ReviewAdapterInput } from "./types.js";
 
 const opencodeGeneratedAgentPrefix = "diffwarden-review";
@@ -372,19 +373,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
   },
   pi: {
     async buildInvocation(input) {
-      const args = [
-        "--print",
-        "--mode",
-        "json",
-        "--no-session",
-        "--tools",
-        "read,grep,find,ls",
-        "--no-extensions",
-        "--no-skills",
-        "--no-prompt-templates",
-        "--no-themes",
-        "--no-context-files",
-      ];
+      const args = ["--print", "--mode", "json", ...piCliReviewSurfaceArgs];
       const model = providerQualifiedModel(input.reviewer);
       if (model !== undefined) {
         args.push("--model", model);

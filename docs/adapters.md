@@ -277,6 +277,27 @@ The Pi path reports a tool-restricted read-only capability. It passes only `read
 `find`, `ls`, and `review_output` as active tools, uses an extension-free resource loader,
 and keeps tests credential-free by default.
 
+Pi tool names stay Pi-native, but Diffwarden maps them to the shared review policy this way:
+
+| Pi tool | Policy role |
+| --- | --- |
+| `read` | read file contents |
+| `grep` | search file contents |
+| `find` | find files by name or path |
+| `ls` | list directories |
+| `review_output` | SDK-only structured termination tool |
+
+The SDK path enables exactly `read`, `grep`, `find`, `ls`, and `review_output`, with
+`review_output` as the only successful structured-review termination path. The CLI path enables
+only `read,grep,find,ls`; it cannot use the SDK custom termination tool and instead returns
+JSONL/text from `pi --print --mode json`.
+
+Both Pi transports disable ambient context surfaces where the transport exposes a switch. SDK
+runs use an extension-free resource loader that returns no extensions, skills, prompts, themes,
+agents files, system prompt, or appended system prompts. CLI runs use `--no-session`,
+`--no-extensions`, `--no-skills`, `--no-prompt-templates`, `--no-themes`, and
+`--no-context-files`.
+
 Diffwarden passes `SettingsManager.inMemory()` to Pi SDK review sessions. This prevents
 global or project Pi `settings.json` files from changing review runtime behavior. Review
 sessions use explicit Pi defaults for `transport: "auto"`, `steeringMode: "one-at-a-time"`,
@@ -291,6 +312,11 @@ HTTP idle timeout when the installed Pi SDK exposes that getter. With
 settings manager, so Diffwarden reports it as unavailable instead of guessing. These are
 Pi-native/provider-native controls, not Diffwarden tool-call or step caps. Diffwarden's
 reviewer timeout remains the run-level circuit breaker.
+
+Diffwarden does not add Pi-specific tool-call, turn, step, retry, or equivalent caps. The
+provider-owned limits that can affect a run are Pi SDK settings and provider transport behavior:
+agent retry, provider request timeout/retry/max retry delay, compaction, transport selection,
+message delivery mode, thinking budgets, and HTTP idle timeout when exposed by the installed SDK.
 
 Live smoke test:
 

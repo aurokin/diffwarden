@@ -4,11 +4,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cliSpecs } from "../src/adapters/cli-specs.js";
 import type { CliRunResult } from "../src/adapters/cli-types.js";
+import {
+  piCliAmbientDisableArgs,
+  piCliReviewSurfaceArgs,
+  piReadOnlyTools,
+  piReviewOutputToolName,
+  piSdkReviewTools,
+} from "../src/adapters/pi-tool-policy.js";
 import { createPiAdapter } from "../src/adapters/pi.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 import { reviewResultJsonSchema } from "../src/core/schema.js";
-
-const piReadOnlyTools = ["read", "grep", "find", "ls"] as const;
 
 let tempDirs: string[] = [];
 
@@ -20,6 +25,30 @@ afterEach(() => {
 });
 
 describe("Pi SDK versus Pi CLI comparison", () => {
+  it("defines the exact Pi review tool policy", () => {
+    expect(piReadOnlyTools).toEqual(["read", "grep", "find", "ls"]);
+    expect(piReviewOutputToolName).toBe("review_output");
+    expect(piSdkReviewTools).toEqual(["read", "grep", "find", "ls", "review_output"]);
+    expect(piCliAmbientDisableArgs).toEqual([
+      "--no-session",
+      "--no-extensions",
+      "--no-skills",
+      "--no-prompt-templates",
+      "--no-themes",
+      "--no-context-files",
+    ]);
+    expect(piCliReviewSurfaceArgs).toEqual([
+      "--no-session",
+      "--tools",
+      "read,grep,find,ls",
+      "--no-extensions",
+      "--no-skills",
+      "--no-prompt-templates",
+      "--no-themes",
+      "--no-context-files",
+    ]);
+  });
+
   it("keeps the credential-free comparison surface explicit", async () => {
     const review = validReview();
     const reviewModel = { provider: "test", id: "test-model" };
@@ -41,9 +70,11 @@ describe("Pi SDK versus Pi CLI comparison", () => {
       modelResolutionSource: "adapter-selection",
     });
     expect(calls.createAgentSession).toHaveLength(1);
-    expect(calls.createAgentSession[0]?.tools).toEqual([...piReadOnlyTools, "review_output"]);
+    expect(calls.createAgentSession[0]?.tools).toEqual([...piSdkReviewTools]);
     expect(calls.createAgentSession[0]?.customTools).toHaveLength(1);
-    expect(calls.createAgentSession[0]?.customTools[0]?.name).toBe("review_output");
+    expect(calls.createAgentSession[0]?.customTools.map((tool) => tool.name)).toEqual([
+      piReviewOutputToolName,
+    ]);
     expect(calls.createAgentSession[0]?.customTools[0]?.parameters).toBe(reviewResultJsonSchema);
 
     const cliReviewer = createReviewer({
@@ -66,14 +97,7 @@ describe("Pi SDK versus Pi CLI comparison", () => {
       "--print",
       "--mode",
       "json",
-      "--no-session",
-      "--tools",
-      piReadOnlyTools.join(","),
-      "--no-extensions",
-      "--no-skills",
-      "--no-prompt-templates",
-      "--no-themes",
-      "--no-context-files",
+      ...piCliReviewSurfaceArgs,
       "--model",
       "openai-codex/gpt-5.5",
       "--thinking",
