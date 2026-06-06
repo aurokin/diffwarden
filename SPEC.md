@@ -669,13 +669,22 @@ Expected API shape from inspected SDK:
 - `options.cwd`
 - `options.model`
 - `options.permissionMode`
+- `options.tools`
 - `options.allowedTools`
+- `options.disallowedTools`
+- `options.settingSources`
+- `options.mcpServers`
+- `options.strictMcpConfig`
+- `options.persistSession`
 - `options.outputFormat: { type: "json_schema", schema }`
 
 Initial behavior:
 
 - Implement adapter preflight for SDK availability, auth, model, effort, and read-only capability reporting.
 - Use native JSON schema output.
+- Restrict built-in tools to `Read`, `Grep`, and `Glob`; mirror those into `allowedTools`; use `permissionMode: "dontAsk"`; deny write, shell, web, skill, agent, and workflow tools; disable settings, use strict empty MCP config, and disable session persistence.
+- Do not set a Diffwarden-owned Claude review turn cap. Reviewer timeout is the run-level limiter.
+- Check local Claude Code executables for required review policy flags before using local auth; `auto` mode may fall back to API-key auth, while forced local auth fails preflight when the executable is too old.
 - Return `{ structured }`.
 
 Important caveat:
@@ -701,7 +710,7 @@ Implemented CLI families:
 
 - Codex CLI uses `codex exec` with a read-only sandbox, JSON schema, and `--output-last-message`.
 - Codex CLI sets `web_search = "disabled"` by default, with `cliOptions.webSearch` allowing `"enabled"`, `"disabled"`, or `"inherit"`.
-- Claude CLI uses `claude -p` with JSON output, JSON schema, no session persistence, and read-oriented tools.
+- Claude CLI uses `claude -p` with JSON output, JSON schema, `--tools Read,Grep,Glob`, matching `--allowedTools`, deny rules for write/shell/web/broad-agent tools, `--permission-mode dontAsk`, no session persistence, empty setting sources, strict empty MCP config, disabled slash commands, and disabled Chrome.
 - Cursor CLI uses `cursor-agent -p` with JSON output, plan mode, sandbox enabled, and workspace scoping.
 - Gemini CLI uses JSON output and plan approval mode.
 - OpenCode CLI uses JSONL output and `--pure`; its read-only capability is prompt-only until a supported per-run permission-deny path is proven.
@@ -744,16 +753,21 @@ Findings:
 
 Sources:
 
-- Official structured output docs: https://docs.claude.com/en/docs/agent-sdk/structured-outputs
-- Official TypeScript reference: https://docs.claude.com/en/docs/agent-sdk/typescript
-- Local upstream clone: `/Users/auro/code/upstream/claude-agent-sdk-typescript`
+- Official structured output docs: https://platform.claude.com/docs/en/agent-sdk/structured-outputs
+- Official TypeScript reference: https://platform.claude.com/docs/en/agent-sdk/typescript
+- Official permission docs: https://code.claude.com/docs/en/agent-sdk/permissions
+- Official CLI reference: https://code.claude.com/docs/en/cli-reference
+- Official tools reference: https://code.claude.com/docs/en/tools-reference
+- Local upstream clone: `/Users/auro/code/upstream/claude-agent-sdk-typescript` was stale during the 2026-06-06 Claude policy refresh; prefer official docs and installed package types for current behavior.
 
 Findings:
 
 - Claude Agent SDK supports structured outputs by passing `options.outputFormat: { type: "json_schema", schema }` to `query()`.
 - The result message includes `structured_output` on success.
 - The SDK validates schema output and retries on mismatch; if validation still fails, the result is an error rather than structured data.
-- TypeScript options include `model`, `fallbackModel`, `cwd`, `env`, `executable`, `pathToClaudeCodeExecutable`, `tools`, `mcpServers`, `settingSources`, `stderr`, and related execution controls.
+- TypeScript options include `model`, `fallbackModel`, `cwd`, `env`, `executable`, `pathToClaudeCodeExecutable`, `tools`, `allowedTools`, `disallowedTools`, `mcpServers`, `strictMcpConfig`, `settingSources`, `persistSession`, `stderr`, and related execution controls.
+- Current Claude docs describe `allowedTools` as approval rules only. Use `tools` to constrain built-in tool availability and pair `allowedTools` with `permissionMode: "dontAsk"` for locked-down SDK agents.
+- Local Claude Code executable auth is only used when `claude --help` advertises the policy flags Diffwarden passes. This makes newer flag requirements explicit during preflight instead of allowing unknown-option failures during review execution.
 - The SDK may spawn a native Claude Code binary through optional per-platform dependencies. Preflight must check runtime/package/binary availability.
 - The local changelog exports an `EffortLevel` type with `low`, `medium`, `high`, and `max`; it also exposes model capability metadata such as supported effort levels. The CLI's public `xhigh` maps to Claude `max`.
 

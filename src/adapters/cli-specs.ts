@@ -9,6 +9,7 @@ import {
 } from "../core/adapter-output.js";
 import { reviewerFailed } from "../core/errors.js";
 import { reviewResultJsonSchema, reviewResultStrictJsonSchema } from "../core/schema.js";
+import { claudeCliDisallowedToolsArg, claudeCliReviewToolsArg } from "./claude-tool-policy.js";
 import { claudeCliEnv, resolveClaudeRuntime } from "./claude.js";
 import {
   claudeCliEffort,
@@ -219,15 +220,18 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
   claude: {
     async buildInvocation(input, tempDir) {
       const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
+      // Claude CLI --mcp-config accepts JSON files as well as inline JSON strings.
       await writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: {} })}\n`, "utf8");
       const args = [
         "-p",
         "--permission-mode",
-        "plan",
+        "dontAsk",
         "--tools",
-        "Read,Grep,Glob,LS",
+        claudeCliReviewToolsArg(),
+        "--allowedTools",
+        claudeCliReviewToolsArg(),
         "--disallowedTools",
-        "Edit,Write,Bash",
+        claudeCliDisallowedToolsArg(),
         "--no-session-persistence",
         "--setting-sources",
         "",

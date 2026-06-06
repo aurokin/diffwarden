@@ -10,6 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  claudeCliDisallowedToolsArg,
+  claudeCliReviewToolsArg,
+} from "../src/adapters/claude-tool-policy.js";
 import { cliSpecs } from "../src/adapters/cli-specs.js";
 import type { CliEngine, CliRunResult } from "../src/adapters/cli-types.js";
 import {
@@ -23,6 +27,7 @@ import {
 } from "../src/adapters/codex-tool-policy.js";
 import { piCliReviewSurfaceArgs } from "../src/adapters/pi-tool-policy.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
+import { reviewResultJsonSchema } from "../src/core/schema.js";
 
 let tempDirs: string[] = [];
 
@@ -185,26 +190,41 @@ describe("cliSpecs", () => {
       createInput(reviewer, { env: { ANTHROPIC_API_KEY: "test-key" } }),
       tempDir,
     );
+    const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
 
-    expect(invocation.args).toEqual(
-      expect.arrayContaining([
-        "-p",
-        "--permission-mode",
-        "plan",
-        "--tools",
-        "Read,Grep,Glob,LS",
-        "--disallowedTools",
-        "Edit,Write,Bash",
-        "--setting-sources",
-        "",
-        "--strict-mcp-config",
-        "--disable-slash-commands",
-        "--model",
-        "sonnet",
-        "--effort",
-        "low",
-      ]),
+    expect(invocation.args).toEqual([
+      "-p",
+      "--permission-mode",
+      "dontAsk",
+      "--tools",
+      claudeCliReviewToolsArg(),
+      "--allowedTools",
+      claudeCliReviewToolsArg(),
+      "--disallowedTools",
+      claudeCliDisallowedToolsArg(),
+      "--no-session-persistence",
+      "--setting-sources",
+      "",
+      "--strict-mcp-config",
+      "--mcp-config",
+      mcpConfigPath,
+      "--disable-slash-commands",
+      "--no-chrome",
+      "--output-format",
+      "json",
+      "--json-schema",
+      JSON.stringify(reviewResultJsonSchema),
+      "--model",
+      "sonnet",
+      "--effort",
+      "low",
+    ]);
+    expect(invocation.args).not.toContain("--max-turns");
+    expect(claudeCliReviewToolsArg()).toBe("Read,Grep,Glob");
+    expect(claudeCliDisallowedToolsArg().split(",")).toEqual(
+      expect.arrayContaining(["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"]),
     );
+    expect(readFileSync(mcpConfigPath, "utf8")).toBe(`${JSON.stringify({ mcpServers: {} })}\n`);
     expect(invocation.stdin).toBe("review prompt");
     expect(invocation.unsetEnv).toBeUndefined();
   });

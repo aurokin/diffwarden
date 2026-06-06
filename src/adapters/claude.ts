@@ -12,6 +12,11 @@ import {
 } from "../core/errors.js";
 import { reviewResultJsonSchema } from "../core/schema.js";
 import {
+  claudeDisallowedToolList,
+  claudeReviewToolList,
+  claudeSdkReviewPolicyCliFlags,
+} from "./claude-tool-policy.js";
+import {
   effortResolutionMetadata,
   modelResolutionMetadata,
   sdkOutputMetadata,
@@ -27,8 +32,6 @@ import type {
 
 const defaultClaudeModel = "sonnet";
 const defaultClaudeExecutable = "claude";
-const maxClaudeTurns = 3;
-const claudeReadonlyTools = ["Read", "Grep", "Glob", "LS"];
 const execFileAsync = promisify(execFile);
 
 type ClaudeAdapterDependencies = {
@@ -178,7 +181,7 @@ async function prepareClaudeAdapter(
         {
           name: "readonly",
           status: "passed",
-          detail: "Claude SDK is restricted to Read, Grep, Glob, and LS tools.",
+          detail: "Claude SDK is restricted to Read, Grep, and Glob tools.",
         },
       ],
       metadata: sdkPreflightMetadata("claude", {
@@ -259,8 +262,12 @@ type ClaudeQueryOptions = {
   env?: NodeJS.ProcessEnv;
   model?: string;
   tools?: string[];
+  allowedTools?: string[];
+  disallowedTools?: string[];
   permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
   settingSources?: Array<"user" | "project" | "local">;
+  mcpServers?: Record<string, unknown>;
+  strictMcpConfig?: boolean;
   persistSession?: boolean;
   maxTurns?: number;
   thinking?: { type: "disabled" | "adaptive" } | { type: "enabled"; budgetTokens: number };
@@ -330,11 +337,14 @@ function buildClaudeModelPreflightOptions(
 ): ClaudeQueryOptions {
   const queryOptions: ClaudeQueryOptions = {
     cwd: input.cwd,
-    tools: claudeReadonlyTools,
+    tools: claudeReviewToolList(),
+    allowedTools: claudeReviewToolList(),
+    disallowedTools: claudeDisallowedToolList(),
     permissionMode: "dontAsk",
     settingSources: [],
+    mcpServers: {},
+    strictMcpConfig: true,
     persistSession: false,
-    maxTurns: 1,
   };
 
   if (abortController !== undefined) {
@@ -480,11 +490,14 @@ function buildClaudeQueryOptions(
   const queryOptions: ClaudeQueryOptions = {
     cwd: options.input.cwd,
     model: options.input.reviewer.model ?? defaultClaudeModel,
-    tools: claudeReadonlyTools,
+    tools: claudeReviewToolList(),
+    allowedTools: claudeReviewToolList(),
+    disallowedTools: claudeDisallowedToolList(),
     permissionMode: "dontAsk",
     settingSources: [],
+    mcpServers: {},
+    strictMcpConfig: true,
     persistSession: false,
-    maxTurns: maxClaudeTurns,
     ...claudeQueryEffortOptions(options.input.reviewer.effort),
   };
 
@@ -728,13 +741,20 @@ export async function resolveClaudeRuntime(
   const claudeCodeStatus = await getClaudeCodeAuthStatus(claudeCodeEnv, executable);
 
   if (isLoggedInClaudeStatus(claudeCodeStatus)) {
-    return {
-      authMode: "claude-code",
-      authPreference,
-      executable,
-      env: claudeCodeEnv,
-      ...claudeCodeStatusMetadata(claudeCodeStatus),
-    };
+    try {
+      await assertClaudeExecutableSupportsReviewPolicy(executable, claudeCodeEnv);
+      return {
+        authMode: "claude-code",
+        authPreference,
+        executable,
+        env: claudeCodeEnv,
+        ...claudeCodeStatusMetadata(claudeCodeStatus),
+      };
+    } catch (error) {
+      if (!(error instanceof DiffwardenError) || authPreference === "claude-code" || !apiKey) {
+        throw error;
+      }
+    }
   }
 
   if (authPreference === "claude-code") {
@@ -753,6 +773,30 @@ export async function resolveClaudeRuntime(
   throw missingAuth(
     "Missing Claude auth: set ANTHROPIC_API_KEY or install and authenticate Claude Code",
   );
+}
+
+export async function assertClaudeExecutableSupportsReviewPolicy(
+  executable: string,
+  env: NodeJS.ProcessEnv | undefined,
+  requiredFlags: readonly string[] = claudeSdkReviewPolicyCliFlags,
+): Promise<void> {
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(executable, ["--help"], {
+      ...(env !== undefined ? { env } : {}),
+      timeout: 5_000,
+    }));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw missingRequirement(`Claude executable policy preflight failed: ${detail}`);
+  }
+
+  const missingFlags = requiredFlags.filter((flag) => !stdout.includes(flag));
+  if (missingFlags.length) {
+    throw missingRequirement(
+      `Claude executable does not support Diffwarden review policy flags: ${missingFlags.join(", ")}. Upgrade Claude Code or use sdkOptions.authMode "api-key".`,
+    );
+  }
 }
 
 async function getClaudeCodeAuthStatus(
