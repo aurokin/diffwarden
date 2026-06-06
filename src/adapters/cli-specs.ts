@@ -34,6 +34,7 @@ import {
   codexCliPromptStdinArg,
   codexCliReviewBaseArgs,
 } from "./codex-tool-policy.js";
+import { cursorCliReviewMode, cursorCliSandboxMode } from "./cursor-policy.js";
 import { droidSessionTag } from "./droid-session.js";
 import { effortResolutionMetadata, modelResolutionMetadata } from "./metadata.js";
 import { piCliReviewSurfaceArgs } from "./pi-tool-policy.js";
@@ -278,9 +279,9 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         "--workspace",
         input.cwd,
         "--mode",
-        "plan",
+        cursorCliReviewMode,
         "--sandbox",
-        "enabled",
+        cursorCliSandboxMode,
         "--trust",
       ];
       pushModel(args, input.reviewer);

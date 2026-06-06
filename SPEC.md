@@ -635,7 +635,7 @@ Use Cursor Agent SDK local mode.
 
 Expected API shape from inspected SDK:
 
-- `Agent.create({ apiKey, model, local: { cwd } })`
+- `Agent.create({ apiKey, model, mode: "plan", mcpServers: {}, local: { cwd, autoReview, sandboxOptions, settingSources, store } })`
 - `agent.send(prompt)`
 - `run.stream()`
 - `run.wait()`
@@ -644,6 +644,8 @@ Initial behavior:
 
 - Implement adapter preflight for SDK availability, auth, model, effort, and read-only capability reporting.
 - Use the Cursor Agent SDK directly.
+- Run local SDK reviews in plan mode with sandbox enabled, auto-review enabled, no MCP servers,
+  empty setting sources, and an ephemeral JSONL local store.
 - Prove local SDK execution and reliable text capture before adding more SDK-specific plumbing.
 - Return `{ text }` from the terminal run result for the first Cursor path, with `metadata.captureMode = "text"`.
 - Let the shared parser recover exact JSON, extracted JSON, or fallback text from Cursor output.
@@ -655,8 +657,10 @@ Initial behavior:
 
 Verified SDK constraint:
 
-- `@cursor/sdk@1.0.13` types expose `AgentOptions.mcpServers`, `SendOptions.mcpServers`, `run.stream()`, `run.wait()`, and stream `tool_call` events.
-- Those types do not expose a Claude-style `outputFormat: { type: "json_schema" }` option or direct typed tool registration.
+- `@cursor/sdk@1.0.18` types expose local `mode`, `autoReview`, `sandboxOptions`,
+  `settingSources`, `store`, `customTools`, `AgentOptions.mcpServers`, `SendOptions.mcpServers`,
+  `run.stream()`, `run.wait()`, and stream `tool_call` events.
+- Those types do not expose a Claude-style `outputFormat: { type: "json_schema" }` option.
 - Therefore Cursor v1 should prove local SDK review execution and text output first, then prove the MCP `review_output` path as the preferred structured-output upgrade. Prompt-driven JSON is acceptable for the first useful Cursor adapter because centralized parsing and validation are core responsibilities.
 
 ### 11.2 Claude adapter, v1
@@ -732,7 +736,8 @@ Sources:
 - Official release post: https://cursor.com/blog/typescript-sdk
 - Cursor model docs: https://docs.cursor.com/models
 - Cursor model-list API docs: https://docs.cursor.com/en/background-agent/api/list-models
-- NPM package inspected: `@cursor/sdk@1.0.13`
+- Cursor SDK June 2026 update: https://cursor.com/changelog/sdk-updates-jun-2026
+- NPM package inspected: `@cursor/sdk@1.0.18`
 
 Findings:
 
@@ -744,9 +749,11 @@ Findings:
 - Cursor startup/config/auth/network failures throw `CursorAgentError`; a run that starts and then fails returns a terminal run result with error status. The adapter must map those separately.
 - Local runs should pass `local: { cwd }` explicitly.
 - Cloud behavior can open PRs when configured. This CLI must not use cloud PR creation features.
-- Current `@cursor/sdk@1.0.13` package types do not expose a native `outputFormat: json_schema` equivalent.
+- Current `@cursor/sdk@1.0.18` package types do not expose a native `outputFormat: json_schema` equivalent.
 - Cursor's first adapter should use local SDK execution and terminal text capture to prove the end-to-end review contract quickly.
-- The package types do expose MCP server configuration and stream `tool_call` events, so a later Cursor structured-result path should use a local MCP `review_output` tool whose args are validated as `ReviewResult`.
+- The package types expose local custom tools, MCP server configuration, and stream `tool_call`
+  events, so a later Cursor structured-result path should use a local `review_output` tool whose
+  args are validated as `ReviewResult`.
 - Text JSON extraction is an ordinary core parser path, not Cursor-specific adapter logic. The validation artifact must still record whether the output came from native structure, a tool call, extracted JSON, or fallback text.
 
 #### Claude Agent SDK
@@ -1079,7 +1086,9 @@ Each adapter must document its read-only capability level:
 
 The CLI should surface this in verbose output and ReviewArtifact metadata once adapter capability reporting exists.
 
-Cursor local mode can be `best_effort` for v1. Document the exact Cursor SDK/sandbox controls used by the adapter, and do not imply hard read-only enforcement unless the SDK provides it.
+Cursor local mode remains `prompt-only` for v1. Diffwarden uses Cursor plan mode, sandbox
+options, auto-review, empty setting sources, no MCP servers, and an ephemeral local store, but
+does not imply hard read-only enforcement unless Cursor provides deterministic tool allowlisting.
 
 ## 17. Test plan
 
@@ -1246,7 +1255,7 @@ Resolved design decisions:
 - Public effort mappings: Pi clamps through model metadata, Claude maps to native effort/thinking controls, and Cursor records effort as ignored until the SDK exposes a concrete control.
 - Multi-reviewer deduplication: exact file, exact line range, exact priority, and normalized-title match only. Do not fuzzy-merge findings in v1.
 - Adapter shape: adapters run SDKs and capture output; core code owns prompt assembly, parsing, validation, rendering, and aggregation.
-- Cursor sequencing: prove local SDK execution and terminal text capture first; then add a local MCP `review_output` tool with streamed `tool_call` capture as the preferred structured-output upgrade, based on `@cursor/sdk@1.0.13` exposing MCP config and tool-call events but no native JSON-schema output option.
+- Cursor sequencing: prove local SDK execution and terminal text capture first; then add a local `review_output` custom tool with streamed `tool_call` capture as the preferred structured-output upgrade, based on `@cursor/sdk@1.0.18` exposing custom tools, MCP config, and tool-call events but no native JSON-schema output option.
 - Package/repository/CLI name: `diffwarden`; public GitHub repo is `aurokin/diffwarden`; npm publishing is deferred.
 - Config file name is `diffwarden.config.json`.
 - Config is required for real SDK runs and should be discovered through project config, then XDG user config.

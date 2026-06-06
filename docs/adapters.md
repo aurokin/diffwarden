@@ -213,9 +213,14 @@ dotfiles, an interactive shell may be needed if the key is exported from `.zshrc
 zsh -lic 'pnpm dev -- --target uncommitted --reviewer cursor'
 ```
 
-The adapter uses `@cursor/sdk`. That SDK currently depends on `sqlite3`, so
-`package.json` allows pnpm to run the `sqlite3` build script through
-`pnpm.onlyBuiltDependencies`.
+The adapter uses `@cursor/sdk` local mode with `mode: "plan"`, `sandboxOptions: { enabled: true }`,
+`autoReview: true`, empty `settingSources`, no MCP servers, and an ephemeral JSONL local store.
+The JSONL store keeps Diffwarden reviews out of Cursor's default persistent local SDK store.
+Cursor still does not expose deterministic read/glob/grep-only tool allowlisting for this path,
+so Diffwarden reports prompt-only read-only capability instead of hard enforcement.
+
+The SDK currently depends on `sqlite3`, so `pnpm-workspace.yaml` allows pnpm to run the
+`sqlite3` build script through `onlyBuiltDependencies`.
 
 Live smoke test:
 
@@ -509,7 +514,7 @@ workflow surfaces. It also passes `--no-session-persistence`, an empty `--settin
 `--no-chrome`. Claude CLI preflight verifies that the selected executable supports these policy
 flags. Diffwarden does not pass `--max-turns`; timeout remains the run-level limiter.
 
-Capability metadata is conservative. OpenCode, Grok, Antigravity, and Cursor CLI paths
+Capability metadata is conservative. OpenCode, Grok, Antigravity, and Cursor SDK/CLI paths
 currently report prompt-only read-only behavior when hard enforcement is not proven.
 
 CLI model and effort metadata is conservative. Diffwarden records requested and resolved fields

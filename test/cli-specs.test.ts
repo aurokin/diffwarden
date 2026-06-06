@@ -25,6 +25,7 @@ import {
   codexCliPromptStdinArg,
   codexCliReviewBaseArgs,
 } from "../src/adapters/codex-tool-policy.js";
+import { cursorCliReviewMode, cursorCliSandboxMode } from "../src/adapters/cursor-policy.js";
 import { piCliReviewSurfaceArgs } from "../src/adapters/pi-tool-policy.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 import { reviewResultJsonSchema } from "../src/core/schema.js";
@@ -98,9 +99,9 @@ describe("cliSpecs", () => {
         "--workspace",
         "/repo",
         "--mode",
-        "plan",
+        cursorCliReviewMode,
         "--sandbox",
-        "enabled",
+        cursorCliSandboxMode,
         "--trust",
         "--model",
         "test-model",
@@ -130,6 +131,10 @@ describe("cliSpecs", () => {
 
     expect(invocation.args).toEqual(expectedArgs);
     expect(invocation.stdin).toBe(expectedStdin);
+    if (engine === "cursor") {
+      expect(invocation.args).not.toContain("--force");
+      expect(invocation.args).not.toContain("--yolo");
+    }
   });
 
   it("builds Antigravity prompt-bearing print invocations without stdin", async () => {
