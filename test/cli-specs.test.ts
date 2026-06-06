@@ -12,6 +12,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cliSpecs } from "../src/adapters/cli-specs.js";
 import type { CliEngine, CliRunResult } from "../src/adapters/cli-types.js";
+import {
+  codexCliCwdArg,
+  codexCliIgnoredRulesArg,
+  codexCliIgnoredUserConfigArg,
+  codexCliOutputLastMessageArg,
+  codexCliOutputSchemaArg,
+  codexCliPromptStdinArg,
+  codexCliReviewBaseArgs,
+} from "../src/adapters/codex-tool-policy.js";
 import { piCliReviewSurfaceArgs } from "../src/adapters/pi-tool-policy.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 
@@ -40,28 +49,24 @@ describe("cliSpecs", () => {
       outputPath: path.join(tempDir, "codex-review.json"),
       captureMode: "native-structured",
     });
-    expect(invocation.args).toEqual(
-      expect.arrayContaining([
-        "--model",
-        "gpt-test",
-        "-c",
-        'web_search="disabled"',
-        "-c",
-        'model_reasoning_effort="high"',
-        "exec",
-        "--json",
-        "--sandbox",
-        "read-only",
-        "--ephemeral",
-        "--output-schema",
-        path.join(tempDir, "review-schema.json"),
-        "--output-last-message",
-        path.join(tempDir, "codex-review.json"),
-        "--cd",
-        "/repo",
-        "-",
-      ]),
-    );
+    expect(invocation.args).toEqual([
+      "--model",
+      "gpt-test",
+      "-c",
+      'web_search="disabled"',
+      "-c",
+      'model_reasoning_effort="high"',
+      ...codexCliReviewBaseArgs,
+      codexCliOutputSchemaArg,
+      path.join(tempDir, "review-schema.json"),
+      codexCliOutputLastMessageArg,
+      path.join(tempDir, "codex-review.json"),
+      codexCliCwdArg,
+      "/repo",
+      codexCliPromptStdinArg,
+    ]);
+    expect(invocation.args).not.toContain(codexCliIgnoredRulesArg);
+    expect(invocation.args).not.toContain(codexCliIgnoredUserConfigArg);
     expect(readFileSync(path.join(tempDir, "review-schema.json"), "utf8")).toContain(
       '"overall_correctness"',
     );

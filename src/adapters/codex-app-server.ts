@@ -37,6 +37,16 @@ import {
   codexWebSearchMode,
 } from "./codex-options.js";
 import {
+  codexAppServerDeveloperInstructions,
+  codexAppServerExecEnabled,
+  codexAppServerIsolatedDisableArgs,
+  codexAppServerReviewThreadParams,
+  codexAppServerTurnPermissionParams,
+  codexNativeReviewEffectiveWebSearchReason,
+  codexNativeReviewOutput,
+  codexNativeReviewStructuredFindings,
+} from "./codex-tool-policy.js";
+import {
   type ResolutionSource,
   effortResolutionMetadata,
   modelResolutionMetadata,
@@ -145,7 +155,7 @@ async function prepareCodexAppServerAdapter(
     readonlyCapability: "enforced",
     transport: "app-server",
     ...cliExecutableMetadata(executableSelection, resolvedExecutable),
-    execEnabled: true,
+    execEnabled: codexAppServerExecEnabled,
     ephemeral: true,
     appServerMode: options.mode,
     codexHome: options.codexHome,
@@ -295,13 +305,9 @@ class CodexAppServerSession {
       this.notify("initialized");
       const threadResponse = await this.call("thread/start", {
         cwd: this.input.cwd,
-        approvalPolicy: "never",
-        sandbox: "read-only",
         ...codexAppServerThreadConfig(this.options),
-        developerInstructions: codexDeveloperInstructions(),
-        ephemeral: true,
-        experimentalRawEvents: false,
-        persistExtendedHistory: false,
+        developerInstructions: codexAppServerDeveloperInstructions,
+        ...codexAppServerReviewThreadParams,
         ...codexAppServerThreadModelOptions(this.input.reviewer),
       });
       const threadId = stringAtPath(threadResponse, ["thread", "id"]);
@@ -328,12 +334,7 @@ class CodexAppServerSession {
     const turnResponse = await this.call("turn/start", {
       threadId,
       input: [{ type: "text", text: this.input.prompt, text_elements: [] }],
-      approvalPolicy: "never",
-      sandboxPolicy: {
-        type: "readOnly",
-        access: { type: "fullAccess" },
-        networkAccess: false,
-      },
+      ...codexAppServerTurnPermissionParams,
       outputSchema: reviewResultStrictJsonSchema,
       ...codexAppServerTurnModelOptions(this.input.reviewer),
       ...(this.input.reviewer.effort !== undefined
@@ -354,7 +355,7 @@ class CodexAppServerSession {
       captureMode: "native-structured",
       readonlyCapability: "enforced",
       transport: "app-server",
-      execEnabled: true,
+      execEnabled: codexAppServerExecEnabled,
       ephemeral: true,
       ...codexAppServerReviewModeMetadata(this.options),
       ...connection.metadata,
@@ -397,7 +398,7 @@ class CodexAppServerSession {
         captureMode: "text",
         readonlyCapability: "enforced",
         transport: "app-server",
-        execEnabled: true,
+        execEnabled: codexAppServerExecEnabled,
         ephemeral: true,
         ...codexAppServerReviewModeMetadata(this.options),
         ...connection.metadata,
@@ -1105,25 +1106,7 @@ async function spawnCodexAppServer(options: {
     ...(options.env ?? process.env),
     CODEX_HOME: codexHome,
   };
-  const args = [
-    "app-server",
-    "--listen",
-    "stdio://",
-    "--disable",
-    "plugins",
-    "--disable",
-    "apps",
-    "--disable",
-    "computer_use",
-    "--disable",
-    "browser_use",
-    "--disable",
-    "in_app_browser",
-    "--disable",
-    "image_generation",
-    "--disable",
-    "multi_agent",
-  ];
+  const args = ["app-server", "--listen", "stdio://", ...codexAppServerIsolatedDisableArgs];
   try {
     const child = spawn(options.executable, args, {
       cwd: path.join(codexHome, "workspace"),
@@ -1296,7 +1279,7 @@ function codexAppServerWebSearchMetadata(options: CodexAppServerOptions): Record
     ...(requested !== undefined ? { requestedWebSearchMode: requested } : {}),
     webSearchMode: "disabled",
     effectiveWebSearchMode: "disabled",
-    effectiveWebSearchReason: "codex-native-review-disables-web-search",
+    effectiveWebSearchReason: codexNativeReviewEffectiveWebSearchReason,
   };
 }
 
@@ -1316,8 +1299,8 @@ function codexAppServerReviewModeMetadata(
   if (options.reviewMode === "native") {
     return {
       codexReviewMode: "native",
-      nativeReviewOutput: "rendered-text",
-      nativeReviewStructuredFindings: false,
+      nativeReviewOutput: codexNativeReviewOutput,
+      nativeReviewStructuredFindings: codexNativeReviewStructuredFindings,
     };
   }
   return {
@@ -1397,15 +1380,6 @@ async function assertCodexAuthAvailable(codexHome: string): Promise<void> {
   } catch {
     throw missingAuth(`Codex auth.json not found or not readable: ${authPath}`);
   }
-}
-
-function codexDeveloperInstructions(): string {
-  return [
-    "You are running inside Diffwarden as a read-only code reviewer.",
-    "Inspect the requested repository state and return only the requested review result.",
-    "Do not modify files. Do not ask for permission to modify files.",
-    "Command execution is currently enabled for this app-server transport, but approval escalations are denied and the sandbox is read-only.",
-  ].join("\n");
 }
 
 function codexAppServerExecutableSelection(reviewer: ReviewReviewerConfig): CliExecutableSelection {

@@ -14,7 +14,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createCodexAppServerAdapter } from "../src/adapters/codex-app-server.js";
+import {
+  codexAppServerDeveloperInstructions,
+  codexAppServerExecEnabled,
+  codexAppServerIsolatedDisableArgs,
+  codexAppServerReviewThreadParams,
+  codexAppServerTurnPermissionParams,
+  codexNativeReviewEffectiveWebSearchReason,
+  codexNativeReviewOutput,
+  codexNativeReviewStructuredFindings,
+} from "../src/adapters/codex-tool-policy.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
+import { reviewResultStrictJsonSchema } from "../src/core/schema.js";
 
 let root: string | undefined;
 const cleanupFns: Array<() => Promise<void> | void> = [];
@@ -80,10 +91,10 @@ describe("createCodexAppServerAdapter", () => {
     });
     expect(harness.readInvocation().threadStart).toMatchObject({
       cwd: harness.cwd,
-      approvalPolicy: "never",
-      sandbox: "read-only",
-      ephemeral: true,
+      developerInstructions: codexAppServerDeveloperInstructions,
+      ...codexAppServerReviewThreadParams,
     });
+    expect(harness.readInvocation().threadStart).not.toHaveProperty("dynamicTools");
   });
 
   it("uses the isolated auth source when preflighting stdio-isolated mode", async () => {
@@ -162,7 +173,7 @@ describe("createCodexAppServerAdapter", () => {
       executable: harness.executable,
       requestedExecutable: harness.executable,
       executableSource: "config",
-      execEnabled: true,
+      execEnabled: codexAppServerExecEnabled,
       ephemeral: true,
       requestedModel: "gpt-test",
       resolvedModel: "gpt-test",
@@ -194,7 +205,7 @@ describe("createCodexAppServerAdapter", () => {
       executable: harness.executable,
       requestedExecutable: harness.executable,
       executableSource: "config",
-      execEnabled: true,
+      execEnabled: codexAppServerExecEnabled,
       ephemeral: true,
       codexReviewMode: "structured",
       requestedModel: "gpt-test",
@@ -202,32 +213,27 @@ describe("createCodexAppServerAdapter", () => {
       webSearchPolicy: "disabled",
       webSearchMode: "disabled",
     });
-    expect(invocation.argv).toContain("app-server");
-    expect(invocation.argv).not.toContain("shell_tool");
+    expect(invocation.argv).toEqual([
+      "app-server",
+      "--listen",
+      "stdio://",
+      ...codexAppServerIsolatedDisableArgs,
+    ]);
     expect(invocation.env.CODEX_HOME).not.toBe(harness.authHome);
     expect(invocation.threadStart).toMatchObject({
       cwd: harness.cwd,
-      approvalPolicy: "never",
-      sandbox: "read-only",
-      ephemeral: true,
-      persistExtendedHistory: false,
+      developerInstructions: codexAppServerDeveloperInstructions,
+      ...codexAppServerReviewThreadParams,
       model: "gpt-test",
     });
+    expect(invocation.threadStart).not.toHaveProperty("dynamicTools");
     expect(invocation.threadStart.config).toEqual({ web_search: "disabled" });
     expect(invocation.turnStart).toMatchObject({
-      approvalPolicy: "never",
       model: "gpt-test",
       effort: "minimal",
-      sandboxPolicy: {
-        type: "readOnly",
-        access: { type: "fullAccess" },
-        networkAccess: false,
-      },
+      ...codexAppServerTurnPermissionParams,
     });
-    expect(invocation.turnStart?.outputSchema).toMatchObject({
-      type: "object",
-      additionalProperties: false,
-    });
+    expect(invocation.turnStart?.outputSchema).toEqual(reviewResultStrictJsonSchema);
     expect(invocation.turnStart?.input[0]?.text).toBe("review prompt");
     expect(existsSync(invocation.env.CODEX_HOME)).toBe(false);
   });
@@ -362,15 +368,15 @@ describe("createCodexAppServerAdapter", () => {
 
     expect(prepared?.preflight?.metadata).toMatchObject({
       codexReviewMode: "native",
-      nativeReviewOutput: "rendered-text",
-      nativeReviewStructuredFindings: false,
+      nativeReviewOutput: codexNativeReviewOutput,
+      nativeReviewStructuredFindings: codexNativeReviewStructuredFindings,
       requestedEffort: "high",
       resolvedEffort: "high",
       webSearchPolicy: "disabled",
       requestedWebSearchMode: "disabled",
       webSearchMode: "disabled",
       effectiveWebSearchMode: "disabled",
-      effectiveWebSearchReason: "codex-native-review-disables-web-search",
+      effectiveWebSearchReason: codexNativeReviewEffectiveWebSearchReason,
     });
     expect(prepared?.preflight?.checks).toContainEqual(
       expect.objectContaining({
@@ -395,15 +401,15 @@ describe("createCodexAppServerAdapter", () => {
     expect(output.metadata).toMatchObject({
       captureMode: "text",
       codexReviewMode: "native",
-      nativeReviewOutput: "rendered-text",
-      nativeReviewStructuredFindings: false,
+      nativeReviewOutput: codexNativeReviewOutput,
+      nativeReviewStructuredFindings: codexNativeReviewStructuredFindings,
       requestedEffort: "high",
       resolvedEffort: "high",
       webSearchPolicy: "disabled",
       requestedWebSearchMode: "disabled",
       webSearchMode: "disabled",
       effectiveWebSearchMode: "disabled",
-      effectiveWebSearchReason: "codex-native-review-disables-web-search",
+      effectiveWebSearchReason: codexNativeReviewEffectiveWebSearchReason,
     });
   });
 
@@ -465,6 +471,36 @@ describe("createCodexAppServerAdapter", () => {
 
     expect(harness.readInvocation().legacyApprovalResponse).toEqual({ decision: "denied" });
   });
+
+  it.each([
+    ["item/commandExecution/requestApproval", { decision: "decline" }],
+    ["item/fileChange/requestApproval", { decision: "decline" }],
+    ["applyPatchApproval", { decision: "denied" }],
+    ["execCommandApproval", { decision: "denied" }],
+    [
+      "item/permissions/requestApproval",
+      { permissions: {}, scope: "turn", strictAutoReview: true },
+    ],
+    ["item/tool/requestUserInput", { answers: {} }],
+    [
+      "item/tool/call",
+      {
+        success: false,
+        contentItems: [{ type: "inputText", text: "Diffwarden does not expose dynamic tools." }],
+      },
+    ],
+  ] as const)(
+    "responds conservatively to app-server request %s",
+    async (serverRequestMethod, response) => {
+      const harness = createHarness({ serverRequestMethod });
+      const adapter = createCodexAppServerAdapter();
+      const reviewer = createReviewer(harness.executable);
+
+      await adapter.run(createInput(reviewer, harness));
+
+      expect(harness.readInvocation().serverRequestResponse).toEqual(response);
+    },
+  );
 
   it("returns JSON-RPC errors for unsupported server requests", async () => {
     const harness = createHarness({ unsupportedRequest: true });
@@ -541,9 +577,12 @@ type FakeInvocation = {
     approvalPolicy: string;
     sandbox: string;
     ephemeral: boolean;
+    experimentalRawEvents: boolean;
     persistExtendedHistory: boolean;
+    developerInstructions: string;
     model?: string;
     config?: unknown;
+    dynamicTools?: unknown;
   };
   config: string;
   turnStart:
@@ -563,6 +602,7 @@ type FakeInvocation = {
   };
   approvalResponse?: unknown;
   legacyApprovalResponse?: unknown;
+  serverRequestResponse?: unknown;
   unsupportedResponse?: unknown;
 };
 
@@ -667,6 +707,7 @@ function createHarness(
     retryableError?: boolean;
     sourceConfig?: string;
     unsupportedRequest?: boolean;
+    serverRequestMethod?: string;
     failedTurn?: boolean;
     directCompletedTurn?: boolean;
     directFailedTurn?: boolean;
@@ -703,6 +744,9 @@ function createHarness(
       ...(options.legacyApproval ? { DIFFWARDEN_FAKE_APP_SERVER_LEGACY_APPROVAL: "1" } : {}),
       ...(options.retryableError ? { DIFFWARDEN_FAKE_APP_SERVER_RETRYABLE_ERROR: "1" } : {}),
       ...(options.unsupportedRequest ? { DIFFWARDEN_FAKE_APP_SERVER_UNSUPPORTED: "1" } : {}),
+      ...(options.serverRequestMethod !== undefined
+        ? { DIFFWARDEN_FAKE_APP_SERVER_REQUEST_METHOD: options.serverRequestMethod }
+        : {}),
       ...(options.failedTurn ? { DIFFWARDEN_FAKE_APP_SERVER_FAILED_TURN: "1" } : {}),
       ...(options.nativeReview ? { DIFFWARDEN_FAKE_APP_SERVER_NATIVE_REVIEW: "1" } : {}),
       ...(options.directCompletedTurn
@@ -998,6 +1042,11 @@ rl.on("line", (line) => {
     finish();
     return;
   }
+  if (message.id === "server-request" && !message.method) {
+    invocation.serverRequestResponse = message.result;
+    finish();
+    return;
+  }
   if (message.method === "initialize") {
     send({ id: message.id, result: { serverInfo: { name: "fake-codex" } } });
     return;
@@ -1065,6 +1114,12 @@ rl.on("line", (line) => {
       send({
         id: "unsupported-request",
         method: "account/chatgptAuthTokens/refresh",
+        params: {}
+      });
+    } else if (process.env.DIFFWARDEN_FAKE_APP_SERVER_REQUEST_METHOD) {
+      send({
+        id: "server-request",
+        method: process.env.DIFFWARDEN_FAKE_APP_SERVER_REQUEST_METHOD,
         params: {}
       });
     } else {

@@ -5,16 +5,17 @@ workflow, and when choosing SDK or CLI transports for a reviewer.
 
 ## Diffwarden vs Codex Review
 
-Codex has a first-class review path. This comparison was refreshed on May 28,
+Codex has a first-class review path. This comparison was refreshed on June 6,
 2026 from local upstream commit
-[`462deb0426bf`](https://github.com/openai/codex/tree/462deb0426bf). The
+[`87b808bb57`](https://github.com/openai/codex/tree/87b808bb57). The
 relevant source paths are:
 
 - `codex-rs/exec/src/cli.rs` and `codex-rs/exec/src/lib.rs` for `codex review`.
-- `codex-rs/core/src/review_prompts.rs` for target-specific review prompts.
+- `codex-rs/prompts/src/review_request.rs` for target-specific review prompt templates.
 - `codex-rs/core/src/session/review.rs` and `codex-rs/core/src/tasks/review.rs` for the
   review child session.
-- `codex-rs/protocol/src/protocol.rs` for the review request/output schema.
+- `codex-rs/app-server-protocol/src/protocol/v2/review.rs` and
+  `codex-rs/protocol/src/protocol.rs` for the review request/output schema.
 
 Codex exposes non-interactive review through `codex review` and accepts these targets:
 
@@ -36,10 +37,10 @@ The Codex review path is session-native:
 4. Core resolves a target-specific prompt. For base-branch reviews it tries to compute the
    merge base and embeds the merge-base SHA in the prompt; otherwise it falls back to
    instructing the reviewer to compute it.
-5. Core spawns an isolated review child task using the Codex review rubric from
-   `core/review_prompt.md`.
+5. Core spawns an isolated review child task using the Codex review rubric.
 6. The review task disables web search, goal tools, CSV spawning, collaboration, and
-   multi-agent features for the review child.
+   multi-agent features for the review child, and forces review subagent approvals to
+   `never`.
 7. The review child uses `review_model` from Codex config when set; otherwise it uses the
    parent session model.
 8. The review task parses the last assistant message as `ReviewOutputEvent` JSON, or
@@ -74,14 +75,14 @@ the Codex app/session model.
 
 | Area | Codex review | Diffwarden |
 | --- | --- | --- |
-| Instruction shape | Separates a static review rubric (`core/review_prompt.md`) from target-specific review prompts | Builds one adapter-neutral prompt from the target, repo instructions, schema instructions, and an embedded patch for diff-backed targets |
+| Instruction shape | Separates a static review rubric from target-specific review prompts | Builds one adapter-neutral prompt from the target, repo instructions, schema instructions, and an embedded patch for diff-backed targets |
 | Target inspection | Prompts the review child to inspect the repository and run the appropriate Git diff | Core resolves the target and captures the patch before any reviewer runs |
 | Prompt fidelity | Uses Codex's full bug threshold, comment style, priority rubric, location rules, and correctness semantics | Shared prompt now carries the Codex-style rubric so all adapters receive the same review contract |
 | Structured output | Review mode asks for JSON in the prompt, then parses the final message as `ReviewOutputEvent` | Uses the shared `ReviewResult` schema with native schema output, tool-call capture, or text parsing depending on adapter support |
 | JSON parsing | Parses exact JSON, then extracts a JSON object substring, then falls back to plain text | Parses exact JSON, scans balanced JSON candidates, then falls back to plain text; this is intentionally more robust for CLI/SDK output with logs or echoed prompts |
 | Priority field | Codex prompt says priority may be omitted/null, but the protocol struct requires an integer priority | Normalized schema accepts optional priority for compatibility; strict structured-output paths require priority |
 | Review lifecycle | Emits `EnteredReviewMode`/`ExitedReviewMode`, records a synthetic review action, and writes a final assistant review into Codex history | Emits Diffwarden run/reviewer/final events, returns Markdown/JSON/NDJSON artifacts, and does not mutate a Codex thread |
-| Read-only posture | Uses a constrained review child with approval policy never and selected features disabled | Reports per-adapter capability as enforced, tool-restricted, or prompt-only; Codex CLI uses `codex exec --sandbox read-only --ephemeral` and Codex app-server uses ephemeral read-only threads |
+| Read-only posture | Uses a constrained review child with approval policy never and selected features disabled | Reports per-adapter capability as enforced, tool-restricted, or prompt-only; Codex CLI uses `codex exec --sandbox read-only --ephemeral` and Codex app-server uses ephemeral read-only threads with denied approval/tool requests |
 
 Diffwarden's current Codex-specific implementation keeps two paths: the default CLI and
 app-server flows use Diffwarden's shared schema-constrained prompt, while experimental

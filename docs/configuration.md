@@ -374,7 +374,8 @@ Codex can opt into an app-server transport. By default this path uses the
 existing shared Codex home, connects to its app-server socket when one is already running,
 and launches `codex app-server --listen unix://` only when no socket is available. Reviews
 still start ephemeral read-only threads and record `execEnabled: true` because command
-execution remains available. Diffwarden sets Codex `web_search` to `"disabled"` by default.
+execution remains available as Codex-native model tool behavior; approval escalations are
+denied. Diffwarden sets Codex `web_search` to `"disabled"` by default.
 
 ```json
 {

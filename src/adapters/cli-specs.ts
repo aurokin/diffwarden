@@ -26,6 +26,13 @@ import {
 } from "./cli-helpers.js";
 import { cliRuntimeResolutionMetadata } from "./cli-runtime-metadata.js";
 import type { CliEngine, CliSpec } from "./cli-types.js";
+import {
+  codexCliCwdArg,
+  codexCliOutputLastMessageArg,
+  codexCliOutputSchemaArg,
+  codexCliPromptStdinArg,
+  codexCliReviewBaseArgs,
+} from "./codex-tool-policy.js";
 import { droidSessionTag } from "./droid-session.js";
 import { effortResolutionMetadata, modelResolutionMetadata } from "./metadata.js";
 import { piCliReviewSurfaceArgs } from "./pi-tool-policy.js";
@@ -166,18 +173,14 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
 
       const args = [
         ...codexGlobalArgs(input.reviewer),
-        "exec",
-        "--json",
-        "--sandbox",
-        "read-only",
-        "--ephemeral",
-        "--output-schema",
+        ...codexCliReviewBaseArgs,
+        codexCliOutputSchemaArg,
         schemaPath,
-        "--output-last-message",
+        codexCliOutputLastMessageArg,
         outputPath,
-        "--cd",
+        codexCliCwdArg,
         input.cwd,
-        "-",
+        codexCliPromptStdinArg,
       ];
 
       return {

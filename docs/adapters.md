@@ -106,6 +106,25 @@ The Codex app-server transport follows the same metadata convention. It addition
 `codexHome`, `codexHomeShared`, `webSearchPolicy`, `codexReviewMode`, and app-server lifecycle
 metadata because command execution is intentionally still available for this transport.
 
+## Codex CLI
+
+The Codex CLI path runs `codex exec` instead of `codex review` so Diffwarden can use its
+shared schema-constrained prompt and parse the final message through the normal
+`ReviewResult` schema. The CLI invocation uses `--json`, `--sandbox read-only`, `--ephemeral`,
+`--output-schema`, `--output-last-message`, and `--cd <repo>`. Diffwarden sets
+`web_search = "disabled"` by default and passes effort through `model_reasoning_effort` when
+configured.
+
+Latest Codex CLI builds expose `--ignore-rules`, which could prevent user or project
+execpolicy `.rules` files from affecting review execution policy. Diffwarden does not pass it
+by default yet because older otherwise-compatible Codex CLI installs may reject the flag.
+Diffwarden also does not pass `--ignore-user-config` by default because Codex users commonly
+depend on `config.toml` for model/provider/auth configuration.
+
+The CLI path is `enforced` by Codex's read-only sandbox and headless approval policy. It is
+not small-tool allowlisted: Codex may still use its normal shell/repository inspection path,
+but writes and approval escalations are constrained by Codex's sandbox and approval policy.
+
 ## Codex App Server
 
 ```bash
@@ -118,6 +137,12 @@ The Codex app-server path is configured through a named reviewer with
 running, and launches `codex app-server --listen unix://` only when no socket is available.
 The review itself starts an ephemeral read-only thread, sets Codex `web_search` to `"disabled"` by
 default, and requests JSON-schema turn output.
+
+Diffwarden's structured app-server mode sends `approvalPolicy: "never"`, `sandbox:
+"read-only"`, `ephemeral: true`, `persistExtendedHistory: false`, no client dynamic tools, and
+a turn-scoped read-only sandbox policy with network access disabled. `stdio-isolated` launches
+`codex app-server --listen stdio://` with plugins, apps, computer use, browser use, in-app
+browser, image generation, and multi-agent features disabled.
 
 The shared Codex home resolves from `appServerOptions.codexHome`, then
 `DIFFWARDEN_CODEX_HOME`, then `DIFFWARDEN_CODEX_AUTH_HOME`, then `$CODEX_HOME`, then
@@ -162,9 +187,18 @@ per-request effort field.
 
 Command execution is currently left enabled for this transport so Codex can use
 its normal repository inspection path. Diffwarden sets approval policy to `never`, uses a
-read-only sandbox policy, denies approval escalation requests, and exposes this fact as
-`execEnabled: true` in preflight and adapter metadata. A later hardening pass can explore
-disabling shell/unified exec once the minimum required file-read surface is proven.
+read-only sandbox policy, denies approval escalation requests, and rejects dynamic tool calls.
+Diffwarden does not call app-server `command/exec`; that is a separate client API. The
+remaining shell/unified-exec exposure is Codex-native model tool behavior, and Diffwarden
+exposes this fact as `execEnabled: true` in preflight and adapter metadata. A later hardening
+pass can explore disabling shell/unified exec once the minimum required file-read surface is
+proven.
+
+Diffwarden does not add Codex-specific tool-call, turn, step, retry, or equivalent caps. The
+reviewer timeout remains the run-level limiter. Codex-native limits that can still affect a
+review include model context/truncation behavior, command output capture and command timeout
+defaults, app-server socket launch/handshake waits, and native review mode's rendered-text
+parsing path.
 
 ## Cursor SDK
 
