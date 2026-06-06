@@ -64,9 +64,17 @@ describe("piAdapter", () => {
       model: "test/test-model",
       resolvedModel: "test/test-model",
       modelResolutionSource: "adapter-selection",
+      piImplicitModelSelection: true,
+      piImplicitModelCandidateCount: 1,
+      piImplicitModelSelectionScope: "all-authenticated-models",
       piSettingsSource: "in-memory",
       piSettingsDiskInheritance: false,
       piTimeoutPolicy: "diffwarden-reviewer-timeout",
+    });
+    expect(preflight?.checks.find((check) => check.name === "model")).toMatchObject({
+      status: "passed",
+      detail:
+        "No Pi model configured; using only available Pi model: test/test-model in all authenticated Pi models.",
     });
   });
 
@@ -86,6 +94,131 @@ describe("piAdapter", () => {
     expect(preflight?.checks.find((check) => check.name === "auth")?.detail).toContain(
       "environment-backed auth",
     );
+  });
+
+  it("warns when an unconfigured Pi model selects from multiple authenticated models", async () => {
+    const { adapter } = createMockPiAdapter([
+      { provider: "cerebras", id: "gpt-oss-120b" },
+      { provider: "anthropic", id: "claude-test" },
+    ]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: { id: "pi", sdk: "pi", readonly: true },
+      readonly: true,
+      env: {},
+    });
+
+    expect(preflight?.checks.find((check) => check.name === "model")).toMatchObject({
+      status: "warning",
+      detail:
+        "No Pi model configured; using first available Pi model: cerebras/gpt-oss-120b from 2 candidate(s) in all authenticated Pi models. Pin reviewer.model for stable provider-heavy profiles.",
+    });
+    expect(preflight?.metadata).toMatchObject({
+      model: "cerebras/gpt-oss-120b",
+      resolvedModel: "cerebras/gpt-oss-120b",
+      modelResolutionSource: "adapter-selection",
+      piImplicitModelSelection: true,
+      piImplicitModelCandidateCount: 2,
+      piImplicitModelSelectionScope: "all-authenticated-models",
+    });
+  });
+
+  it("does not warn when a Pi model is explicit", async () => {
+    const { adapter } = createMockPiAdapter([
+      { provider: "cerebras", id: "gpt-oss-120b" },
+      { provider: "anthropic", id: "claude-test" },
+    ]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "pi",
+        sdk: "pi",
+        readonly: true,
+        model: "anthropic/claude-test",
+      },
+      readonly: true,
+      env: {},
+    });
+
+    expect(preflight?.checks.find((check) => check.name === "model")).toMatchObject({
+      status: "passed",
+      detail: "Using requested Pi model: anthropic/claude-test.",
+    });
+    expect(preflight?.metadata).toMatchObject({
+      model: "anthropic/claude-test",
+      requestedModel: "anthropic/claude-test",
+      resolvedModel: "anthropic/claude-test",
+      modelResolutionSource: "requested",
+      piImplicitModelSelection: false,
+    });
+    expect(preflight?.metadata).not.toHaveProperty("piImplicitModelCandidateCount");
+  });
+
+  it("does not warn when a provider filter leaves one implicit Pi model candidate", async () => {
+    const { adapter } = createMockPiAdapter([
+      { provider: "cerebras", id: "gpt-oss-120b" },
+      { provider: "anthropic", id: "claude-test" },
+    ]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "pi-anthropic",
+        sdk: "pi",
+        readonly: true,
+        provider: "anthropic",
+      },
+      readonly: true,
+      env: {},
+    });
+
+    expect(preflight?.checks.find((check) => check.name === "model")).toMatchObject({
+      status: "passed",
+      detail:
+        "No Pi model configured; using only available Pi model: anthropic/claude-test in provider anthropic.",
+    });
+    expect(preflight?.metadata).toMatchObject({
+      model: "anthropic/claude-test",
+      provider: "anthropic",
+      piImplicitModelSelection: true,
+      piImplicitModelCandidateCount: 1,
+      piImplicitModelSelectionScope: "provider",
+    });
+  });
+
+  it("warns when a provider filter leaves multiple implicit Pi model candidates", async () => {
+    const { adapter } = createMockPiAdapter([
+      { provider: "anthropic", id: "claude-sonnet" },
+      { provider: "anthropic", id: "claude-opus" },
+      { provider: "cerebras", id: "gpt-oss-120b" },
+    ]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "pi-anthropic",
+        sdk: "pi",
+        readonly: true,
+        provider: "anthropic",
+      },
+      readonly: true,
+      env: {},
+    });
+
+    expect(preflight?.checks.find((check) => check.name === "model")).toMatchObject({
+      status: "warning",
+      detail:
+        "No Pi model configured; using first available Pi model: anthropic/claude-sonnet from 2 candidate(s) in provider anthropic. Pin reviewer.model for stable provider-heavy profiles.",
+    });
+    expect(preflight?.metadata).toMatchObject({
+      model: "anthropic/claude-sonnet",
+      provider: "anthropic",
+      piImplicitModelSelection: true,
+      piImplicitModelCandidateCount: 2,
+      piImplicitModelSelectionScope: "provider",
+    });
   });
 
   it("uses isolated in-memory Pi settings and reports native runtime controls", async () => {
@@ -636,6 +769,9 @@ describe("piAdapter", () => {
       model: "test/test-model",
       resolvedModel: "test/test-model",
       modelResolutionSource: "adapter-selection",
+      piImplicitModelSelection: true,
+      piImplicitModelCandidateCount: 1,
+      piImplicitModelSelectionScope: "all-authenticated-models",
     });
     expect(calls.createAgentSession).toHaveLength(1);
     expect(calls.createAgentSession[0]).toMatchObject({
@@ -749,7 +885,9 @@ describe("piAdapter", () => {
       requestedModel: "anthropic/claude-test",
       resolvedModel: "anthropic/claude-test",
       modelResolutionSource: "requested",
+      piImplicitModelSelection: false,
     });
+    expect(output.metadata).not.toHaveProperty("piImplicitModelCandidateCount");
     expect(calls.createAgentSession[0]).toMatchObject({
       model: requestedModel,
       scopedModels: [{ model: fallbackModel }, { model: requestedModel }],

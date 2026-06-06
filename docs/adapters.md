@@ -253,6 +253,13 @@ The adapter loads `@earendil-works/pi-coding-agent`, checks environment-backed
 authenticated models, runs with a scoped model list, and captures structured output through
 a terminating `review_output` tool.
 
+When no model is configured, Pi selects the first authenticated model from the scoped model
+list. Diffwarden keeps that behavior for ad hoc `--reviewer pi` runs, but preflight reports
+`piImplicitModelSelection` metadata and warns when more than one candidate model exists.
+Reusable provider-heavy profiles should pin `provider`, `model`, and usually `effort` in
+config so results do not drift with environment variables, login state, or Pi model registry
+ordering.
+
 By default the adapter builds an isolated, in-memory `AuthStorage` (`AuthStorage.inMemory()`)
 that only sees provider credentials from environment variables. Set
 `sdkOptions.authSource: "shared"` on the reviewer to use `AuthStorage.create(authPath?)`

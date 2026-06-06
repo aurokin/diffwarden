@@ -199,6 +199,10 @@ Public effort values:
 
 Provider-backed Pi profiles can keep provider-specific auth and base URL wiring in config
 while leaving the public CLI surface unchanged.
+Use named profiles for reusable reviewer sets and pin `provider`, `model`, and usually
+`effort`. Bare `--reviewer pi` remains useful for ad hoc local runs, but it selects the first
+authenticated Pi model when no model is configured; that choice can drift as auth state or
+Pi's model registry changes.
 
 ```json
 {
@@ -234,8 +238,11 @@ auto-refreshes OAuth tokens with file locking, without spawning the CLI.
 {
   "reviewers": [
     {
-      "id": "pi-shared",
+      "id": "pi-shared-codex-high",
       "engine": "pi",
+      "provider": "openai-codex",
+      "model": "gpt-5.5",
+      "effort": "high",
       "sdkOptions": {
         "authSource": "shared"
       }
@@ -248,6 +255,12 @@ auto-refreshes OAuth tokens with file locking, without spawning the CLI.
 optional `sdkOptions.authPath` to point at a non-default `auth.json` (a leading `~` is
 expanded to the home directory); `authPath` is rejected unless `authSource` is `"shared"`.
 Environment-backed provider auth still composes on top of shared credentials.
+
+Use isolated auth with `providerOptions.apiKeyEnv`/`baseUrlEnv` when the profile should be
+fully described by Diffwarden config and environment variables, such as CI or provider API
+key workflows. Use shared auth when the intended provider/model depends on a Pi CLI OAuth
+login that cannot be represented as an API key. In both modes, reusable provider-heavy
+profiles should pin the model instead of relying on Pi's first authenticated model.
 
 Note: `"shared"` reads real credentials and **writes to `auth.json` on disk**: the file (and
 its parent directory) is created empty if it does not yet exist, and the file is rewritten

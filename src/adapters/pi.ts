@@ -79,6 +79,7 @@ export function createPiAdapter(
         input.reviewer.model,
         input.reviewer.provider,
       );
+      const candidateModels = filterPiModelsByProvider(availableModels, input.reviewer.provider);
       const effort = resolvePiEffort(
         selectedModel,
         input.reviewer.effort,
@@ -93,6 +94,7 @@ export function createPiAdapter(
         ...piProviderMetadata(input.reviewer),
         ...piAuthMetadata(authOptions),
         ...piEffortMetadata(effort),
+        ...piImplicitModelSelectionMetadata(input.reviewer, candidateModels),
         ...piSettingsMetadata(settingsManager),
       });
 
@@ -110,11 +112,10 @@ export function createPiAdapter(
           },
           {
             name: "model",
-            status: "passed",
-            detail:
-              input.reviewer.model === undefined
-                ? `Using first available Pi model: ${formatPiModel(selectedModel)}.`
-                : `Using requested Pi model: ${formatPiModel(selectedModel)}.`,
+            status: shouldWarnOnImplicitPiModelSelection(input.reviewer, candidateModels)
+              ? "warning"
+              : "passed",
+            detail: piModelCheckDetail(input.reviewer, selectedModel, candidateModels),
           },
           {
             name: "readonly",
@@ -158,6 +159,7 @@ export function createPiAdapter(
         input.reviewer.model,
         input.reviewer.provider,
       );
+      const candidateModels = filterPiModelsByProvider(availableModels, input.reviewer.provider);
       const effort = resolvePiEffort(
         selectedModel,
         input.reviewer.effort,
@@ -167,12 +169,11 @@ export function createPiAdapter(
 
       try {
         const sessionManager = sdk.SessionManager.inMemory(input.cwd);
-        const scopedModels = filterPiModelsByProvider(availableModels, input.reviewer.provider);
         const { session } = await sdk.createAgentSession({
           cwd: input.cwd,
           model: selectedModel,
           ...piSessionEffortOptions(effort),
-          scopedModels: scopedModels.map((model) => ({
+          scopedModels: candidateModels.map((model) => ({
             model,
             ...piSessionEffortOptions(
               resolvePiEffort(model, input.reviewer.effort, input.reviewer.effortSource),
@@ -219,6 +220,7 @@ export function createPiAdapter(
         ...piProviderMetadata(input.reviewer),
         ...piAuthMetadata(authOptions),
         ...piEffortMetadata(effort),
+        ...piImplicitModelSelectionMetadata(input.reviewer, candidateModels),
         ...piSettingsMetadata(settingsManager),
       });
 
@@ -885,6 +887,53 @@ function piModelResolutionMetadata(
     source:
       reviewer.model === undefined ? "adapter-selection" : (reviewer.modelSource ?? "requested"),
   });
+}
+
+function piImplicitModelSelectionMetadata(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+  candidateModels: PiModel[],
+): Record<string, unknown> {
+  const implicit = reviewer.model === undefined;
+
+  return {
+    piImplicitModelSelection: implicit,
+    ...(implicit
+      ? {
+          piImplicitModelCandidateCount: candidateModels.length,
+          piImplicitModelSelectionScope:
+            reviewer.provider === undefined ? "all-authenticated-models" : "provider",
+        }
+      : {}),
+  };
+}
+
+function shouldWarnOnImplicitPiModelSelection(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+  candidateModels: PiModel[],
+): boolean {
+  return reviewer.model === undefined && candidateModels.length > 1;
+}
+
+function piModelCheckDetail(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+  selectedModel: PiModel,
+  candidateModels: PiModel[],
+): string {
+  const selected = formatPiModel(selectedModel);
+  if (reviewer.model !== undefined) {
+    return `Using requested Pi model: ${selected}.`;
+  }
+
+  const scope =
+    reviewer.provider === undefined
+      ? "all authenticated Pi models"
+      : `provider ${reviewer.provider}`;
+
+  if (candidateModels.length > 1) {
+    return `No Pi model configured; using first available Pi model: ${selected} from ${candidateModels.length} candidate(s) in ${scope}. Pin reviewer.model for stable provider-heavy profiles.`;
+  }
+
+  return `No Pi model configured; using only available Pi model: ${selected} in ${scope}.`;
 }
 
 function resolvePiEffort(
