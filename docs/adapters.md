@@ -305,6 +305,33 @@ authenticated model with `PI_SMOKE_MODEL`.
 PI_SMOKE_MODEL=anthropic/claude-opus-4-5 DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk
 ```
 
+### Pi SDK versus CLI comparison
+
+Run the credential-free comparison fixture when changing Pi SDK or Pi CLI review behavior:
+
+```bash
+pnpm vitest run --config vitest.unit.config.ts test/pi-comparison.test.ts
+```
+
+The fixture keeps the expected transport differences explicit. The SDK path uses `read`,
+`grep`, `find`, `ls`, and terminating `review_output` tool-call capture; output metadata
+reports `captureMode: "tool-call"`. The CLI path runs `pi --print --mode json`, disables
+sessions, extensions, skills, prompt templates, themes, and context files, restricts tools to
+`read,grep,find,ls`, and parses JSONL/text output; output metadata reports
+`captureMode: "text"`.
+
+Optional live comparison runs are separate from the default loop and must keep the spend guard.
+Pin a cheap or specific authenticated model rather than relying on Pi model registry order.
+
+```bash
+PI_SMOKE_MODEL=anthropic/claude-sonnet-4-5 DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk
+DIFFWARDEN_LIVE_CLI=pi DIFFWARDEN_LIVE_PI_MODEL=anthropic/claude-sonnet-4-5 DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:cli
+```
+
+For provider-qualified CLI runs, either pass the full provider/model string in
+`DIFFWARDEN_LIVE_PI_MODEL` or split it across `DIFFWARDEN_LIVE_PI_PROVIDER` and
+`DIFFWARDEN_LIVE_PI_MODEL`. `DIFFWARDEN_LIVE_PI_EFFORT` maps to the CLI `--thinking` flag.
+
 ## Droid
 
 ```bash
@@ -455,6 +482,7 @@ Override CLI executable paths with engine-specific variables when a binary is no
 
 ```bash
 DIFFWARDEN_LIVE_PI_EXECUTABLE=/Users/auro/.local/share/mise/installs/npm-earendil-works-pi-coding-agent/latest/bin/pi
+DIFFWARDEN_LIVE_PI_MODEL=anthropic/claude-sonnet-4-5
 DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE=/Users/auro/.local/bin/droid
 DIFFWARDEN_LIVE_DROID_SDK_EXECUTABLE=/Users/auro/.local/bin/droid
 DIFFWARDEN_LIVE_DROID_MACHINE_ID=YOUR_DROID_COMPUTER_ID
