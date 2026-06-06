@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { AgentOptions } from "@cursor/sdk";
 import {
   DiffwardenError,
@@ -5,6 +8,13 @@ import {
   missingRequirement,
   reviewerFailed,
 } from "../core/errors.js";
+import {
+  cursorReviewAutoReview,
+  cursorReviewMcpServers,
+  cursorReviewMode,
+  cursorReviewSandboxOptions,
+  cursorReviewSettingSources,
+} from "./cursor-policy.js";
 import {
   effortResolutionMetadata,
   modelResolutionMetadata,
@@ -68,10 +78,16 @@ export function createCursorAdapter(
             name: "readonly",
             status: "warning",
             detail:
-              "Cursor local mode is constrained by prompt instructions, not tool-level enforcement.",
+              "Cursor SDK runs in plan mode with sandbox and auto-review enabled, but Cursor does not expose deterministic read/glob/grep-only tool enforcement.",
           },
         ],
         metadata: sdkPreflightMetadata("cursor", {
+          cursorMode: cursorReviewMode,
+          cursorAutoReview: cursorReviewAutoReview,
+          cursorSandboxEnabled: cursorReviewSandboxOptions.enabled,
+          cursorSettingSources: cursorReviewSettingSources,
+          cursorMcpServers: Object.keys(cursorReviewMcpServers),
+          cursorStore: "jsonl-ephemeral",
           model,
           canonicalModel: modelPreflight.canonicalModelId,
           ...(modelPreflight.alias !== undefined ? { modelAlias: modelPreflight.alias } : {}),
@@ -101,20 +117,27 @@ export function createCursorAdapter(
       const apiKey = assertCursorAuth(input.env);
       const configuredModel = input.reviewer.model ?? defaultCursorModel;
 
-      const { Agent } = await dependencies.loadSdk();
+      const { Agent, JsonlLocalAgentStore } = await dependencies.loadSdk();
       let agent: CursorAgent | undefined;
       let run: CursorRun | undefined;
       let removeAbortListener: (() => void) | undefined;
+      const storeDirectory = await mkdtemp(path.join(tmpdir(), "diffwarden-cursor-sdk-"));
 
       try {
+        const store = new JsonlLocalAgentStore(storeDirectory) as CursorLocalStore;
         agent = await Agent.create({
           apiKey,
           model: {
             id: configuredModel,
           },
+          mode: cursorReviewMode,
+          mcpServers: cursorReviewMcpServers,
           local: {
             cwd: input.cwd,
-            settingSources: [],
+            autoReview: cursorReviewAutoReview,
+            sandboxOptions: { ...cursorReviewSandboxOptions },
+            settingSources: [...cursorReviewSettingSources],
+            store,
           },
         });
 
@@ -145,6 +168,12 @@ export function createCursorAdapter(
           metadata: sdkOutputMetadata("cursor", {
             agentId: agent.agentId,
             runId: run.id,
+            cursorMode: cursorReviewMode,
+            cursorAutoReview: cursorReviewAutoReview,
+            cursorSandboxEnabled: cursorReviewSandboxOptions.enabled,
+            cursorSettingSources: cursorReviewSettingSources,
+            cursorMcpServers: Object.keys(cursorReviewMcpServers),
+            cursorStore: "jsonl-ephemeral",
             model: result.model ?? configuredModel,
             ...modelResolutionMetadata({
               requested: input.reviewer.model,
@@ -179,6 +208,7 @@ export function createCursorAdapter(
       } finally {
         removeAbortListener?.();
         await disposeCursorAgent(agent);
+        await rm(storeDirectory, { force: true, recursive: true });
       }
     },
   };
@@ -190,12 +220,15 @@ type CursorSdk = {
   Agent: {
     create(options: AgentOptions): Promise<CursorAgent>;
   };
+  JsonlLocalAgentStore: new (rootDir: string) => unknown;
   Cursor: {
     models: {
       list(options?: { apiKey?: string }): Promise<CursorModel[]>;
     };
   };
 };
+
+type CursorLocalStore = NonNullable<NonNullable<AgentOptions["local"]>["store"]>;
 
 type CursorModel = {
   id: string;

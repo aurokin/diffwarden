@@ -12,8 +12,8 @@ importers:
         specifier: ^0.3.167
         version: 0.3.167(@anthropic-ai/sdk@0.96.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
       '@cursor/sdk':
-        specifier: ^1.0.13
-        version: 1.0.13
+        specifier: ^1.0.18
+        version: 1.0.18
       '@earendil-works/pi-coding-agent':
         specifier: 0.75.3
         version: 0.75.3(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.1)(zod@4.4.3)
@@ -319,33 +319,38 @@ packages:
     peerDependencies:
       '@bufbuild/protobuf': ^1.10.0
 
-  '@cursor/sdk-darwin-arm64@1.0.13':
-    resolution: {integrity: sha512-zHRTNtVRHw4KSAEFmtO0Av7jv9D60DrB+pygVNWGyKtRR44fcwtRHuLAJmO4HThxQw7MMvUJuAaNmCQxzHtPDQ==}
+  '@cursor/sdk-darwin-arm64@1.0.18':
+    resolution: {integrity: sha512-gXfNz+n3uf2hWCUcSdU/gBYT7TFlWwJjZAAjXFzBJ3jGu+l7ShQRa9QI2sEKvPNRtUMC/18EcQ26ks1o261Bnw==}
     cpu: [arm64]
     os: [darwin]
+    hasBin: true
 
-  '@cursor/sdk-darwin-x64@1.0.13':
-    resolution: {integrity: sha512-7XsIkMKp6h/4W9zBx02Py1euJLAJVxlkwmm9GSoUjc+3hfFvHY/R/WTbX2TFgF4g1vOAq/HM7GmXBXq+e4M4+w==}
+  '@cursor/sdk-darwin-x64@1.0.18':
+    resolution: {integrity: sha512-nzcPqCvPPnYsuz21olPgandVgGUzDZkHN4cUls4ukm7mddp6XqujFJv8lh9qKmVefl0/3UL2R6GFANggjwifnA==}
     cpu: [x64]
     os: [darwin]
+    hasBin: true
 
-  '@cursor/sdk-linux-arm64@1.0.13':
-    resolution: {integrity: sha512-bDgfPPgc84gUn3k+Iiq5OLZozzM0UYZdKbQ821pbZy1OPWTFaSkjXsoAB6xqf9wALWyW1eQxOC4RprPBLoy+yA==}
+  '@cursor/sdk-linux-arm64@1.0.18':
+    resolution: {integrity: sha512-MJyhVryN+0czP48SgMak/KA9xGneQ/gdsnDk1ZTJF+LemaFc+Tv7P1GT80h+3JBfu69kPyIX4epJVjroTMoFEA==}
     cpu: [arm64]
     os: [linux]
+    hasBin: true
 
-  '@cursor/sdk-linux-x64@1.0.13':
-    resolution: {integrity: sha512-BTccnB5hVqK8Y0778oql6gbk7kIIlzQrBqt5QNLJpwBidjjde/mlvAajVB9hB3a29jelOwm0gJjMsLfqTkEPdw==}
+  '@cursor/sdk-linux-x64@1.0.18':
+    resolution: {integrity: sha512-IaJqcKtXxtQEdPxivQjDWbvynw3UX31V8RdagcZ6RgHOo+B/i/P95D8svSNC4V9nbTHwVbNGfIDQ5S64gMS2hg==}
     cpu: [x64]
     os: [linux]
+    hasBin: true
 
-  '@cursor/sdk-win32-x64@1.0.13':
-    resolution: {integrity: sha512-GxWlwj4G513EfGmvPVBa4y+vNn9B5Cj+npu8fVcJ0P+U9sruhgo4pvqGbWxkn5EIKbpGoraLq9QB4nFeoT1uRQ==}
+  '@cursor/sdk-win32-x64@1.0.18':
+    resolution: {integrity: sha512-iqcGt1l/3xgnaT+PotY3237oyK3VnOZHtjUxSRP3Q7ahjaqsZVTnCwwljj+nal8ouvXidBHnxQLqGMSC2G6LTg==}
     cpu: [x64]
     os: [win32]
+    hasBin: true
 
-  '@cursor/sdk@1.0.13':
-    resolution: {integrity: sha512-w6MWkgOTL6yb6GV/4Odx7QcamQgqhzX/CzcMBkqiiOPTPuEWItWrgA0qdivchm5YJXTt+LZkFSEQ/Ti44hVbfg==}
+  '@cursor/sdk@1.0.18':
+    resolution: {integrity: sha512-ha5EGHliMuTNuAqnPHzKFNnND4y6erddTqtxwIt9/p8ER+QsmMoRcP38PwA2sXfZnGvIBiozveBZqa4XwUddCw==}
     engines: {node: '>=18'}
 
   '@earendil-works/pi-agent-core@0.75.3':
@@ -2717,22 +2722,22 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 1.10.0
 
-  '@cursor/sdk-darwin-arm64@1.0.13':
+  '@cursor/sdk-darwin-arm64@1.0.18':
     optional: true
 
-  '@cursor/sdk-darwin-x64@1.0.13':
+  '@cursor/sdk-darwin-x64@1.0.18':
     optional: true
 
-  '@cursor/sdk-linux-arm64@1.0.13':
+  '@cursor/sdk-linux-arm64@1.0.18':
     optional: true
 
-  '@cursor/sdk-linux-x64@1.0.13':
+  '@cursor/sdk-linux-x64@1.0.18':
     optional: true
 
-  '@cursor/sdk-win32-x64@1.0.13':
+  '@cursor/sdk-win32-x64@1.0.18':
     optional: true
 
-  '@cursor/sdk@1.0.13':
+  '@cursor/sdk@1.0.18':
     dependencies:
       '@bufbuild/protobuf': 1.10.0
       '@connectrpc/connect': 1.7.0(@bufbuild/protobuf@1.10.0)
@@ -2741,11 +2746,11 @@ snapshots:
       sqlite3: 5.1.7
       zod: 3.25.76
     optionalDependencies:
-      '@cursor/sdk-darwin-arm64': 1.0.13
-      '@cursor/sdk-darwin-x64': 1.0.13
-      '@cursor/sdk-linux-arm64': 1.0.13
-      '@cursor/sdk-linux-x64': 1.0.13
-      '@cursor/sdk-win32-x64': 1.0.13
+      '@cursor/sdk-darwin-arm64': 1.0.18
+      '@cursor/sdk-darwin-x64': 1.0.18
+      '@cursor/sdk-linux-arm64': 1.0.18
+      '@cursor/sdk-linux-x64': 1.0.18
+      '@cursor/sdk-win32-x64': 1.0.18
     transitivePeerDependencies:
       - bluebird
       - supports-color

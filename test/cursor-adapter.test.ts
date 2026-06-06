@@ -1,4 +1,11 @@
 import { describe, expect, it } from "vitest";
+import {
+  cursorReviewAutoReview,
+  cursorReviewMcpServers,
+  cursorReviewMode,
+  cursorReviewSandboxOptions,
+  cursorReviewSettingSources,
+} from "../src/adapters/cursor-policy.js";
 import { createCursorAdapter, cursorAdapter } from "../src/adapters/cursor.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
 import { isIntegrationDisabled } from "./integration.js";
@@ -128,6 +135,66 @@ describe("cursorAdapter", () => {
       code: "missing_auth",
       exitCode: 3,
       message: "Cursor model preflight authentication failed: invalid API key",
+    });
+  });
+
+  it("configures Cursor SDK local review controls", async () => {
+    let createOptions: unknown;
+    let storeRoot: string | undefined;
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return mockCursorSdk({
+          createStore(rootDir) {
+            storeRoot = rootDir;
+          },
+          async createAgent(options) {
+            createOptions = options;
+            return {
+              agentId: "agent-1",
+              async send() {
+                return {
+                  id: "run-1",
+                  async cancel() {},
+                  async wait() {
+                    return {
+                      status: "finished",
+                      result: "",
+                      model: "composer-2.5",
+                      durationMs: 12,
+                    };
+                  },
+                };
+              },
+              async [Symbol.asyncDispose]() {},
+            };
+          },
+        });
+      },
+    });
+
+    const output = await adapter.run(input({ env: { CURSOR_API_KEY: "key" } }));
+
+    expect(createOptions).toMatchObject({
+      apiKey: "key",
+      model: { id: "composer-2.5" },
+      mode: cursorReviewMode,
+      mcpServers: cursorReviewMcpServers,
+      local: {
+        cwd: process.cwd(),
+        autoReview: cursorReviewAutoReview,
+        sandboxOptions: cursorReviewSandboxOptions,
+        settingSources: cursorReviewSettingSources,
+      },
+    });
+    expect(createOptions).toHaveProperty("local.store");
+    expect(storeRoot).toContain("diffwarden-cursor-sdk-");
+    expect(output.metadata).toMatchObject({
+      cursorMode: cursorReviewMode,
+      cursorAutoReview: cursorReviewAutoReview,
+      cursorSandboxEnabled: cursorReviewSandboxOptions.enabled,
+      cursorSettingSources: cursorReviewSettingSources,
+      cursorMcpServers: [],
+      cursorStore: "jsonl-ephemeral",
     });
   });
 
@@ -298,16 +365,25 @@ type MockCursorAgent = {
 function mockCursorSdk(options: {
   models?: Array<{ id: string; aliases?: string[] }>;
   listModels?: () => Promise<Array<{ id: string; aliases?: string[] }>>;
-  createAgent?: () => Promise<MockCursorAgent>;
+  createAgent?: (options: unknown) => Promise<MockCursorAgent>;
+  createStore?: (rootDir: string) => void;
 }) {
   return {
     Agent: {
-      async create() {
+      async create(createOptions: unknown) {
         if (options.createAgent === undefined) {
           throw new Error("Unexpected Cursor Agent.create call");
         }
-        return options.createAgent();
+        return options.createAgent(createOptions);
       },
+    },
+    JsonlLocalAgentStore: class MockCursorStore {
+      rootDir: string;
+
+      constructor(rootDir: string) {
+        this.rootDir = rootDir;
+        options.createStore?.(rootDir);
+      }
     },
     Cursor: {
       models: {
