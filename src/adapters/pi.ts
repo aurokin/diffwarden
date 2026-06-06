@@ -32,6 +32,12 @@ const piThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"] as
 const piAuthSources = ["isolated", "shared"] as const;
 const piTransportSettings = ["auto", "sse", "websocket", "websocket-cached"] as const;
 const piMessageDeliveryModes = ["all", "one-at-a-time"] as const;
+const piReviewSettingsKeys = [
+  "transport",
+  "steeringMode",
+  "followUpMode",
+  "thinkingBudgets",
+] as const;
 const defaultPiReviewSettings: Partial<PiSettings> = {
   transport: "auto",
   steeringMode: "one-at-a-time",
@@ -641,6 +647,14 @@ function normalizePiReviewSettings(
     throw invalidConfig("Pi sdkOptions.settings must be an object");
   }
 
+  for (const key of Object.keys(rawSettings)) {
+    if (!isPiReviewSettingsKey(key)) {
+      throw invalidConfig(
+        `Pi sdkOptions.settings.${key} is not supported; supported fields: ${piReviewSettingsKeys.join(", ")}`,
+      );
+    }
+  }
+
   const settings: Partial<PiSettings> = { ...defaultPiReviewSettings };
   if (rawSettings.transport !== undefined) {
     settings.transport = piTransportOption(rawSettings.transport, "sdkOptions.settings.transport");
@@ -679,6 +693,10 @@ function piMessageDeliveryModeOption(value: unknown, name: string): PiMessageDel
     throw invalidConfig(`${name} must be one of: ${piMessageDeliveryModes.join(", ")}`);
   }
   return value;
+}
+
+function isPiReviewSettingsKey(value: string): value is (typeof piReviewSettingsKeys)[number] {
+  return piReviewSettingsKeys.some((key) => key === value);
 }
 
 function isPiTransportSetting(value: unknown): value is PiTransportSetting {

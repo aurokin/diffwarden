@@ -245,6 +245,29 @@ describe("piAdapter", () => {
     });
   });
 
+  it("rejects unsupported Pi SDK settings keys instead of ignoring them", async () => {
+    const { adapter } = createMockPiAdapter([{ provider: "test", id: "test-model" }]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "pi",
+          sdk: "pi",
+          readonly: true,
+          sdkOptions: { settings: { compaction: { enabled: false } } },
+        },
+        readonly: true,
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+      message:
+        "Pi sdkOptions.settings.compaction is not supported; supported fields: transport, steeringMode, followUpMode, thinkingBudgets",
+    });
+  });
+
   it("reports Pi provider retry SDK defaults when no explicit provider controls are set", async () => {
     const { adapter } = createMockPiAdapter([{ provider: "test", id: "test-model" }], {
       settings: {
