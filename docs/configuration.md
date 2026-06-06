@@ -491,3 +491,31 @@ Use `claude-code` or `api-key` to make the choice explicit:
   ]
 }
 ```
+
+## Claude Tool Policy
+
+Claude SDK and CLI reviews use a small read-only review surface: `Read`, `Grep`, and `Glob`.
+Current Claude documentation treats `allowedTools` as auto-approval rules, not as an
+availability allowlist. Diffwarden therefore restricts SDK built-in tools with `tools`, mirrors
+that list into `allowedTools`, uses `permissionMode: "dontAsk"` so anything outside the
+approved read tools is denied instead of prompting, and sets `strictMcpConfig: true` with an
+empty MCP server map. It also sends explicit deny rules for high risk surfaces such as `Bash`,
+`PowerShell`, `Monitor`, `Edit`, `Write`, `NotebookEdit`, `WebFetch`, `WebSearch`, `Agent`,
+`Skill`, and `Workflow`.
+
+Claude CLI reviews mirror the same policy with `--tools`, `--allowedTools`,
+`--disallowedTools`, and `--permission-mode dontAsk`. The CLI path also disables session
+persistence, settings sources, ambient MCP config, slash commands, and Chrome integration for
+the review invocation.
+
+`LS` is not included. The current Claude tools reference no longer lists an `LS` built-in tool,
+and `Glob` is sufficient for path discovery inside Diffwarden's restricted review surface.
+Diffwarden does not add Claude tool-call, turn, step, or retry caps around normal reviews; the
+reviewer timeout is the run-level circuit breaker. Claude-native limits may still apply,
+including model context limits, structured-output retry behavior, provider output limits, and
+built-in tool result limits.
+
+Diffwarden checks local Claude Code executables for the required review policy flags before
+using them. In `sdkOptions.authMode: "auto"`, an outdated local Claude Code install falls back
+to `ANTHROPIC_API_KEY` when an API key is available. In forced `claude-code` mode or CLI
+transport, unsupported executables fail preflight with a missing-requirement error.

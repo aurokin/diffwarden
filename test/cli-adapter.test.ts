@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { claudeCliReviewPolicyCliFlags } from "../src/adapters/claude-tool-policy.js";
 import { createCliAdapter } from "../src/adapters/cli.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 
@@ -344,6 +345,49 @@ describe("createCliAdapter", () => {
     expect(invocation.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
   });
 
+  it("fails Claude CLI preflight when the executable lacks review policy flags", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_OLD_CLAUDE_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--allowedTools"),
+    });
+  });
+
+  it("checks Claude CLI policy flags during direct API key runs", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, {
+      sdkOptions: { authMode: "api-key" },
+    });
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        env: {
+          ...harness.env,
+          ANTHROPIC_API_KEY: "test-key",
+          DIFFWARDEN_FAKE_OLD_CLAUDE_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--allowedTools"),
+    });
+  });
+
   it("can force Claude API key auth for Claude CLI runs", async () => {
     const harness = createHarness("claude");
     const adapter = createCliAdapter("claude");
@@ -578,6 +622,14 @@ if (engine === "claude" && process.argv[2] === "auth" && process.argv[3] === "st
     process.stdout.write(JSON.stringify({ loggedIn: true, apiKeySource: "ANTHROPIC_API_KEY" }));
   } else {
     process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "max" }));
+  }
+  process.exit(0);
+}
+if (engine === "claude" && process.argv.includes("--help")) {
+  if (process.env.DIFFWARDEN_FAKE_OLD_CLAUDE_HELP === "1") {
+    process.stdout.write("--tools --disallowedTools --permission-mode");
+  } else {
+    process.stdout.write(${JSON.stringify(claudeCliReviewPolicyCliFlags.join(" "))});
   }
   process.exit(0);
 }

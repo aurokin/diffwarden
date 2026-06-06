@@ -2,6 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { invalidCli } from "../core/errors.js";
+import { claudeCliReviewPolicyCliFlags } from "./claude-tool-policy.js";
+import { assertClaudeExecutableSupportsReviewPolicy } from "./claude.js";
 import {
   claudeCliEffort,
   cliCapability,
@@ -13,7 +15,7 @@ import {
 } from "./cli-helpers.js";
 import { resolveExecutable, runCli, trimForMetadata } from "./cli-process.js";
 import { cliSpecs } from "./cli-specs.js";
-import type { CliEngine } from "./cli-types.js";
+import type { CliEngine, CliInvocation } from "./cli-types.js";
 import { codexCliWebSearchPolicy, codexWebSearchMetadata } from "./codex-options.js";
 import {
   type ResolutionSource,
@@ -61,6 +63,9 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
         if (canUsePreparedExecutable(invocation.executable, input, runContext)) {
           invocation.resolvedExecutable = runContext.resolvedExecutable;
         }
+        if (engine === "claude") {
+          await prepareClaudeCliInvocation(invocation, input);
+        }
         const result = await runCli(invocation, input);
         const output = await spec.parseOutput(result, invocation);
         output.metadata = mergeResolutionMetadataRecords(
@@ -94,6 +99,20 @@ async function prepareCliAdapter(
     ...cliExecutableMetadata(executableSelection, resolvedExecutable),
     ...cliSelectionMetadata(engine, input.reviewer),
   };
+  const policyChecks: ReviewAdapterPreflightResult["checks"] = [];
+
+  if (engine === "claude") {
+    await assertClaudeExecutableSupportsReviewPolicy(
+      resolvedExecutable,
+      input.env,
+      claudeCliReviewPolicyCliFlags,
+    );
+    policyChecks.push({
+      name: "claude-policy",
+      status: "passed",
+      detail: "Claude executable supports Diffwarden review policy flags.",
+    });
+  }
 
   return {
     preflight: {
@@ -103,6 +122,7 @@ async function prepareCliAdapter(
           status: "passed",
           detail: `Using ${resolvedExecutable}.`,
         },
+        ...policyChecks,
         {
           name: "readonly",
           status: capability.readonlyCapability === "prompt-only" ? "warning" : "passed",
@@ -168,6 +188,36 @@ function canUsePreparedExecutable(
     runContext.requestedExecutable === executable &&
     runContext.path === pathContext(input.env).path
   );
+}
+
+async function prepareClaudeCliInvocation(
+  invocation: CliInvocation,
+  input: ReviewAdapterInput,
+): Promise<void> {
+  const env = cliInvocationEnv(invocation, input);
+  invocation.resolvedExecutable =
+    invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
+  await assertClaudeExecutableSupportsReviewPolicy(
+    invocation.resolvedExecutable,
+    env,
+    claudeCliReviewPolicyCliFlags,
+  );
+}
+
+function cliInvocationEnv(
+  invocation: CliInvocation,
+  input: Pick<ReviewAdapterInput, "env">,
+): NodeJS.ProcessEnv {
+  const env = {
+    ...(input.env ?? process.env),
+    ...invocation.env,
+  };
+
+  for (const key of invocation.unsetEnv ?? []) {
+    Reflect.deleteProperty(env, key);
+  }
+
+  return env;
 }
 
 function pathContext(env: NodeJS.ProcessEnv | undefined): { path?: string } {

@@ -237,9 +237,16 @@ ANTHROPIC_API_KEY=... pnpm dev -- --target uncommitted --reviewer claude
 pnpm dev -- --target uncommitted --reviewer claude
 ```
 
-The adapter uses `@anthropic-ai/claude-agent-sdk` with tools restricted to `Read`, `Grep`,
-`Glob`, and `LS`, isolated setting sources, and native JSON Schema output. In the default
-`auto` auth mode, Diffwarden
+The adapter uses `@anthropic-ai/claude-agent-sdk` with built-in tools restricted to `Read`,
+`Grep`, and `Glob`, isolated setting sources, an empty MCP server map, strict MCP config, no
+session persistence, and native JSON Schema output. Current Claude docs distinguish `tools` from `allowedTools`:
+`tools` constrains the built-in tool surface, while `allowedTools` only pre-approves tools.
+Diffwarden sets both to `Read`, `Grep`, and `Glob`, uses `permissionMode: "dontAsk"` so
+unapproved tools are denied, and also sends deny rules for write, shell, web, skill, agent,
+and workflow tools. `LS` is intentionally omitted because the current Claude tools reference
+does not list it; `Glob` is the listing primitive for this restricted review surface.
+
+In the default `auto` auth mode, Diffwarden
 checks `claude auth status --json` with Anthropic API credentials removed from the child
 environment. If that reports a logged-in Claude Code account, the SDK is pointed at the
 local `claude` executable and API credentials are removed from the SDK process environment
@@ -270,6 +277,17 @@ Force a specific Claude SDK auth path with reviewer `sdkOptions.authMode`:
 ```
 
 Valid values are `auto`, `claude-code`, and `api-key`.
+
+When local Claude Code auth is selected, Diffwarden first checks that the selected `claude`
+executable supports the review policy flags used by the SDK/CLI paths. In `auto` mode, an
+outdated local executable falls back to `ANTHROPIC_API_KEY` when one is available; forced
+`claude-code` mode fails preflight with a missing-requirement error instead of running with a
+weaker policy.
+
+Diffwarden does not set Claude SDK `maxTurns` for review runs; the reviewer timeout is the
+run-level limiter. Claude-native limits can still stop or shape a run, including model context
+limits, structured-output retry behavior, provider output limits, and built-in tool result
+limits such as Glob result caps.
 
 Live smoke test:
 
@@ -483,7 +501,13 @@ print-mode behavior.
 Claude CLI transport uses the same `sdkOptions.authMode` values as the Claude SDK adapter.
 In `auto` mode, Diffwarden checks the selected Claude executable for logged-in Claude Code
 auth with Anthropic API credentials removed, then removes those credentials from the actual
-`claude -p` run when local Claude Code auth is available.
+`claude -p` run when local Claude Code auth is available. The invocation uses
+`--tools Read,Grep,Glob` as the built-in allowlist, matching `--allowedTools` for approval under
+`--permission-mode dontAsk`, and `--disallowedTools` for write, shell, web, skill, agent, and
+workflow surfaces. It also passes `--no-session-persistence`, an empty `--setting-sources`,
+`--strict-mcp-config` with an empty MCP config file, `--disable-slash-commands`, and
+`--no-chrome`. Claude CLI preflight verifies that the selected executable supports these policy
+flags. Diffwarden does not pass `--max-turns`; timeout remains the run-level limiter.
 
 Capability metadata is conservative. OpenCode, Grok, Antigravity, and Cursor CLI paths
 currently report prompt-only read-only behavior when hard enforcement is not proven.

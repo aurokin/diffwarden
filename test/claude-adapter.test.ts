@@ -3,6 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  claudeDisallowedTools,
+  claudeReviewTools,
+  claudeSdkReviewPolicyCliFlags,
+} from "../src/adapters/claude-tool-policy.js";
+import {
   claudeAdapter,
   createClaudeAdapter,
   resolveClaudeRuntime,
@@ -146,6 +151,56 @@ describe("claudeAdapter", () => {
     expect(calls[0]?.options?.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
   });
 
+  it("falls back to API key auth in auto mode when Claude Code lacks policy flags", async () => {
+    const fakeBin = createEnvSensitiveFakeClaudeExecutable({ policyFlags: false });
+    const { adapter, calls } = createMockClaudePreflightAdapterWithRuntime([{ value: "sonnet" }]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "sonnet",
+        readonly: true,
+      },
+      readonly: true,
+      env: {
+        ANTHROPIC_API_KEY: "test-key",
+        PATH: fakeBin,
+      },
+    });
+
+    expect(preflight?.metadata).toMatchObject({
+      authMode: "api-key",
+      authPreference: "auto",
+    });
+    expect(calls[0]?.options?.pathToClaudeCodeExecutable).toBeUndefined();
+  });
+
+  it("fails forced Claude Code auth when Claude Code lacks policy flags", async () => {
+    const fakeBin = createEnvSensitiveFakeClaudeExecutable({ policyFlags: false });
+
+    await expect(
+      claudeAdapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "sonnet",
+          readonly: true,
+          sdkOptions: { authMode: "claude-code" },
+        },
+        readonly: true,
+        env: {
+          PATH: fakeBin,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--allowedTools"),
+    });
+  });
+
   it("can force Claude API key auth when Claude Code auth is available", async () => {
     const fakeBin = createEnvSensitiveFakeClaudeExecutable();
     const { adapter, calls } = createMockClaudePreflightAdapterWithRuntime([{ value: "sonnet" }]);
@@ -233,12 +288,16 @@ describe("claudeAdapter", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.options).toMatchObject({
       cwd: process.cwd(),
-      tools: ["Read", "Grep", "Glob", "LS"],
+      tools: [...claudeReviewTools],
+      allowedTools: [...claudeReviewTools],
+      disallowedTools: [...claudeDisallowedTools],
       permissionMode: "dontAsk",
       settingSources: [],
+      mcpServers: {},
+      strictMcpConfig: true,
       persistSession: false,
-      maxTurns: 1,
     });
+    expect(calls[0]?.options).not.toHaveProperty("maxTurns");
     expect(preflight?.checks.find((check) => check.name === "model")).toMatchObject({
       status: "passed",
       detail: "Claude model is available: sonnet.",
@@ -501,9 +560,17 @@ describe("claudeAdapter", () => {
     );
 
     expect(calls[0]?.options).toMatchObject({
-      tools: ["Read", "Grep", "Glob", "LS"],
+      tools: [...claudeReviewTools],
+      allowedTools: [...claudeReviewTools],
+      disallowedTools: [...claudeDisallowedTools],
+      permissionMode: "dontAsk",
+      settingSources: [],
+      mcpServers: {},
+      strictMcpConfig: true,
+      persistSession: false,
       effort: "max",
     });
+    expect(calls[0]?.options).not.toHaveProperty("maxTurns");
     expect(output.metadata).toMatchObject({
       effort: "max",
       requestedEffort: "xhigh",
@@ -751,6 +818,10 @@ if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
   echo '{"loggedIn":${options.loggedIn ? "true" : "false"}}'
   exit 0
 fi
+if [ "$1" = "--help" ]; then
+  echo '${claudeSdkReviewPolicyCliFlags.join(" ")}'
+  exit 0
+fi
 echo '2.1.143 (Claude Code)'
 `,
   );
@@ -758,7 +829,7 @@ echo '2.1.143 (Claude Code)'
   return tempDir;
 }
 
-function createEnvSensitiveFakeClaudeExecutable(): string {
+function createEnvSensitiveFakeClaudeExecutable(options: { policyFlags?: boolean } = {}): string {
   tempDir = mkdtempSync(path.join(tmpdir(), "diffwarden-claude-"));
   const executable = path.join(tempDir, "claude");
   writeFileSync(
@@ -770,6 +841,10 @@ if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
   else
     echo '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"max"}'
   fi
+  exit 0
+fi
+if [ "$1" = "--help" ]; then
+  echo '${options.policyFlags === false ? "--tools --disallowedTools --permission-mode" : claudeSdkReviewPolicyCliFlags.join(" ")}'
   exit 0
 fi
 echo '2.1.143 (Claude Code)'
