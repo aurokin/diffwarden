@@ -26,6 +26,19 @@ import {
   codexCliReviewBaseArgs,
 } from "../src/adapters/codex-tool-policy.js";
 import { cursorCliReviewMode, cursorCliSandboxMode } from "../src/adapters/cursor-policy.js";
+import {
+  geminiCliReviewApprovalMode,
+  geminiCliReviewDisabledExtensions,
+  geminiCliReviewMcpAllowlist,
+  geminiCliReviewOutputFormat,
+  geminiCliReviewPolicyFileName,
+  geminiCliReviewPolicyMetadata,
+  geminiCliReviewPolicyToml,
+  geminiCliReviewTrustedFoldersFileName,
+  geminiCliSkipTrustFlag,
+  geminiCliTrustWorkspaceEnvVar,
+  geminiCliTrustedFoldersPathEnvVar,
+} from "../src/adapters/gemini-tool-policy.js";
 import { piCliReviewSurfaceArgs } from "../src/adapters/pi-tool-policy.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 import { reviewResultJsonSchema } from "../src/core/schema.js";
@@ -89,52 +102,68 @@ describe("cliSpecs", () => {
     expect(invocation.args.join(" ")).not.toContain("web_search=");
   });
 
-  it.each([
-    [
-      "cursor",
-      [
-        "-p",
-        "--output-format",
-        "json",
-        "--workspace",
-        "/repo",
-        "--mode",
-        cursorCliReviewMode,
-        "--sandbox",
-        cursorCliSandboxMode,
-        "--trust",
-        "--model",
-        "test-model",
-        "review prompt",
-      ],
-      undefined,
-    ],
-    [
-      "gemini",
-      [
-        "--prompt",
-        "",
-        "--output-format",
-        "json",
-        "--approval-mode",
-        "plan",
-        "--model",
-        "test-model",
-      ],
-      "review prompt",
-    ],
-  ] as const)("builds %s text CLI invocations", async (engine, expectedArgs, expectedStdin) => {
-    const invocation = await cliSpecs[engine].buildInvocation(
-      createInput(createReviewer(engine, { model: "test-model" })),
+  it("builds Cursor text CLI invocations", async () => {
+    const invocation = await cliSpecs.cursor.buildInvocation(
+      createInput(createReviewer("cursor", { model: "test-model" })),
       createTempDir(),
     );
 
-    expect(invocation.args).toEqual(expectedArgs);
-    expect(invocation.stdin).toBe(expectedStdin);
-    if (engine === "cursor") {
-      expect(invocation.args).not.toContain("--force");
-      expect(invocation.args).not.toContain("--yolo");
-    }
+    expect(invocation.args).toEqual([
+      "-p",
+      "--output-format",
+      "json",
+      "--workspace",
+      "/repo",
+      "--mode",
+      cursorCliReviewMode,
+      "--sandbox",
+      cursorCliSandboxMode,
+      "--trust",
+      "--model",
+      "test-model",
+      "review prompt",
+    ]);
+    expect(invocation.stdin).toBeUndefined();
+    expect(invocation.args).not.toContain("--force");
+    expect(invocation.args).not.toContain("--yolo");
+  });
+
+  it("builds Gemini policy-restricted text CLI invocations", async () => {
+    const tempDir = createTempDir();
+    const policyPath = path.join(tempDir, geminiCliReviewPolicyFileName);
+    const trustedFoldersPath = path.join(tempDir, geminiCliReviewTrustedFoldersFileName);
+    const invocation = await cliSpecs.gemini.buildInvocation(
+      createInput(createReviewer("gemini", { model: "test-model" })),
+      tempDir,
+    );
+
+    expect(invocation.args).toEqual([
+      "--prompt",
+      "",
+      geminiCliSkipTrustFlag,
+      "--output-format",
+      geminiCliReviewOutputFormat,
+      "--approval-mode",
+      geminiCliReviewApprovalMode,
+      "--policy",
+      policyPath,
+      "--admin-policy",
+      policyPath,
+      "--allowed-mcp-server-names",
+      geminiCliReviewMcpAllowlist,
+      "--extensions",
+      geminiCliReviewDisabledExtensions,
+      "--model",
+      "test-model",
+    ]);
+    expect(invocation.args).not.toContain("--sandbox");
+    expect(invocation.stdin).toBe("review prompt");
+    expect(invocation.env).toMatchObject({
+      [geminiCliTrustedFoldersPathEnvVar]: trustedFoldersPath,
+    });
+    expect(invocation.unsetEnv).toEqual([geminiCliTrustWorkspaceEnvVar]);
+    expect(readFileSync(policyPath, "utf8")).toBe(geminiCliReviewPolicyToml());
+    expect(readFileSync(trustedFoldersPath, "utf8")).toBe("{}\n");
   });
 
   it("builds Antigravity prompt-bearing print invocations without stdin", async () => {
@@ -678,6 +707,7 @@ describe("cliSpecs", () => {
       metadata: {
         captureMode: "text",
         readonlyCapability: "tool-restricted",
+        ...geminiCliReviewPolicyMetadata(),
         resolvedModel: "gemini-runtime",
         modelResolutionSource: "provider-result",
       },

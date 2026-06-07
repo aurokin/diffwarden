@@ -65,6 +65,11 @@ Use Codex as the semantic reference for review behavior, especially its review p
 ## CLI transport references
 
 - Gemini CLI repository: https://github.com/google-gemini/gemini-cli
+- Gemini CLI Plan Mode docs: https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/plan-mode.md
+- Gemini CLI Policy Engine docs: https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/policy-engine.md
+- Gemini CLI trusted folders docs: https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/trusted-folders.md
+- Gemini CLI tools reference: https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/tools.md
+- Google Gemini CLI to Antigravity CLI transition notice: https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/
 - OpenCode repository: https://github.com/sst/opencode
 - Factory Droid CLI docs: https://docs.factory.ai/reference/cli-reference
 - Grok CLI docs: https://docs.x.ai/docs/grok-cli/overview

@@ -482,6 +482,32 @@ Codex CLI sets `web_search = "disabled"` by default to match Codex review mode. 
 `cliOptions.webSearch` to `"enabled"` to opt into live search, or `"inherit"` to leave
 Codex's configured default untouched.
 
+Gemini CLI uses `--approval-mode plan` and JSON output, but Plan Mode alone still exposes
+web, research, and planning surfaces that are broader than Diffwarden's review policy. For
+review runs, Diffwarden writes a temporary Policy Engine admin policy that allows only
+`read_file`, `list_directory`, `glob`, and Gemini's grep tool names (`grep_search` plus legacy
+alias `search_file_content`), denies every MCP tool at a higher priority than the built-in allow
+rule, denies every other built-in tool across all approval modes, passes the same file through
+`--policy` and `--admin-policy`, passes
+`--allowed-mcp-server-names ""`, and passes `--extensions none`. The duplicated policy path
+preserves Diffwarden's user-tier policy when Gemini ignores supplemental admin policies because a
+standard system admin policy directory already exists; a centrally configured admin policy can
+still override lower-tier user policies if it explicitly conflicts with Diffwarden's review
+policy. Gemini CLI preflight verifies the selected executable supports the required policy flags.
+Diffwarden also unsets any inherited `GEMINI_CLI_TRUST_WORKSPACE`, points
+`GEMINI_CLI_TRUSTED_FOLDERS_PATH` at a temporary empty trust database, and passes
+`--skip-trust`. Gemini currently loads workspace settings before `--skip-trust` sets session
+trust, so the isolated trust database prevents a review from inheriting repository workspace
+settings or hooks from the user's persistent trusted-folders state while still allowing headless
+prompt mode to start. Gemini CLI policy preflight uses the same inherited-trust scrub and
+temporary trusted-folders isolation for its `--help` capability probe. Gemini may downgrade
+approval mode for untrusted startup phases, which is why Diffwarden's generated policy applies
+across all approval modes instead of only Plan Mode.
+Diffwarden does not pass a Gemini tool-call, turn, step, retry, or equivalent cap; the
+reviewer timeout is the run-level limiter. Diffwarden also does not enable `--sandbox` by
+default because Gemini sandboxing depends on provider-native local sandbox prerequisites; the
+default read-only posture is the policy-restricted Plan Mode invocation.
+
 OpenCode CLI receives the review prompt on stdin, adds transport-specific guidance to use the
 embedded patch first, uses a generated low-tool `diffwarden-review-*` agent by default, and injects
 `OPENCODE_CONFIG_CONTENT` with a generated agent that allows only `read`, `glob`, and `grep`
@@ -534,8 +560,10 @@ result; Diffwarden strips display-only formatting such as a trailing context-win
 reporting it. Pi CLI reports the runtime model in assistant message records. Claude and Pi CLI
 values are runtime-result evidence, not startup configuration proof.
 Diffwarden does not infer effort for Claude or Pi CLI unless the CLI emits an explicit runtime
-effort field. Gemini remains supported, but new runtime-metadata extraction work should not build
-additional Gemini-specific behavior. Antigravity rejects model and effort overrides.
+effort field. Gemini remains supported for enterprise and paid API-key users after Google's
+June 18, 2026 consumer/free Gemini CLI transition to Antigravity CLI, but new runtime-metadata
+extraction work should not build additional Gemini-specific behavior. Antigravity rejects model
+and effort overrides.
 
 ## Live Test Controls
 

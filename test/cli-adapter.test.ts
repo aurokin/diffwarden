@@ -12,6 +12,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { claudeCliReviewPolicyCliFlags } from "../src/adapters/claude-tool-policy.js";
 import { createCliAdapter } from "../src/adapters/cli.js";
+import {
+  geminiCliReviewPolicyCliFlags,
+  geminiCliSkipTrustFlag,
+  geminiCliTrustWorkspaceEnvVar,
+  geminiCliTrustedFoldersPathEnvVar,
+} from "../src/adapters/gemini-tool-policy.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 
 type CliEngine = Exclude<ReviewReviewerConfig["sdk"], "fake">;
@@ -91,6 +97,7 @@ describe("createCliAdapter", () => {
 
   it("spawns a text CLI and captures stdout", async () => {
     const harness = createHarness("gemini");
+    (harness.env as NodeJS.ProcessEnv)[geminiCliTrustWorkspaceEnvVar] = "true";
     const adapter = createCliAdapter("gemini");
     const reviewer = createReviewer("gemini", harness.executable, { model: "test-model" });
 
@@ -107,6 +114,26 @@ describe("createCliAdapter", () => {
       modelResolutionSource: "requested",
     });
     expect(invocation.stdin).toBe("review prompt");
+    expect(invocation.env[geminiCliTrustWorkspaceEnvVar]).toBeUndefined();
+    expect(invocation.env[geminiCliTrustedFoldersPathEnvVar]).toContain(
+      "gemini-trusted-folders.json",
+    );
+    expect(invocation.args).toEqual(
+      expect.arrayContaining([
+        geminiCliSkipTrustFlag,
+        "--approval-mode",
+        "plan",
+        "--policy",
+        expect.stringContaining("gemini-review-policy.toml"),
+        "--admin-policy",
+        expect.stringContaining("gemini-review-policy.toml"),
+        "--allowed-mcp-server-names",
+        "",
+        "--extensions",
+        "none",
+      ]),
+    );
+    expect(invocation.args).not.toContain("--sandbox");
   });
 
   it("runs Opencode with stdin prompt input and low-tool review agent config", async () => {
@@ -182,6 +209,14 @@ describe("createCliAdapter", () => {
       requestedExecutable: "gemini",
       executableSource: "adapter-default",
     });
+    expect(preflight?.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "gemini-policy",
+          status: "passed",
+        }),
+      ]),
+    );
     expect(output.metadata).toMatchObject({
       executable: harness.executable,
       requestedExecutable: "gemini",
@@ -385,6 +420,198 @@ describe("createCliAdapter", () => {
     ).rejects.toMatchObject({
       code: "missing_requirement",
       message: expect.stringContaining("--allowedTools"),
+    });
+  });
+
+  it("fails Gemini CLI preflight when the executable lacks review policy flags", async () => {
+    const harness = createHarness("gemini");
+    const adapter = createCliAdapter("gemini");
+    const reviewer = createReviewer("gemini", harness.executable);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_OLD_GEMINI_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--admin-policy"),
+    });
+  });
+
+  it("does not treat Gemini --admin-policy help text as --policy support", async () => {
+    const harness = createHarness("gemini");
+    const adapter = createCliAdapter("gemini");
+    const reviewer = createReviewer("gemini", harness.executable);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_GEMINI_ADMIN_POLICY_ONLY: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--policy"),
+    });
+  });
+
+  it("isolates Gemini CLI trust state during preflight policy checks", async () => {
+    const harness = createHarness("gemini");
+    const adapter = createCliAdapter("gemini");
+    const reviewer = createReviewer("gemini", harness.executable);
+
+    const preflight = await adapter.preflight?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAIL_ON_TRUSTED_GEMINI_HELP: "1",
+        [geminiCliTrustWorkspaceEnvVar]: "true",
+      },
+    });
+
+    expect(preflight?.checks).toContainEqual(
+      expect.objectContaining({
+        name: "gemini-policy",
+        status: "passed",
+      }),
+    );
+  });
+
+  it("checks Gemini CLI policy flags during direct runs", async () => {
+    const harness = createHarness("gemini");
+    const adapter = createCliAdapter("gemini");
+    const reviewer = createReviewer("gemini", harness.executable);
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_OLD_GEMINI_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--admin-policy"),
+    });
+  });
+
+  it("reuses Gemini CLI policy preflight checks during prepared runs", async () => {
+    const harness = createHarness("gemini");
+    const failHelpMarker = path.join(harness.cwd, "fail-gemini-help");
+    const env = {
+      ...harness.env,
+      DIFFWARDEN_FAIL_GEMINI_HELP_IF_MARKER: failHelpMarker,
+    };
+    const adapter = createCliAdapter("gemini");
+    const reviewer = createReviewer("gemini", harness.executable);
+    const prepared = await adapter.prepare?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env,
+    });
+    expect(Object.isFrozen(prepared?.runContext)).toBe(true);
+    expect(prepared?.runContext).not.toHaveProperty("executableIdentity");
+    writeFileSync(failHelpMarker, "fail repeated help");
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      runContext: prepared?.runContext,
+      env,
+    });
+
+    expect(output.text).toContain("gemini text");
+  });
+
+  it("rechecks Gemini CLI policy flags when the prepared run environment changes", async () => {
+    const harness = createHarness("gemini");
+    const adapter = createCliAdapter("gemini");
+    const reviewer = createReviewer("gemini", harness.executable);
+    const prepared = await adapter.prepare?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: harness.env,
+    });
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        runContext: prepared?.runContext,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_OLD_GEMINI_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--admin-policy"),
+    });
+  });
+
+  it("rechecks Gemini CLI policy flags when the prepared executable changes", async () => {
+    const harness = createHarness("gemini");
+    const adapter = createCliAdapter("gemini");
+    const reviewer = createReviewer("gemini", harness.executable);
+    const prepared = await adapter.prepare?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: harness.env,
+    });
+    writeFileSync(harness.executable, `${fakeCliScript("gemini")}\n// changed after prepare\n`);
+    chmodSync(harness.executable, 0o755);
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        runContext: prepared?.runContext,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_OLD_GEMINI_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--admin-policy"),
+    });
+  });
+
+  it("does not trust caller-supplied Gemini run contexts as policy preflight proof", async () => {
+    const harness = createHarness("gemini");
+    const adapter = createCliAdapter("gemini");
+    const reviewer = createReviewer("gemini", harness.executable);
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        runContext: {
+          kind: "cli",
+          requestedExecutable: harness.executable,
+          resolvedExecutable: harness.executable,
+          policyChecks: ["gemini"],
+        },
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_OLD_GEMINI_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--admin-policy"),
     });
   });
 
@@ -633,12 +860,40 @@ if (engine === "claude" && process.argv.includes("--help")) {
   }
   process.exit(0);
 }
+if (engine === "gemini" && process.argv.includes("--help")) {
+  const failHelpMarker = process.env.DIFFWARDEN_FAIL_GEMINI_HELP_IF_MARKER;
+  if (failHelpMarker && fs.existsSync(failHelpMarker)) {
+    process.stderr.write("gemini help repeated after marker");
+    process.exit(67);
+  }
+  if (
+    process.env.DIFFWARDEN_FAIL_ON_TRUSTED_GEMINI_HELP === "1" &&
+    process.env.GEMINI_CLI_TRUST_WORKSPACE === "true"
+  ) {
+    process.stderr.write("gemini help inherited trusted workspace");
+    process.exit(66);
+  }
+  if (process.env.DIFFWARDEN_FAKE_GEMINI_ADMIN_POLICY_ONLY === "1") {
+    process.stdout.write(${JSON.stringify(
+      geminiCliReviewPolicyCliFlags.filter((flag) => flag !== "--policy").join(" "),
+    )});
+    process.exit(0);
+  }
+  if (process.env.DIFFWARDEN_FAKE_OLD_GEMINI_HELP === "1") {
+    process.stdout.write("--prompt --output-format --approval-mode --allowed-mcp-server-names --extensions");
+  } else {
+    process.stdout.write(${JSON.stringify(geminiCliReviewPolicyCliFlags.join(" "))});
+  }
+  process.exit(0);
+}
 const stdin = fs.readFileSync(0, "utf8");
 fs.writeFileSync(invocationPath, JSON.stringify({
   args: process.argv.slice(2),
   env: {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+    GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE,
+    GEMINI_CLI_TRUSTED_FOLDERS_PATH: process.env.GEMINI_CLI_TRUSTED_FOLDERS_PATH,
     OPENCODE_CONFIG_CONTENT: process.env.OPENCODE_CONFIG_CONTENT,
     OPENCODE_PERMISSION: process.env.OPENCODE_PERMISSION,
   },

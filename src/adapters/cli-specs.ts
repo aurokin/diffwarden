@@ -36,6 +36,19 @@ import {
 } from "./codex-tool-policy.js";
 import { cursorCliReviewMode, cursorCliSandboxMode } from "./cursor-policy.js";
 import { droidSessionTag } from "./droid-session.js";
+import {
+  geminiCliReviewApprovalMode,
+  geminiCliReviewDisabledExtensions,
+  geminiCliReviewMcpAllowlist,
+  geminiCliReviewOutputFormat,
+  geminiCliReviewPolicyFileName,
+  geminiCliReviewPolicyMetadata,
+  geminiCliReviewPolicyToml,
+  geminiCliReviewTrustedFoldersFileName,
+  geminiCliSkipTrustFlag,
+  geminiCliTrustWorkspaceEnvVar,
+  geminiCliTrustedFoldersPathEnvVar,
+} from "./gemini-tool-policy.js";
 import { effortResolutionMetadata, modelResolutionMetadata } from "./metadata.js";
 import { piCliReviewSurfaceArgs } from "./pi-tool-policy.js";
 import type { ReviewAdapterInput } from "./types.js";
@@ -302,16 +315,37 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
     },
   },
   gemini: {
-    async buildInvocation(input) {
-      const args = ["--prompt", "", "--output-format", "json", "--approval-mode", "plan"];
+    async buildInvocation(input, tempDir) {
+      const policyPath = path.join(tempDir, geminiCliReviewPolicyFileName);
+      const trustedFoldersPath = path.join(tempDir, geminiCliReviewTrustedFoldersFileName);
+      await writeFile(policyPath, geminiCliReviewPolicyToml(), "utf8");
+      await writeFile(trustedFoldersPath, "{}\n", "utf8");
+      const args = [
+        "--prompt",
+        "",
+        geminiCliSkipTrustFlag,
+        "--output-format",
+        geminiCliReviewOutputFormat,
+        "--approval-mode",
+        geminiCliReviewApprovalMode,
+        "--policy",
+        policyPath,
+        "--admin-policy",
+        policyPath,
+        "--allowed-mcp-server-names",
+        geminiCliReviewMcpAllowlist,
+        "--extensions",
+        geminiCliReviewDisabledExtensions,
+      ];
       pushModel(args, input.reviewer);
 
       return {
         executable: cliExecutable(input.reviewer, defaultCliExecutable("gemini")),
         args,
         env: {
-          GEMINI_CLI_TRUST_WORKSPACE: "true",
+          [geminiCliTrustedFoldersPathEnvVar]: trustedFoldersPath,
         },
+        unsetEnv: [geminiCliTrustWorkspaceEnvVar],
         stdin: input.prompt,
         captureMode: "text",
       };
@@ -320,6 +354,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
         readonlyCapability: "tool-restricted",
+        ...geminiCliReviewPolicyMetadata(),
         ...cliRuntimeResolutionMetadata(result.stdout),
       });
     },

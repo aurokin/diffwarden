@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { invalidCli } from "../core/errors.js";
@@ -17,6 +18,13 @@ import { resolveExecutable, runCli, trimForMetadata } from "./cli-process.js";
 import { cliSpecs } from "./cli-specs.js";
 import type { CliEngine, CliInvocation } from "./cli-types.js";
 import { codexCliWebSearchPolicy, codexWebSearchMetadata } from "./codex-options.js";
+import {
+  geminiCliReviewPolicyCliFlags,
+  geminiCliReviewTrustedFoldersFileName,
+  geminiCliTrustWorkspaceEnvVar,
+  geminiCliTrustedFoldersPathEnvVar,
+} from "./gemini-tool-policy.js";
+import { assertGeminiExecutableSupportsReviewPolicy } from "./gemini.js";
 import {
   type ResolutionSource,
   effortResolutionMetadata,
@@ -39,6 +47,23 @@ type CliRunContext = {
   path?: string;
 };
 
+type CliPolicyCheckEngine = Extract<CliEngine, "claude" | "gemini">;
+type CliExecutableIdentity = {
+  realpath: string;
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+};
+type PreparedPolicyCheckState = {
+  policyChecks: Set<CliPolicyCheckEngine>;
+  resolvedExecutable: string;
+  executableIdentity?: CliExecutableIdentity;
+  envFingerprint: string;
+};
+
+const preparedPolicyChecks = new WeakMap<object, PreparedPolicyCheckState>();
+
 export function createCliAdapter(engine: CliEngine): ReviewAdapter {
   const spec = cliSpecs[engine];
   const capability = cliCapability(engine);
@@ -60,11 +85,29 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
           capability.defaultExecutable,
         );
         const runContext = cliRunContext(input.runContext);
-        if (canUsePreparedExecutable(invocation.executable, input, runContext)) {
-          invocation.resolvedExecutable = runContext.resolvedExecutable;
+        const preparedRunContext = canUsePreparedExecutable(
+          invocation.executable,
+          input,
+          runContext,
+        )
+          ? runContext
+          : undefined;
+        if (preparedRunContext !== undefined) {
+          invocation.resolvedExecutable = preparedRunContext.resolvedExecutable;
         }
         if (engine === "claude") {
-          await prepareClaudeCliInvocation(invocation, input);
+          await prepareClaudeCliInvocation(
+            invocation,
+            input,
+            await hasPreparedPolicyCheck(engine, preparedRunContext, invocation, input),
+          );
+        }
+        if (engine === "gemini") {
+          await prepareGeminiCliInvocation(
+            invocation,
+            input,
+            await hasPreparedPolicyCheck(engine, preparedRunContext, invocation, input),
+          );
         }
         const result = await runCli(invocation, input);
         const output = await spec.parseOutput(result, invocation);
@@ -93,6 +136,7 @@ async function prepareCliAdapter(
   validateSupportedCliOverrides(engine, input.reviewer);
   const executableSelection = cliExecutableSelection(input.reviewer, capability.defaultExecutable);
   const resolvedExecutable = await resolveExecutable(executableSelection.executable, input.env);
+  const executableIdentity = await cliExecutableIdentity(resolvedExecutable);
   const metadata: ReviewAdapterPreflightResult["metadata"] = {
     readonlyCapability: capability.readonlyCapability,
     transport: "cli",
@@ -100,19 +144,54 @@ async function prepareCliAdapter(
     ...cliSelectionMetadata(engine, input.reviewer),
   };
   const policyChecks: ReviewAdapterPreflightResult["checks"] = [];
+  const verifiedPolicyChecks: CliPolicyCheckEngine[] = [];
+  let policyCheckEnvFingerprint: string | undefined;
 
   if (engine === "claude") {
+    const policyEnv = input.env ?? process.env;
     await assertClaudeExecutableSupportsReviewPolicy(
       resolvedExecutable,
-      input.env,
+      policyEnv,
       claudeCliReviewPolicyCliFlags,
     );
+    policyCheckEnvFingerprint = cliPolicyEnvFingerprint(policyEnv);
+    verifiedPolicyChecks.push(engine);
     policyChecks.push({
       name: "claude-policy",
       status: "passed",
       detail: "Claude executable supports Diffwarden review policy flags.",
     });
   }
+  if (engine === "gemini") {
+    policyCheckEnvFingerprint = await assertGeminiExecutableSupportsReviewPolicyWithIsolatedTrust(
+      resolvedExecutable,
+      input,
+    );
+    verifiedPolicyChecks.push(engine);
+    policyChecks.push({
+      name: "gemini-policy",
+      status: "passed",
+      detail: "Gemini executable supports Diffwarden review policy flags.",
+    });
+  }
+
+  const runContext: CliRunContext = {
+    kind: "cli",
+    requestedExecutable: executableSelection.executable,
+    resolvedExecutable,
+    ...pathContext(input.env),
+  };
+  if (verifiedPolicyChecks.length > 0 && policyCheckEnvFingerprint !== undefined) {
+    preparedPolicyChecks.set(runContext, {
+      policyChecks: new Set(verifiedPolicyChecks),
+      resolvedExecutable,
+      envFingerprint: policyCheckEnvFingerprint,
+      ...(executableIdentity !== undefined
+        ? { executableIdentity: { ...executableIdentity } }
+        : {}),
+    });
+  }
+  Object.freeze(runContext);
 
   return {
     preflight: {
@@ -152,12 +231,7 @@ async function prepareCliAdapter(
       ],
       metadata,
     },
-    runContext: {
-      kind: "cli",
-      requestedExecutable: executableSelection.executable,
-      resolvedExecutable,
-      ...pathContext(input.env),
-    },
+    runContext,
   };
 }
 
@@ -190,17 +264,151 @@ function canUsePreparedExecutable(
   );
 }
 
+async function hasPreparedPolicyCheck(
+  engine: CliEngine,
+  runContext: CliRunContext | undefined,
+  invocation: CliInvocation,
+  input: ReviewAdapterInput,
+): Promise<boolean> {
+  if (!isCliPolicyCheckEngine(engine) || runContext === undefined) {
+    return false;
+  }
+  const policyChecks = preparedPolicyChecks.get(runContext);
+  if (policyChecks?.policyChecks.delete(engine) !== true) {
+    return false;
+  }
+  if (policyChecks.policyChecks.size === 0) {
+    preparedPolicyChecks.delete(runContext);
+  }
+  if (policyChecks.executableIdentity === undefined) {
+    return false;
+  }
+  if (policyChecks.envFingerprint !== cliPolicyCheckRunEnvFingerprint(engine, invocation, input)) {
+    return false;
+  }
+  const currentIdentity = await cliExecutableIdentity(policyChecks.resolvedExecutable);
+  return sameCliExecutableIdentity(policyChecks.executableIdentity, currentIdentity);
+}
+
+function isCliPolicyCheckEngine(engine: CliEngine): engine is CliPolicyCheckEngine {
+  return engine === "claude" || engine === "gemini";
+}
+
+async function cliExecutableIdentity(
+  executable: string,
+): Promise<CliExecutableIdentity | undefined> {
+  try {
+    const realExecutablePath = await realpath(executable);
+    const stats = await stat(realExecutablePath);
+    return {
+      realpath: realExecutablePath,
+      dev: stats.dev,
+      ino: stats.ino,
+      size: stats.size,
+      mtimeMs: stats.mtimeMs,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function sameCliExecutableIdentity(
+  expected: CliExecutableIdentity,
+  actual: CliExecutableIdentity | undefined,
+): boolean {
+  return (
+    actual !== undefined &&
+    expected.realpath === actual.realpath &&
+    expected.dev === actual.dev &&
+    expected.ino === actual.ino &&
+    expected.size === actual.size &&
+    expected.mtimeMs === actual.mtimeMs
+  );
+}
+
+function cliPolicyCheckRunEnvFingerprint(
+  engine: CliPolicyCheckEngine,
+  invocation: CliInvocation,
+  input: ReviewAdapterInput,
+): string {
+  return cliPolicyEnvFingerprint(
+    cliInvocationEnv(invocation, input),
+    engine === "gemini" ? [geminiCliTrustedFoldersPathEnvVar] : [],
+  );
+}
+
+function cliPolicyEnvFingerprint(env: NodeJS.ProcessEnv, ignoredKeys: string[] = []): string {
+  const ignored = new Set(ignoredKeys);
+  const hash = createHash("sha256");
+  for (const key of Object.keys(env).sort()) {
+    if (ignored.has(key)) {
+      continue;
+    }
+    hash.update(key);
+    hash.update("\0");
+    hash.update(env[key] ?? "");
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+async function assertGeminiExecutableSupportsReviewPolicyWithIsolatedTrust(
+  resolvedExecutable: string,
+  input: ReviewAdapterPreflightInput,
+): Promise<string> {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "diffwarden-gemini-preflight-"));
+  try {
+    const trustedFoldersPath = path.join(tempDir, geminiCliReviewTrustedFoldersFileName);
+    await writeFile(trustedFoldersPath, "{}\n", "utf8");
+    const env = {
+      ...(input.env ?? process.env),
+      [geminiCliTrustedFoldersPathEnvVar]: trustedFoldersPath,
+    };
+    Reflect.deleteProperty(env, geminiCliTrustWorkspaceEnvVar);
+    await assertGeminiExecutableSupportsReviewPolicy(
+      resolvedExecutable,
+      env,
+      geminiCliReviewPolicyCliFlags,
+    );
+    return cliPolicyEnvFingerprint(env, [geminiCliTrustedFoldersPathEnvVar]);
+  } finally {
+    await rm(tempDir, { force: true, recursive: true });
+  }
+}
+
 async function prepareClaudeCliInvocation(
   invocation: CliInvocation,
   input: ReviewAdapterInput,
+  policyAlreadyChecked = false,
 ): Promise<void> {
   const env = cliInvocationEnv(invocation, input);
   invocation.resolvedExecutable =
     invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
+  if (policyAlreadyChecked) {
+    return;
+  }
   await assertClaudeExecutableSupportsReviewPolicy(
     invocation.resolvedExecutable,
     env,
     claudeCliReviewPolicyCliFlags,
+  );
+}
+
+async function prepareGeminiCliInvocation(
+  invocation: CliInvocation,
+  input: ReviewAdapterInput,
+  policyAlreadyChecked = false,
+): Promise<void> {
+  const env = cliInvocationEnv(invocation, input);
+  invocation.resolvedExecutable =
+    invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
+  if (policyAlreadyChecked) {
+    return;
+  }
+  await assertGeminiExecutableSupportsReviewPolicy(
+    invocation.resolvedExecutable,
+    env,
+    geminiCliReviewPolicyCliFlags,
   );
 }
 

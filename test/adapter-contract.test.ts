@@ -9,7 +9,9 @@ import {
   reviewerCapabilities,
   reviewerSdkValues,
 } from "../src/adapters/capabilities.js";
+import { claudeCliReviewPolicyCliFlags } from "../src/adapters/claude-tool-policy.js";
 import { createCliAdapter } from "../src/adapters/cli.js";
+import { geminiCliReviewPolicyCliFlags } from "../src/adapters/gemini-tool-policy.js";
 import type { ReviewReviewerConfig } from "../src/adapters/types.js";
 import { resolveReviewerConfig } from "../src/core/reviewer.js";
 
@@ -155,7 +157,7 @@ function createCliHarness(defaultExecutable: string) {
   const root = mkdtempSync(path.join(tmpdir(), "diffwarden-adapter-contract-"));
   roots.push(root);
   const executable = path.join(root, defaultExecutable);
-  writeFileSync(executable, "#!/bin/sh\nexit 0\n", "utf8");
+  writeFileSync(executable, fakeCliContractScript(), "utf8");
   chmodSync(executable, 0o755);
 
   return {
@@ -165,4 +167,22 @@ function createCliHarness(defaultExecutable: string) {
       PATH: root,
     },
   };
+}
+
+function fakeCliContractScript(): string {
+  return `#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" != "--help" ]; then
+    continue
+  fi
+  executable="\${0##*/}"
+  if [ "$executable" = "claude" ]; then
+    printf '%s' '${claudeCliReviewPolicyCliFlags.join(" ")}'
+  elif [ "$executable" = "gemini" ]; then
+    printf '%s' '${geminiCliReviewPolicyCliFlags.join(" ")}'
+  fi
+  break
+done
+exit 0
+`;
 }

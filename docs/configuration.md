@@ -166,8 +166,9 @@ Because Droid CLI omits an off effort flag, session settings may still provide t
 runtime effort for `effort: "off"` while preserving `requestedEffort: "off"`. Pi CLI's assistant
 `message.model` records are treated as runtime-result evidence, not startup configuration proof.
 CLI adapters omit default model resolution when the executable does not expose a stable
-machine-readable runtime value. Gemini remains supported, but no new metadata-specific behavior
-is being added for it.
+machine-readable runtime value. Gemini remains supported for enterprise and paid API-key users
+after Google's June 18, 2026 consumer/free Gemini CLI transition to Antigravity CLI, but no new
+metadata-specific behavior is being added for it.
 
 Reports also promote these fields into each reviewer summary as `model_resolution` and
 `effort_resolution` objects. Run adapter metadata is preferred; preflight metadata is used only
