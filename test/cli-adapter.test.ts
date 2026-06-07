@@ -18,6 +18,13 @@ import {
   geminiCliTrustWorkspaceEnvVar,
   geminiCliTrustedFoldersPathEnvVar,
 } from "../src/adapters/gemini-tool-policy.js";
+import {
+  grokCliDisallowedToolsArg,
+  grokCliReviewPermissionMode,
+  grokCliReviewPolicyCliFlags,
+  grokCliReviewSandbox,
+  grokCliReviewToolsArg,
+} from "../src/adapters/grok-tool-policy.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 
 type CliEngine = Exclude<ReviewReviewerConfig["sdk"], "fake">;
@@ -184,6 +191,78 @@ describe("createCliAdapter", () => {
       glob: "allow",
       grep: "allow",
     });
+  });
+
+  it("runs Grok with read-only sandboxing and low-tool review controls", async () => {
+    const harness = createHarness("grok");
+    const adapter = createCliAdapter("grok");
+    const reviewer = createReviewer("grok", harness.executable, {
+      model: "grok-test",
+      effort: "minimal",
+    });
+
+    const prepared = await adapter.prepare?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: harness.env,
+    });
+    if (prepared === undefined) {
+      throw new Error("Grok CLI adapter did not return a prepared run context");
+    }
+    if (prepared.preflight === undefined) {
+      throw new Error("Grok CLI adapter did not return preflight metadata");
+    }
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      runContext: prepared.runContext,
+    });
+    const invocation = harness.readInvocation();
+
+    expect(prepared.preflight.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "grok-policy",
+          status: "passed",
+        }),
+        expect.objectContaining({
+          name: "readonly",
+          status: "passed",
+        }),
+      ]),
+    );
+    expect(output.text).toContain("grok text");
+    expect(output.metadata).toMatchObject({
+      captureMode: "text",
+      readonlyCapability: "enforced",
+      grokPermissionMode: grokCliReviewPermissionMode,
+      grokSandboxMode: grokCliReviewSandbox,
+      grokAllowedTools: ["read_file", "grep", "list_dir"],
+    });
+    expect(invocation.args).toEqual(
+      expect.arrayContaining([
+        "--permission-mode",
+        grokCliReviewPermissionMode,
+        "--tools",
+        grokCliReviewToolsArg(),
+        "--disallowed-tools",
+        grokCliDisallowedToolsArg(),
+        "--sandbox",
+        grokCliReviewSandbox,
+        "--no-subagents",
+        "--no-memory",
+        "--disable-web-search",
+        "--model",
+        "grok-test",
+        "--reasoning-effort",
+        "low",
+      ]),
+    );
+    expect(invocation.args).toEqual(expect.arrayContaining(["--allow", "Read"]));
+    expect(invocation.args).toEqual(expect.arrayContaining(["--allow", "Grep"]));
+    expect(invocation.args).toEqual(expect.arrayContaining(["--deny", "Bash"]));
+    expect(invocation.args).toEqual(expect.arrayContaining(["--deny", "MCPTool"]));
+    expect(invocation.args).not.toContain("--max-turns");
   });
 
   it("records adapter-default executable provenance when no executable is configured", async () => {
@@ -505,6 +584,46 @@ describe("createCliAdapter", () => {
     ).rejects.toMatchObject({
       code: "missing_requirement",
       message: expect.stringContaining("--admin-policy"),
+    });
+  });
+
+  it("fails Grok CLI preflight when the executable lacks review policy flags", async () => {
+    const harness = createHarness("grok");
+    const adapter = createCliAdapter("grok");
+    const reviewer = createReviewer("grok", harness.executable);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_OLD_GROK_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--tools"),
+    });
+  });
+
+  it("checks Grok CLI policy flags during direct runs", async () => {
+    const harness = createHarness("grok");
+    const adapter = createCliAdapter("grok");
+    const reviewer = createReviewer("grok", harness.executable);
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_OLD_GROK_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--tools"),
     });
   });
 
@@ -883,6 +1002,14 @@ if (engine === "gemini" && process.argv.includes("--help")) {
     process.stdout.write("--prompt --output-format --approval-mode --allowed-mcp-server-names --extensions");
   } else {
     process.stdout.write(${JSON.stringify(geminiCliReviewPolicyCliFlags.join(" "))});
+  }
+  process.exit(0);
+}
+if (engine === "grok" && process.argv.includes("--help")) {
+  if (process.env.DIFFWARDEN_FAKE_OLD_GROK_HELP === "1") {
+    process.stdout.write("--prompt-file --cwd --output-format --permission-mode");
+  } else {
+    process.stdout.write(${JSON.stringify(grokCliReviewPolicyCliFlags.join(" "))});
   }
   process.exit(0);
 }

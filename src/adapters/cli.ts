@@ -25,6 +25,8 @@ import {
   geminiCliTrustedFoldersPathEnvVar,
 } from "./gemini-tool-policy.js";
 import { assertGeminiExecutableSupportsReviewPolicy } from "./gemini.js";
+import { grokCliReviewPolicyCliFlags } from "./grok-tool-policy.js";
+import { assertGrokExecutableSupportsReviewPolicy } from "./grok.js";
 import {
   type ResolutionSource,
   effortResolutionMetadata,
@@ -47,7 +49,7 @@ type CliRunContext = {
   path?: string;
 };
 
-type CliPolicyCheckEngine = Extract<CliEngine, "claude" | "gemini">;
+type CliPolicyCheckEngine = Extract<CliEngine, "claude" | "gemini" | "grok">;
 type CliExecutableIdentity = {
   realpath: string;
   dev: number;
@@ -104,6 +106,13 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
         }
         if (engine === "gemini") {
           await prepareGeminiCliInvocation(
+            invocation,
+            input,
+            await hasPreparedPolicyCheck(engine, preparedRunContext, invocation, input),
+          );
+        }
+        if (engine === "grok") {
+          await prepareGrokCliInvocation(
             invocation,
             input,
             await hasPreparedPolicyCheck(engine, preparedRunContext, invocation, input),
@@ -172,6 +181,21 @@ async function prepareCliAdapter(
       name: "gemini-policy",
       status: "passed",
       detail: "Gemini executable supports Diffwarden review policy flags.",
+    });
+  }
+  if (engine === "grok") {
+    const policyEnv = input.env ?? process.env;
+    await assertGrokExecutableSupportsReviewPolicy(
+      resolvedExecutable,
+      policyEnv,
+      grokCliReviewPolicyCliFlags,
+    );
+    policyCheckEnvFingerprint = cliPolicyEnvFingerprint(policyEnv);
+    verifiedPolicyChecks.push(engine);
+    policyChecks.push({
+      name: "grok-policy",
+      status: "passed",
+      detail: "Grok executable supports Diffwarden review policy flags.",
     });
   }
 
@@ -291,7 +315,7 @@ async function hasPreparedPolicyCheck(
 }
 
 function isCliPolicyCheckEngine(engine: CliEngine): engine is CliPolicyCheckEngine {
-  return engine === "claude" || engine === "gemini";
+  return engine === "claude" || engine === "gemini" || engine === "grok";
 }
 
 async function cliExecutableIdentity(
@@ -409,6 +433,24 @@ async function prepareGeminiCliInvocation(
     invocation.resolvedExecutable,
     env,
     geminiCliReviewPolicyCliFlags,
+  );
+}
+
+async function prepareGrokCliInvocation(
+  invocation: CliInvocation,
+  input: ReviewAdapterInput,
+  policyAlreadyChecked = false,
+): Promise<void> {
+  const env = cliInvocationEnv(invocation, input);
+  invocation.resolvedExecutable =
+    invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
+  if (policyAlreadyChecked) {
+    return;
+  }
+  await assertGrokExecutableSupportsReviewPolicy(
+    invocation.resolvedExecutable,
+    env,
+    grokCliReviewPolicyCliFlags,
   );
 }
 

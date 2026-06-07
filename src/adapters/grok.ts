@@ -1,15 +1,15 @@
 import { missingRequirement } from "../core/errors.js";
 import { execCliFile } from "./cli-process.js";
-import { geminiCliReviewPolicyCliFlags, geminiCliSkipTrustFlag } from "./gemini-tool-policy.js";
+import { grokCliReviewPolicyCliFlags } from "./grok-tool-policy.js";
 
-export async function assertGeminiExecutableSupportsReviewPolicy(
+export async function assertGrokExecutableSupportsReviewPolicy(
   executable: string,
   env: NodeJS.ProcessEnv | undefined,
-  requiredFlags: readonly string[] = geminiCliReviewPolicyCliFlags,
+  requiredFlags: readonly string[] = grokCliReviewPolicyCliFlags,
 ): Promise<void> {
   let output: string;
   try {
-    const { stdout, stderr } = await execCliFile(executable, [geminiCliSkipTrustFlag, "--help"], {
+    const { stdout, stderr } = await execCliFile(executable, ["--help"], {
       ...(env !== undefined ? { env } : {}),
       maxBuffer: 1024 * 1024,
       timeout: 10_000,
@@ -17,13 +17,13 @@ export async function assertGeminiExecutableSupportsReviewPolicy(
     output = `${stdout}${stderr}`;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw missingRequirement(`Gemini executable policy preflight failed: ${detail}`);
+    throw missingRequirement(`Grok executable policy preflight failed: ${detail}`);
   }
 
   const missingFlags = requiredFlags.filter((flag) => !helpOutputHasFlag(output, flag));
   if (missingFlags.length) {
     throw missingRequirement(
-      `Gemini executable does not support Diffwarden review policy flags: ${missingFlags.join(", ")}. Upgrade Gemini CLI or configure a newer executable.`,
+      `Grok executable does not support Diffwarden review policy flags: ${missingFlags.join(", ")}. Upgrade Grok CLI or configure a newer executable.`,
     );
   }
 }

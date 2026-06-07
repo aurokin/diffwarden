@@ -72,10 +72,14 @@ Use Codex as the semantic reference for review behavior, especially its review p
 - Google Gemini CLI to Antigravity CLI transition notice: https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/
 - OpenCode repository: https://github.com/sst/opencode
 - Factory Droid CLI docs: https://docs.factory.ai/reference/cli-reference
-- Grok CLI docs: https://docs.x.ai/docs/grok-cli/overview
+- Grok Build getting started docs: https://docs.x.ai/build/overview
+- Grok Build headless and scripting docs: https://docs.x.ai/build/cli/headless-scripting
+- Grok Build modes and commands docs: https://docs.x.ai/build/modes-and-commands
+- Grok Build enterprise/security controls docs: https://docs.x.ai/build/enterprise
+- Grok Build changelog: https://x.ai/build/changelog
 - Antigravity CLI docs: https://www.google.com/antigravity
 
-Point-in-time local research on 2026-05-20 inspected installed executables for Codex, Claude, Cursor Agent, Gemini, OpenCode, Pi, Grok, and Antigravity. The direct CLI adapter keeps those details in `src/adapters/cli.ts`; this file remains a route map rather than a copy of volatile CLI help output.
+Point-in-time local research on 2026-05-20 inspected installed executables for Codex, Claude, Cursor Agent, Gemini, OpenCode, Pi, Grok, and Antigravity. Grok was refreshed on 2026-06-07 against `@xai-official/grok@0.2.32` / `grok 0.2.32` help and official xAI Build docs. The direct CLI adapter keeps those details near the adapter code; this file remains a route map rather than a copy of volatile CLI help output.
 
 ## Local upstream clones, if present
 

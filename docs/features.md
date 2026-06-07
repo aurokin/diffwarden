@@ -66,7 +66,7 @@ SDK-backed reviewers can opt into CLI transport from config:
 | `droid` CLI | yes | yes | JSON/text | enforced | executable preflight; CLI owns auth |
 | `gemini` CLI | yes | no | JSON/text | tool-restricted | executable preflight; CLI owns auth |
 | `opencode` CLI | yes | yes | JSONL/text | prompt-only | executable preflight; CLI owns auth |
-| `grok` CLI | yes | yes | JSON/text | prompt-only | executable preflight; CLI owns auth |
+| `grok` CLI | yes | yes | JSON/text | enforced | executable preflight; CLI owns auth |
 | `antigravity` CLI | no | no | text | prompt-only | executable preflight; CLI owns auth |
 
 ## Adapter Notes
@@ -85,7 +85,7 @@ SDK-backed reviewers can opt into CLI transport from config:
 | `droid` CLI | Uses `droid exec --use-spec`, JSON output, Diffwarden session tags, and model/effort flags where provided. This is the recommended Droid path for routine reviews. |
 | `gemini` CLI | Uses JSON output, plan approval mode, a generated all-modes policy/admin policy allowing only `read_file`, `list_directory`, `glob`, and Gemini grep names (`grep_search` plus legacy alias `search_file_content`), empty MCP allowlisting, disabled extensions, and isolated session trust for headless startup. |
 | `opencode` CLI | Uses `opencode run --pure`, stdin prompt input, provider-qualified model support, effort mapped to variant, a generated low-tool `diffwarden-review-*` agent, and an `OPENCODE_PERMISSION` policy that allows only `read`, `glob`, and `grep` by default. It remains marked prompt-only until hard read-only enforcement is proven. |
-| `grok` CLI | Uses plan permission mode, disables subagents, disables memory, and disables web search. It remains marked prompt-only until hard read-only enforcement is proven. |
+| `grok` CLI | Uses JSON output, `--permission-mode dontAsk`, `--tools read_file,grep,list_dir`, matching read/search allow rules, deny rules for shell/edit/write/web/MCP, `--sandbox read-only`, disabled subagents, disabled memory, and disabled web search. Diffwarden does not pass `--max-turns`; reviewer timeout is the run-level limiter. |
 | `antigravity` CLI | Uses prompt-bearing print mode with a temp prompt file, sandbox mode, and adds the reviewed directory. Model and effort overrides are rejected for this path. |
 
 ## Common Core Features

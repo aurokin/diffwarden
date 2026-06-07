@@ -719,7 +719,7 @@ Implemented CLI families:
 - Gemini CLI uses JSON output, plan approval mode, a generated all-modes Policy Engine policy/admin policy that allows only `read_file`, `list_directory`, `glob`, and Gemini grep names (`grep_search` plus legacy alias `search_file_content`), an empty MCP allowlist, disabled extensions, and isolated session trust for headless startup. Diffwarden does not add Gemini-specific tool-call, turn, step, or retry caps; reviewer timeout is the run-level limiter. Gemini remains supported for enterprise and paid API-key users after Google's June 18, 2026 consumer/free Gemini CLI transition to Antigravity CLI.
 - OpenCode CLI uses JSONL output and `--pure`; its read-only capability is prompt-only until a supported per-run permission-deny path is proven.
 - Pi CLI uses JSON mode, no session, explicit read/list/search tools, and extension/skill/template/theme disabling.
-- Grok CLI uses JSON output, plan mode, disabled web search/subagents/memory, and bounded turns.
+- Grok CLI uses JSON output, `--permission-mode dontAsk`, `--tools read_file,grep,list_dir`, explicit read/search allow rules, explicit shell/edit/write/web/MCP deny rules, `--sandbox read-only`, disabled web search/subagents/memory, and no Diffwarden-owned turn/tool-call/step cap.
 - Antigravity CLI uses prompt-bearing print mode with a temp prompt file and sandbox mode; its read-only capability is prompt-only until stronger executable-level controls are documented.
 
 Each CLI adapter must run executable preflight, report `readonlyCapability`, pass `model` and `effort` only where the executable supports them, and return either `{ structured }` or `{ text }` to the common parser.

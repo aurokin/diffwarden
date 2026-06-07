@@ -1,12 +1,22 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, execFile, spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { missingAuth, missingRequirement, reviewerFailed } from "../core/errors.js";
 import type { CliInvocation, CliRunResult } from "./cli-types.js";
 import type { ReviewAdapterInput } from "./types.js";
 
 const abortKillGraceMs = 1_000;
+const defaultWindowsPathExt = ".COM;.EXE;.BAT;.CMD";
+const execFileAsync = promisify(execFile);
+
+type ExecCliFileOptions = {
+  env?: NodeJS.ProcessEnv;
+  maxBuffer?: number;
+  signal?: AbortSignal;
+  timeout?: number;
+};
 
 export async function runCli(
   invocation: CliInvocation,
@@ -30,6 +40,7 @@ export async function runCli(
         cwd: invocation.cwd ?? input.cwd,
         env,
         detached: process.platform !== "win32",
+        shell: shouldUseWindowsCommandShell(executable),
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
@@ -138,9 +149,16 @@ export async function resolveExecutable(
   executable: string,
   env: NodeJS.ProcessEnv | undefined,
 ): Promise<string> {
-  if (executable.includes(path.sep)) {
-    await assertExecutable(executable);
-    return executable;
+  if (isPathLikeExecutable(executable)) {
+    for (const candidate of executableSearchNames(executable, env)) {
+      try {
+        await assertExecutable(candidate);
+        return candidate;
+      } catch {
+        // Keep searching PATHEXT candidates on Windows.
+      }
+    }
+    throw missingRequirement(`CLI executable not found: ${executable}`);
   }
 
   for (const directory of ((env === undefined ? process.env.PATH : env.PATH) ?? "").split(
@@ -149,16 +167,70 @@ export async function resolveExecutable(
     if (!directory) {
       continue;
     }
-    const candidate = path.join(directory, executable);
-    try {
-      await assertExecutable(candidate);
-      return candidate;
-    } catch {
-      // Keep searching PATH.
+    for (const executableName of executableSearchNames(executable, env)) {
+      const candidate = path.join(directory, executableName);
+      try {
+        await assertExecutable(candidate);
+        return candidate;
+      } catch {
+        // Keep searching PATH.
+      }
     }
   }
 
   throw missingRequirement(`CLI executable not found: ${executable}`);
+}
+
+export async function execCliFile(
+  executable: string,
+  args: string[],
+  options: ExecCliFileOptions = {},
+): Promise<{ stdout: string; stderr: string }> {
+  const { stdout, stderr } = await execFileAsync(executable, args, {
+    ...options,
+    shell: shouldUseWindowsCommandShell(executable),
+  });
+  return {
+    stdout: String(stdout),
+    stderr: String(stderr),
+  };
+}
+
+export function executableSearchNames(
+  executable: string,
+  env: NodeJS.ProcessEnv | undefined = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  if (platform !== "win32" || path.extname(executable)) {
+    return [executable];
+  }
+
+  return [
+    executable,
+    ...windowsPathExtensions(env).map((extension) => `${executable}${extension}`),
+  ];
+}
+
+export function shouldUseWindowsCommandShell(
+  executable: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === "win32" && /\.(?:bat|cmd)$/i.test(executable);
+}
+
+function isPathLikeExecutable(executable: string): boolean {
+  return (
+    executable.includes(path.sep) || (process.platform === "win32" && executable.includes("/"))
+  );
+}
+
+function windowsPathExtensions(env: NodeJS.ProcessEnv | undefined): string[] {
+  const pathext = env?.PATHEXT ?? defaultWindowsPathExt;
+  return pathext
+    .split(";")
+    .map((extension) => extension.trim())
+    .filter(Boolean)
+    .map((extension) => (extension.startsWith(".") ? extension : `.${extension}`));
 }
 
 export function trimForMetadata(value: string): string | undefined {

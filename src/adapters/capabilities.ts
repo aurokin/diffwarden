@@ -200,7 +200,7 @@ const reviewerCapabilityDefinitions = {
         supportsModel: true,
         supportsEffort: true,
         captureMode: "text",
-        readonlyCapability: "prompt-only",
+        readonlyCapability: "enforced",
       },
     },
   },

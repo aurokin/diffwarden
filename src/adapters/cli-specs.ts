@@ -49,6 +49,16 @@ import {
   geminiCliTrustWorkspaceEnvVar,
   geminiCliTrustedFoldersPathEnvVar,
 } from "./gemini-tool-policy.js";
+import {
+  grokCliAllowRules,
+  grokCliDenyRules,
+  grokCliDisallowedToolsArg,
+  grokCliReviewOutputFormat,
+  grokCliReviewPermissionMode,
+  grokCliReviewPolicyMetadata,
+  grokCliReviewSandbox,
+  grokCliReviewToolsArg,
+} from "./grok-tool-policy.js";
 import { effortResolutionMetadata, modelResolutionMetadata } from "./metadata.js";
 import { piCliReviewSurfaceArgs } from "./pi-tool-policy.js";
 import type { ReviewAdapterInput } from "./types.js";
@@ -496,13 +506,25 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         "--cwd",
         input.cwd,
         "--output-format",
-        "json",
+        grokCliReviewOutputFormat,
         "--permission-mode",
-        "plan",
+        grokCliReviewPermissionMode,
+        "--tools",
+        grokCliReviewToolsArg(),
+        "--disallowed-tools",
+        grokCliDisallowedToolsArg(),
+        "--sandbox",
+        grokCliReviewSandbox,
         "--no-subagents",
         "--no-memory",
         "--disable-web-search",
       ];
+      for (const rule of grokCliAllowRules) {
+        args.push("--allow", rule);
+      }
+      for (const rule of grokCliDenyRules) {
+        args.push("--deny", rule);
+      }
       pushModel(args, input.reviewer);
       if (input.reviewer.effort !== undefined && input.reviewer.effort !== "off") {
         args.push("--reasoning-effort", grokCliEffort(input.reviewer.effort));
@@ -517,7 +539,8 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
     async parseOutput(result) {
       return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
-        readonlyCapability: "prompt-only",
+        readonlyCapability: "enforced",
+        ...grokCliReviewPolicyMetadata(),
         ...cliRuntimeResolutionMetadata(result.stdout),
       });
     },

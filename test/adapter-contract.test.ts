@@ -12,6 +12,7 @@ import {
 import { claudeCliReviewPolicyCliFlags } from "../src/adapters/claude-tool-policy.js";
 import { createCliAdapter } from "../src/adapters/cli.js";
 import { geminiCliReviewPolicyCliFlags } from "../src/adapters/gemini-tool-policy.js";
+import { grokCliReviewPolicyCliFlags } from "../src/adapters/grok-tool-policy.js";
 import type { ReviewReviewerConfig } from "../src/adapters/types.js";
 import { resolveReviewerConfig } from "../src/core/reviewer.js";
 
@@ -180,6 +181,8 @@ for arg in "$@"; do
     printf '%s' '${claudeCliReviewPolicyCliFlags.join(" ")}'
   elif [ "$executable" = "gemini" ]; then
     printf '%s' '${geminiCliReviewPolicyCliFlags.join(" ")}'
+  elif [ "$executable" = "grok" ]; then
+    printf '%s' '${grokCliReviewPolicyCliFlags.join(" ")}'
   fi
   break
 done

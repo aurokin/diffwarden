@@ -39,6 +39,14 @@ import {
   geminiCliTrustWorkspaceEnvVar,
   geminiCliTrustedFoldersPathEnvVar,
 } from "../src/adapters/gemini-tool-policy.js";
+import {
+  grokCliAllowRules,
+  grokCliDenyRules,
+  grokCliDisallowedToolsArg,
+  grokCliReviewPermissionMode,
+  grokCliReviewSandbox,
+  grokCliReviewToolsArg,
+} from "../src/adapters/grok-tool-policy.js";
 import { piCliReviewSurfaceArgs } from "../src/adapters/pi-tool-policy.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 import { reviewResultJsonSchema } from "../src/core/schema.js";
@@ -546,13 +554,26 @@ describe("cliSpecs", () => {
         "--cwd",
         "/repo",
         "--permission-mode",
-        "plan",
+        grokCliReviewPermissionMode,
+        "--tools",
+        grokCliReviewToolsArg(),
+        "--disallowed-tools",
+        grokCliDisallowedToolsArg(),
+        "--sandbox",
+        grokCliReviewSandbox,
         "--model",
         "test-model",
         "--reasoning-effort",
         "low",
       ]),
     );
+    for (const rule of grokCliAllowRules) {
+      expect(grok.args).toEqual(expect.arrayContaining(["--allow", rule]));
+    }
+    for (const rule of grokCliDenyRules) {
+      expect(grok.args).toEqual(expect.arrayContaining(["--deny", rule]));
+    }
+    expect(grok.args).not.toContain("--max-turns");
   });
 
   it("canonicalizes Droid session cwd before deriving the Factory session directory", async () => {

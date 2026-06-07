@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import {
   buildStructuredReviewAdapterOutput,
   buildTextAdapterOutput,
@@ -16,6 +14,7 @@ import {
   claudeReviewToolList,
   claudeSdkReviewPolicyCliFlags,
 } from "./claude-tool-policy.js";
+import { execCliFile } from "./cli-process.js";
 import {
   effortResolutionMetadata,
   modelResolutionMetadata,
@@ -32,7 +31,6 @@ import type {
 
 const defaultClaudeModel = "sonnet";
 const defaultClaudeExecutable = "claude";
-const execFileAsync = promisify(execFile);
 
 type ClaudeAdapterDependencies = {
   loadSdk: () => Promise<ClaudeSdk>;
@@ -782,7 +780,7 @@ export async function assertClaudeExecutableSupportsReviewPolicy(
 ): Promise<void> {
   let stdout: string;
   try {
-    ({ stdout } = await execFileAsync(executable, ["--help"], {
+    ({ stdout } = await execCliFile(executable, ["--help"], {
       ...(env !== undefined ? { env } : {}),
       timeout: 5_000,
     }));
@@ -812,7 +810,7 @@ async function getClaudeCodeAuthStatus(
       options.env = env;
     }
 
-    const { stdout } = await execFileAsync(executable, ["auth", "status", "--json"], options);
+    const { stdout } = await execCliFile(executable, ["auth", "status", "--json"], options);
     return parseClaudeAuthStatus(stdout);
   } catch {
     return undefined;

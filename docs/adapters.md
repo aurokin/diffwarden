@@ -518,6 +518,16 @@ policy for the spawned process. Diffwarden does not inject an OpenCode step cap;
 reviewer timeout is the run-level circuit breaker. Set `cliOptions.agent` to use an existing
 primary OpenCode agent.
 
+Grok CLI writes the prompt to a temp file and runs headless with JSON output,
+`--permission-mode dontAsk`, `--tools read_file,grep,list_dir`, `--disallowed-tools` for
+web/search-replace/write/shell/subagent surfaces, explicit allow rules for `Read` and `Grep`,
+explicit deny rules for `Bash`, `Edit`, `Write`, `WebFetch`, and `MCPTool`,
+`--sandbox read-only`, `--no-subagents`, `--no-memory`, and `--disable-web-search`. The `read-only`
+sandbox permits Grok's own `~/.grok` and temp writes but blocks repository writes for review
+runs; the low-tool allowlist keeps the model on file read, directory listing, and grep search
+tools. Diffwarden preflights the selected executable for these policy flags and does not pass
+`--max-turns`; the configured reviewer timeout remains the run-level limiter.
+
 SDK-backed families, including Droid, can use `transport: "cli"` from config.
 `cliOptions.executable` can point at non-standard CLI installs, such as local `pi`, `droid`, or
 `agy` binaries. Droid SDK reviewers use `sdkOptions.executable`, with `cliOptions.executable`
@@ -540,7 +550,7 @@ workflow surfaces. It also passes `--no-session-persistence`, an empty `--settin
 `--no-chrome`. Claude CLI preflight verifies that the selected executable supports these policy
 flags. Diffwarden does not pass `--max-turns`; timeout remains the run-level limiter.
 
-Capability metadata is conservative. OpenCode, Grok, Antigravity, and Cursor SDK/CLI paths
+Capability metadata is conservative. OpenCode, Antigravity, and Cursor SDK/CLI paths
 currently report prompt-only read-only behavior when hard enforcement is not proven.
 
 CLI model and effort metadata is conservative. Diffwarden records requested and resolved fields
