@@ -172,11 +172,15 @@ function createCliHarness(defaultExecutable: string) {
 
 function fakeCliContractScript(): string {
   return `#!/bin/sh
+executable="\${0##*/}"
 for arg in "$@"; do
+  if [ "$executable" = "agy" ] && [ "$arg" = "--version" ]; then
+    printf '%s' '1.0.6'
+    exit 0
+  fi
   if [ "$arg" != "--help" ]; then
     continue
   fi
-  executable="\${0##*/}"
   if [ "$executable" = "claude" ]; then
     printf '%s' '${claudeCliReviewPolicyCliFlags.join(" ")}'
   elif [ "$executable" = "gemini" ]; then

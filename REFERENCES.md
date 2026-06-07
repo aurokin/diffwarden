@@ -77,9 +77,12 @@ Use Codex as the semantic reference for review behavior, especially its review p
 - Grok Build modes and commands docs: https://docs.x.ai/build/modes-and-commands
 - Grok Build enterprise/security controls docs: https://docs.x.ai/build/enterprise
 - Grok Build changelog: https://x.ai/build/changelog
-- Antigravity CLI docs: https://www.google.com/antigravity
+- Antigravity CLI docs: https://antigravity.google/docs/cli-overview
+- Antigravity CLI permissions docs: https://antigravity.google/docs/cli-permissions
+- Antigravity CLI sandbox docs: https://antigravity.google/docs/cli-sandbox
+- Antigravity CLI reference docs: https://antigravity.google/docs/cli-reference
 
-Point-in-time local research on 2026-05-20 inspected installed executables for Codex, Claude, Cursor Agent, Gemini, OpenCode, Pi, Grok, and Antigravity. Grok was refreshed on 2026-06-07 against `@xai-official/grok@0.2.32` / `grok 0.2.32` help and official xAI Build docs. The direct CLI adapter keeps those details near the adapter code; this file remains a route map rather than a copy of volatile CLI help output.
+Point-in-time local research on 2026-05-20 inspected installed executables for Codex, Claude, Cursor Agent, Gemini, OpenCode, Pi, Grok, and Antigravity. Grok was refreshed on 2026-06-07 against `@xai-official/grok@0.2.32` / `grok 0.2.32` help and official xAI Build docs. Antigravity was refreshed on 2026-06-07 against `agy 1.0.6` help/changelog and official Antigravity CLI permissions, sandbox, settings, and reference docs. The direct CLI adapter keeps those details near the adapter code; this file remains a route map rather than a copy of volatile CLI help output.
 
 ## Local upstream clones, if present
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import {
@@ -9,6 +9,12 @@ import {
 } from "../core/adapter-output.js";
 import { reviewerFailed } from "../core/errors.js";
 import { reviewResultJsonSchema, reviewResultStrictJsonSchema } from "../core/schema.js";
+import {
+  antigravityCliReviewMcpConfigFileName,
+  antigravityCliReviewPolicyMetadata,
+  antigravityCliReviewSettings,
+  antigravityCliReviewSettingsFileName,
+} from "./antigravity-tool-policy.js";
 import { claudeCliDisallowedToolsArg, claudeCliReviewToolsArg } from "./claude-tool-policy.js";
 import { claudeCliEnv, resolveClaudeRuntime } from "./claude.js";
 import {
@@ -62,6 +68,23 @@ import {
 import { effortResolutionMetadata, modelResolutionMetadata } from "./metadata.js";
 import { piCliReviewSurfaceArgs } from "./pi-tool-policy.js";
 import type { ReviewAdapterInput } from "./types.js";
+
+const antigravityUserSettingsPolicyKeys = new Set([
+  "allowNonWorkspaceAccess",
+  "always-proceed",
+  "alwaysProceed",
+  "always_proceed",
+  "approvalMode",
+  "artifactReviewPolicy",
+  "autoApprove",
+  "dangerouslySkipPermissions",
+  "enableTerminalSandbox",
+  "permissions",
+  "sandbox",
+  "skipPermissions",
+  "toolPermission",
+  "trustedWorkspaces",
+]);
 
 const opencodeGeneratedAgentPrefix = "diffwarden-review";
 
@@ -549,8 +572,17 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
     async buildInvocation(input, tempDir) {
       // agy has no prompt-file flag; a 2026-05-31 live probe confirmed
       // print mode can read this file.
-      const promptPath = path.join(tempDir, "antigravity-prompt.txt");
+      const reviewRoot = path.resolve(input.target.repo_root);
+      const promptDir = path.join(tempDir, "antigravity-prompt");
+      await mkdir(promptDir, { recursive: true });
+      const promptPath = path.join(promptDir, "antigravity-prompt.txt");
       await writeFile(promptPath, input.prompt, "utf8");
+      const isolatedHome = await stageAntigravityReviewHome({
+        input,
+        promptPath,
+        reviewCwd: reviewRoot,
+        tempDir,
+      });
       const printTimeoutSeconds = numberCliOption(input.reviewer, "printTimeoutSeconds") ?? 300;
       const args = ["--print"];
       pushPromptArg(
@@ -563,15 +595,22 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         `${printTimeoutSeconds}s`,
         "--sandbox",
         "--add-dir",
-        tempDir,
+        promptDir,
         "--add-dir",
-        input.cwd,
+        reviewRoot,
       );
 
       return {
         executable: cliExecutable(input.reviewer, defaultCliExecutable("antigravity")),
         args,
-        cwd: tempDir,
+        cwd: promptDir,
+        env: {
+          HOME: isolatedHome,
+          USERPROFILE: isolatedHome,
+          XDG_CONFIG_HOME: path.join(isolatedHome, ".config"),
+          AGY_CLI_DISABLE_AUTO_UPDATE: "true",
+        },
+        unsetEnv: ["HOMEDRIVE", "HOMEPATH"],
         captureMode: "text",
       };
     },
@@ -580,12 +619,230 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         text: result.stdout.trim(),
         metadata: {
           captureMode: "text",
-          readonlyCapability: "prompt-only",
+          readonlyCapability: "tool-restricted",
+          ...antigravityCliReviewPolicyMetadata(),
         },
       };
     },
   },
 };
+
+async function stageAntigravityReviewHome(input: {
+  input: ReviewAdapterInput;
+  promptPath: string;
+  reviewCwd: string;
+  tempDir: string;
+}): Promise<string> {
+  const isolatedHome = path.join(input.tempDir, "antigravity-home");
+  const reviewRoots = [input.reviewCwd, input.input.target.repo_root];
+  if (await antigravityHomeIsInsideReviewWorkspace(reviewRoots, input.tempDir)) {
+    throw reviewerFailed(
+      "Antigravity isolated home resolved inside the review workspace; set TMPDIR outside the repository before running Antigravity reviews.",
+    );
+  }
+  const geminiDir = path.join(isolatedHome, ".gemini");
+  const cliDir = path.join(geminiDir, "antigravity-cli");
+  const configDir = path.join(geminiDir, "config");
+  await mkdir(cliDir, { recursive: true });
+  await mkdir(configDir, { recursive: true });
+  await mkdir(path.join(isolatedHome, ".config"), { recursive: true });
+  const sourceGeminiDir = antigravitySourceGeminiDir(input.input.env);
+  if (
+    sourceGeminiDir !== undefined &&
+    (await pathIsInsideReviewWorkspace(reviewRoots, sourceGeminiDir))
+  ) {
+    throw reviewerFailed(
+      "Antigravity source credentials resolved inside the review workspace; set HOME or USERPROFILE outside the repository before running Antigravity reviews.",
+    );
+  }
+  await writeFile(
+    path.join(cliDir, antigravityCliReviewSettingsFileName),
+    `${JSON.stringify(
+      {
+        ...(await readAntigravityBaseSettings(sourceGeminiDir)),
+        ...antigravityCliReviewSettings({ promptPath: input.promptPath, cwd: input.reviewCwd }),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  await writeFile(path.join(configDir, antigravityCliReviewMcpConfigFileName), "{}\n", "utf8");
+  await copyAntigravityAuthFiles(geminiDir, cliDir, sourceGeminiDir);
+  return isolatedHome;
+}
+
+async function copyAntigravityAuthFiles(
+  geminiDir: string,
+  cliDir: string,
+  sourceGeminiDir: string | undefined,
+): Promise<void> {
+  if (sourceGeminiDir === undefined) {
+    return;
+  }
+  await copyIfPresent(
+    path.join(sourceGeminiDir, "oauth_creds.json"),
+    path.join(geminiDir, "oauth_creds.json"),
+  );
+  await copyIfPresent(
+    path.join(sourceGeminiDir, "google_accounts.json"),
+    path.join(geminiDir, "google_accounts.json"),
+  );
+  await copyIfPresent(
+    path.join(sourceGeminiDir, "installation_id"),
+    path.join(geminiDir, "installation_id"),
+  );
+  await copyIfPresent(
+    path.join(sourceGeminiDir, "antigravity-cli", "installation_id"),
+    path.join(cliDir, "installation_id"),
+  );
+}
+
+async function readAntigravityBaseSettings(
+  sourceGeminiDir: string | undefined,
+): Promise<Record<string, unknown>> {
+  if (sourceGeminiDir === undefined) {
+    return {};
+  }
+
+  try {
+    const contents = await readFile(
+      path.join(sourceGeminiDir, "antigravity-cli", antigravityCliReviewSettingsFileName),
+      "utf8",
+    );
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(contents) as unknown;
+    } catch {
+      return {};
+    }
+    return isPlainRecord(parsed) ? antigravityNonPolicySettings(parsed) : {};
+  } catch (error) {
+    if (isNodeErrorWithCode(error, "ENOENT")) {
+      return {};
+    }
+    throw error;
+  }
+}
+
+function antigravityNonPolicySettings(settings: Record<string, unknown>): Record<string, unknown> {
+  const filtered: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(settings)) {
+    if (!antigravityUserSettingsPolicyKeys.has(key)) {
+      filtered[key] = value;
+    }
+  }
+  return filtered;
+}
+
+export function antigravitySourceGeminiDir(
+  env: NodeJS.ProcessEnv | undefined,
+  fallbackHome = homedir(),
+): string | undefined {
+  const sourceHome = antigravitySourceHome(env, fallbackHome);
+  return sourceHome === undefined ? undefined : path.join(sourceHome, ".gemini");
+}
+
+function antigravitySourceHome(
+  env: NodeJS.ProcessEnv | undefined,
+  fallbackHome: string,
+): string | undefined {
+  const home = env?.HOME?.trim();
+  if (home) {
+    return home;
+  }
+
+  const userProfile = env?.USERPROFILE?.trim();
+  if (userProfile) {
+    return userProfile;
+  }
+
+  const homeDrive = env?.HOMEDRIVE?.trim();
+  const homePath = env?.HOMEPATH?.trim();
+  if (homeDrive && homePath) {
+    return path.win32.join(homeDrive, homePath);
+  }
+
+  const hasExplicitHomeBoundary =
+    env !== undefined &&
+    (env.HOME !== undefined ||
+      env.USERPROFILE !== undefined ||
+      env.HOMEDRIVE !== undefined ||
+      env.HOMEPATH !== undefined);
+  if (hasExplicitHomeBoundary) {
+    return undefined;
+  }
+
+  if (env !== undefined) {
+    if (env === process.env) {
+      return fallbackHome;
+    }
+    // An explicit child environment is an auth boundary unless it provides a home path.
+    return undefined;
+  }
+
+  return fallbackHome;
+}
+
+async function antigravityHomeIsInsideReviewWorkspace(
+  reviewRoots: string[],
+  tempDir: string,
+): Promise<boolean> {
+  const tempRoot = await realpathOrResolve(tempDir);
+  return await pathIsInsideReviewWorkspace(reviewRoots, path.join(tempRoot, "antigravity-home"));
+}
+
+async function pathIsInsideReviewWorkspace(
+  reviewRoots: string[],
+  candidatePath: string,
+): Promise<boolean> {
+  const candidate = await realpathOrResolve(candidatePath);
+  for (const reviewRoot of [...new Set(reviewRoots)]) {
+    if (isPathInside(await realpathOrResolve(reviewRoot), candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function realpathOrResolve(inputPath: string): Promise<string> {
+  try {
+    return await realpath(inputPath);
+  } catch (error) {
+    if (isNodeErrorWithCode(error, "ENOENT")) {
+      return path.resolve(inputPath);
+    }
+    throw error;
+  }
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function copyIfPresent(source: string, destination: string): Promise<void> {
+  try {
+    await copyFile(source, destination);
+  } catch (error) {
+    if (!isNodeErrorWithCode(error, "ENOENT")) {
+      throw error;
+    }
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === code
+  );
+}
 
 async function droidCliSessionSettingsMetadata(
   stdout: string,

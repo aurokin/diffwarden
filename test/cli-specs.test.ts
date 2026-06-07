@@ -11,10 +11,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  antigravityCliReviewDeniedPermissions,
+  antigravityCliReviewMcpConfigFileName,
+  antigravityCliReviewPolicyMetadata,
+  antigravityCliReviewSettingsFileName,
+} from "../src/adapters/antigravity-tool-policy.js";
+import {
   claudeCliDisallowedToolsArg,
   claudeCliReviewToolsArg,
 } from "../src/adapters/claude-tool-policy.js";
 import { cliSpecs } from "../src/adapters/cli-specs.js";
+import { antigravitySourceGeminiDir } from "../src/adapters/cli-specs.js";
 import type { CliEngine, CliRunResult } from "../src/adapters/cli-types.js";
 import {
   codexCliCwdArg,
@@ -176,15 +183,51 @@ describe("cliSpecs", () => {
 
   it("builds Antigravity prompt-bearing print invocations without stdin", async () => {
     const tempDir = createTempDir();
-    const promptPath = path.join(tempDir, "antigravity-prompt.txt");
+    const fakeHome = createTempDir();
+    mkdirSync(path.join(fakeHome, ".gemini", "antigravity-cli"), { recursive: true });
+    writeFileSync(path.join(fakeHome, ".gemini", "oauth_creds.json"), "oauth");
+    writeFileSync(path.join(fakeHome, ".gemini", "google_accounts.json"), "accounts");
+    writeFileSync(path.join(fakeHome, ".gemini", "installation_id"), "install");
+    writeFileSync(
+      path.join(fakeHome, ".gemini", "antigravity-cli", "installation_id"),
+      "cli-install",
+    );
+    writeFileSync(
+      path.join(fakeHome, ".gemini", "antigravity-cli", "settings.json"),
+      `${JSON.stringify({
+        customProvider: "keep",
+        endpoint: "https://antigravity.example.test",
+        allowNonWorkspaceAccess: true,
+        "always-proceed": true,
+        autoApprove: true,
+        toolPermission: "auto",
+        trustedWorkspaces: ["/unsafe"],
+        permissions: {
+          allow: ["write_file(*)"],
+          deny: [],
+          ask: ["command(*)"],
+        },
+      })}\n`,
+    );
+    const promptDir = path.join(tempDir, "antigravity-prompt");
+    const promptPath = path.join(promptDir, "antigravity-prompt.txt");
     const invocation = await cliSpecs.antigravity.buildInvocation(
       createInput(
         createReviewer("antigravity", {
           cliOptions: { printTimeoutSeconds: 180 },
         }),
+        { env: { HOME: fakeHome } },
       ),
       tempDir,
     );
+    const isolatedHome = path.join(tempDir, "antigravity-home");
+    const settingsPath = path.join(
+      isolatedHome,
+      ".gemini",
+      "antigravity-cli",
+      antigravityCliReviewSettingsFileName,
+    );
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
 
     expect(invocation).toMatchObject({
       executable: "agy",
@@ -195,15 +238,256 @@ describe("cliSpecs", () => {
         "180s",
         "--sandbox",
         "--add-dir",
-        tempDir,
+        promptDir,
         "--add-dir",
         "/repo",
       ],
-      cwd: tempDir,
+      cwd: promptDir,
+      env: {
+        HOME: isolatedHome,
+        USERPROFILE: isolatedHome,
+        XDG_CONFIG_HOME: path.join(isolatedHome, ".config"),
+        AGY_CLI_DISABLE_AUTO_UPDATE: "true",
+      },
+      unsetEnv: ["HOMEDRIVE", "HOMEPATH"],
       captureMode: "text",
     });
     expect(invocation.stdin).toBeUndefined();
     expect(readFileSync(promptPath, "utf8")).toBe("review prompt");
+    expect(settings).toMatchObject({
+      customProvider: "keep",
+      endpoint: "https://antigravity.example.test",
+      allowNonWorkspaceAccess: false,
+      artifactReviewPolicy: "asks-for-review",
+      enableTerminalSandbox: true,
+      toolPermission: "strict",
+      trustedWorkspaces: ["/repo", promptDir],
+      permissions: {
+        allow: ["read_file(*)"],
+        deny: [...antigravityCliReviewDeniedPermissions],
+        ask: [],
+      },
+    });
+    expect(settings["always-proceed"]).toBeUndefined();
+    expect(settings.autoApprove).toBeUndefined();
+    expect(path.relative(invocation.cwd ?? "", isolatedHome).startsWith("..")).toBe(true);
+    expect(
+      readFileSync(
+        path.join(isolatedHome, ".gemini", "config", antigravityCliReviewMcpConfigFileName),
+        "utf8",
+      ),
+    ).toBe("{}\n");
+    expect(settings.trustedWorkspaces).not.toContain(isolatedHome);
+    expect(readFileSync(path.join(isolatedHome, ".gemini", "oauth_creds.json"), "utf8")).toBe(
+      "oauth",
+    );
+    expect(
+      readFileSync(
+        path.join(isolatedHome, ".gemini", "antigravity-cli", "installation_id"),
+        "utf8",
+      ),
+    ).toBe("cli-install");
+  });
+
+  it("normalizes Antigravity review cwd consistently for add-dir and settings", async () => {
+    const tempDir = createTempDir();
+    const relativeCwd = "relative-review-root";
+    const absoluteCwd = path.resolve(relativeCwd);
+    const invocation = await cliSpecs.antigravity.buildInvocation(
+      createInput(createReviewer("antigravity"), {
+        cwd: relativeCwd,
+        env: { HOME: "" },
+      }),
+      tempDir,
+    );
+    const isolatedHome = path.join(tempDir, "antigravity-home");
+    const promptDir = path.join(tempDir, "antigravity-prompt");
+    const settings = JSON.parse(
+      readFileSync(path.join(isolatedHome, ".gemini", "antigravity-cli", "settings.json"), "utf8"),
+    );
+
+    expect(invocation.args).toEqual(expect.arrayContaining(["--add-dir", absoluteCwd]));
+    expect(invocation.args).toEqual(expect.arrayContaining(["--add-dir", promptDir]));
+    expect(settings.permissions.allow).toEqual(["read_file(*)"]);
+    expect(settings.trustedWorkspaces).toContain(absoluteCwd);
+    expect(settings.trustedWorkspaces).toContain(promptDir);
+    expect(settings.trustedWorkspaces).not.toContain(isolatedHome);
+  });
+
+  it("trusts the Antigravity repo root when reviews start from a subdirectory", async () => {
+    const tempDir = createTempDir();
+    const repoRoot = createTempDir();
+    const reviewCwd = path.join(repoRoot, "packages", "app");
+    mkdirSync(reviewCwd, { recursive: true });
+
+    const invocation = await cliSpecs.antigravity.buildInvocation(
+      createInput(createReviewer("antigravity"), {
+        cwd: reviewCwd,
+        repoRoot,
+        env: { HOME: "" },
+      }),
+      tempDir,
+    );
+    const settings = JSON.parse(
+      readFileSync(
+        path.join(tempDir, "antigravity-home", ".gemini", "antigravity-cli", "settings.json"),
+        "utf8",
+      ),
+    );
+
+    expect(invocation.args).toEqual(expect.arrayContaining(["--add-dir", repoRoot]));
+    expect(invocation.args).not.toEqual(expect.arrayContaining(["--add-dir", reviewCwd]));
+    expect(settings.trustedWorkspaces).toContain(repoRoot);
+    expect(settings.trustedWorkspaces).not.toContain(reviewCwd);
+  });
+
+  it("ignores malformed Antigravity base settings when staging review policy", async () => {
+    const tempDir = createTempDir();
+    const fakeHome = createTempDir();
+    mkdirSync(path.join(fakeHome, ".gemini", "antigravity-cli"), { recursive: true });
+    writeFileSync(path.join(fakeHome, ".gemini", "antigravity-cli", "settings.json"), "{");
+
+    await expect(
+      cliSpecs.antigravity.buildInvocation(
+        createInput(createReviewer("antigravity"), { env: { HOME: fakeHome } }),
+        tempDir,
+      ),
+    ).resolves.toMatchObject({
+      executable: "agy",
+      captureMode: "text",
+    });
+
+    const settings = JSON.parse(
+      readFileSync(
+        path.join(tempDir, "antigravity-home", ".gemini", "antigravity-cli", "settings.json"),
+        "utf8",
+      ),
+    );
+    expect(settings.permissions.allow).toEqual(["read_file(*)"]);
+  });
+
+  it("fails closed when Antigravity temp home would be inside the review root", async () => {
+    const reviewRoot = createTempDir();
+    const tempDir = path.join(reviewRoot, ".tmp", "diffwarden-cli");
+    mkdirSync(tempDir, { recursive: true });
+
+    await expect(
+      cliSpecs.antigravity.buildInvocation(
+        createInput(createReviewer("antigravity"), {
+          cwd: reviewRoot,
+          env: { HOME: "" },
+        }),
+        tempDir,
+      ),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("inside the review workspace"),
+    });
+  });
+
+  it("fails closed when a symlinked Antigravity temp dir points inside the review root", async () => {
+    const reviewRoot = createTempDir();
+    const linkRoot = createTempDir();
+    const targetTempDir = path.join(reviewRoot, ".tmp", "actual");
+    const linkedTempDir = path.join(linkRoot, "linked-temp");
+    mkdirSync(targetTempDir, { recursive: true });
+    symlinkSync(targetTempDir, linkedTempDir, "dir");
+
+    await expect(
+      cliSpecs.antigravity.buildInvocation(
+        createInput(createReviewer("antigravity"), {
+          cwd: reviewRoot,
+          env: { HOME: "" },
+        }),
+        linkedTempDir,
+      ),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("inside the review workspace"),
+    });
+  });
+
+  it("fails closed when Antigravity temp home is inside the repo root but outside cwd", async () => {
+    const repoRoot = createTempDir();
+    const reviewCwd = path.join(repoRoot, "packages", "app");
+    const tempDir = path.join(repoRoot, ".tmp", "diffwarden-cli");
+    mkdirSync(reviewCwd, { recursive: true });
+    mkdirSync(tempDir, { recursive: true });
+
+    await expect(
+      cliSpecs.antigravity.buildInvocation(
+        createInput(createReviewer("antigravity"), {
+          cwd: reviewCwd,
+          repoRoot,
+          env: { HOME: "" },
+        }),
+        tempDir,
+      ),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("inside the review workspace"),
+    });
+  });
+
+  it("fails closed when Antigravity source credentials are inside the repo root", async () => {
+    const tempDir = createTempDir();
+    const repoRoot = createTempDir();
+    const sourceHome = path.join(repoRoot, "home");
+    mkdirSync(path.join(sourceHome, ".gemini"), { recursive: true });
+
+    await expect(
+      cliSpecs.antigravity.buildInvocation(
+        createInput(createReviewer("antigravity"), {
+          cwd: repoRoot,
+          repoRoot,
+          env: { HOME: sourceHome },
+        }),
+        tempDir,
+      ),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("source credentials"),
+    });
+  });
+
+  it("resolves Antigravity auth staging home without crossing sanitized env boundaries", () => {
+    expect(antigravitySourceGeminiDir(undefined, "/fallback/home")).toBe("/fallback/home/.gemini");
+    expect(antigravitySourceGeminiDir({ PATH: "/bin" }, "/fallback/home")).toBeUndefined();
+    expect(antigravitySourceGeminiDir({ HOME: "" }, "/fallback/home")).toBeUndefined();
+    expect(antigravitySourceGeminiDir({ HOME: "   " }, "/fallback/home")).toBeUndefined();
+    expect(
+      antigravitySourceGeminiDir({ HOME: "", USERPROFILE: "C:\\Users\\Auro" }, "/fallback/home"),
+    ).toBe("C:\\Users\\Auro/.gemini");
+    expect(
+      antigravitySourceGeminiDir(
+        { HOME: "", USERPROFILE: "", HOMEDRIVE: "C:", HOMEPATH: "\\Users\\Auro" },
+        "/fallback/home",
+      ),
+    ).toBe("C:\\Users\\Auro/.gemini");
+    expect(antigravitySourceGeminiDir({ HOME: "/configured/home" }, "/fallback/home")).toBe(
+      "/configured/home/.gemini",
+    );
+  });
+
+  it("treats blank parent Antigravity home variables as an auth boundary", () => {
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    const originalHomeDrive = process.env.HOMEDRIVE;
+    const originalHomePath = process.env.HOMEPATH;
+
+    try {
+      process.env.HOME = "";
+      Reflect.deleteProperty(process.env, "USERPROFILE");
+      Reflect.deleteProperty(process.env, "HOMEDRIVE");
+      Reflect.deleteProperty(process.env, "HOMEPATH");
+
+      expect(antigravitySourceGeminiDir(process.env, "/fallback/home")).toBeUndefined();
+    } finally {
+      restoreEnvValue("HOME", originalHome);
+      restoreEnvValue("USERPROFILE", originalUserProfile);
+      restoreEnvValue("HOMEDRIVE", originalHomeDrive);
+      restoreEnvValue("HOMEPATH", originalHomePath);
+    }
   });
 
   it("stores large Antigravity prompts in a temp file instead of argv", async () => {
@@ -215,7 +499,9 @@ describe("cliSpecs", () => {
     );
 
     expect(invocation.args.join(" ")).not.toContain(prompt);
-    expect(readFileSync(path.join(tempDir, "antigravity-prompt.txt"), "utf8")).toBe(prompt);
+    expect(
+      readFileSync(path.join(tempDir, "antigravity-prompt", "antigravity-prompt.txt"), "utf8"),
+    ).toBe(prompt);
   });
 
   it("builds Claude restricted invocations and strips API credentials for Claude Code auth", async () => {
@@ -910,7 +1196,11 @@ describe("cliSpecs", () => {
       }),
     ).resolves.toMatchObject({
       text: "plain text",
-      metadata: { captureMode: "text", readonlyCapability: "prompt-only" },
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "tool-restricted",
+        ...antigravityCliReviewPolicyMetadata(),
+      },
     });
   });
 
@@ -933,6 +1223,14 @@ function createTempDir(): string {
   return directory;
 }
 
+function restoreEnvValue(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    Reflect.deleteProperty(process.env, name);
+    return;
+  }
+  process.env[name] = value;
+}
+
 function createReviewer(
   engine: CliEngine,
   extra: Partial<ReviewReviewerConfig> = {},
@@ -952,15 +1250,17 @@ function createInput(
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     prompt?: string;
+    repoRoot?: string;
   } = {},
 ): ReviewAdapterInput {
   const cwd = options.cwd ?? "/repo";
+  const repoRoot = options.repoRoot ?? cwd;
   return {
     cwd,
     reviewer,
     target: {
       kind: "custom",
-      repo_root: cwd,
+      repo_root: repoRoot,
       diff_command: "test diff",
       changed_files: ["file.ts"],
     },

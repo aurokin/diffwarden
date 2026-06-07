@@ -113,7 +113,7 @@ describe("reviewerCapabilities", () => {
       supportsModel: false,
       supportsEffort: false,
       captureMode: "text",
-      readonlyCapability: "prompt-only",
+      readonlyCapability: "tool-restricted",
     });
   });
 });

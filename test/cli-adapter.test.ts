@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { antigravityCliReviewDeniedPermissions } from "../src/adapters/antigravity-tool-policy.js";
 import { claudeCliReviewPolicyCliFlags } from "../src/adapters/claude-tool-policy.js";
 import { createCliAdapter } from "../src/adapters/cli.js";
 import {
@@ -314,16 +315,102 @@ describe("createCliAdapter", () => {
     expect(output.text).toContain("antigravity text");
     expect(output.metadata).toMatchObject({
       captureMode: "text",
-      readonlyCapability: "prompt-only",
+      readonlyCapability: "tool-restricted",
+      antigravityToolPermission: "strict",
+      antigravitySandbox: "enabled",
     });
     expect(invocation.args[0]).toBe("--print");
     expect(invocation.args[1]).toContain("Read the full Diffwarden review prompt from");
     expect(invocation.args[1]).toContain("antigravity-prompt.txt");
+    expect(invocation.cwd).toContain("antigravity-prompt");
     expect(invocation.args).toEqual(
       expect.arrayContaining(["--print-timeout", "300s", "--sandbox", "--add-dir", harness.cwd]),
     );
     expect(invocation.args).not.toContain("review prompt");
+    expect(invocation.env.HOME).toContain("diffwarden-cli-");
+    const isolatedHome = invocation.env.HOME;
+    if (isolatedHome === undefined) {
+      throw new Error("Antigravity isolated HOME was not captured");
+    }
+    expect(invocation.env.USERPROFILE).toBe(isolatedHome);
+    expect(invocation.env.HOMEDRIVE).toBeUndefined();
+    expect(invocation.env.HOMEPATH).toBeUndefined();
+    expect(invocation.env.XDG_CONFIG_HOME).toBe(path.join(isolatedHome, ".config"));
+    expect(invocation.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe("true");
+    const settings = JSON.parse(invocation.antigravitySettings ?? "{}");
+    expect(settings.permissions.deny).toEqual([...antigravityCliReviewDeniedPermissions]);
+    expect(settings.permissions.allow).toEqual(["read_file(*)"]);
+    expect(settings.trustedWorkspaces).toEqual(
+      expect.arrayContaining([expect.stringContaining("diffwarden-cli-"), harness.cwd]),
+    );
+    expect(settings.trustedWorkspaces).not.toContain(isolatedHome);
+    expect(path.relative(invocation.cwd, isolatedHome).startsWith("..")).toBe(true);
     expect(invocation.stdin).toBe("");
+  });
+
+  it("preflights Antigravity review policy support", async () => {
+    const harness = createHarness("antigravity");
+    const adapter = createCliAdapter("antigravity");
+    const reviewer = createReviewer("antigravity", harness.executable);
+
+    const preflight = await adapter.preflight?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: harness.env,
+    });
+
+    expect(preflight?.metadata?.readonlyCapability).toBe("tool-restricted");
+    expect(preflight?.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "antigravity-policy",
+          status: "passed",
+        }),
+      ]),
+    );
+  });
+
+  it("fails Antigravity preflight when the executable predates review policy support", async () => {
+    const harness = createHarness("antigravity");
+    const adapter = createCliAdapter("antigravity");
+    const reviewer = createReviewer("antigravity", harness.executable);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: { ...harness.env, DIFFWARDEN_FAKE_OLD_ANTIGRAVITY_VERSION: "1" },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("required review policy version"),
+    });
+  });
+
+  it("rechecks Antigravity review policy under the isolated run environment", async () => {
+    const harness = createHarness("antigravity");
+    const adapter = createCliAdapter("antigravity");
+    const reviewer = createReviewer("antigravity", harness.executable);
+    const prepared = await adapter.prepare?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: harness.env,
+    });
+    const versionHomeCapturePath = path.join(harness.cwd, "antigravity-version-home.txt");
+
+    await adapter.run({
+      ...createInput(reviewer, harness),
+      runContext: prepared?.runContext,
+      env: {
+        ...harness.env,
+        DIFFWARDEN_ANTIGRAVITY_VERSION_HOME_CAPTURE_PATH: versionHomeCapturePath,
+      },
+    });
+
+    expect(readFileSync(versionHomeCapturePath, "utf8")).toContain("antigravity-home");
   });
 
   it("prefers provider-observed CLI metadata over deterministic request metadata", async () => {
@@ -917,6 +1004,8 @@ function createHarness(engine: CliEngine) {
     readInvocation() {
       return JSON.parse(readFileSync(invocationPath, "utf8")) as {
         args: string[];
+        antigravitySettings?: string;
+        cwd: string;
         env: Record<string, string | undefined>;
         pid: number;
         stdin: string;
@@ -961,6 +1050,7 @@ function createInput(reviewer: ReviewReviewerConfig, harness: ReturnType<typeof 
 function fakeCliScript(engine: CliEngine): string {
   return `#!/usr/bin/env node
 const fs = require("node:fs");
+const path = require("node:path");
 const engine = process.env.DIFFWARDEN_FAKE_CLI;
 const invocationPath = process.env.DIFFWARDEN_INVOCATION_PATH;
 if (engine === "claude" && process.argv[2] === "auth" && process.argv[3] === "status") {
@@ -1013,17 +1103,41 @@ if (engine === "grok" && process.argv.includes("--help")) {
   }
   process.exit(0);
 }
+if (engine === "antigravity" && process.argv.includes("--version")) {
+  if (process.env.DIFFWARDEN_ANTIGRAVITY_VERSION_HOME_CAPTURE_PATH) {
+    fs.appendFileSync(
+      process.env.DIFFWARDEN_ANTIGRAVITY_VERSION_HOME_CAPTURE_PATH,
+      (process.env.HOME ?? "") + "\\n",
+    );
+  }
+  process.stdout.write(process.env.DIFFWARDEN_FAKE_OLD_ANTIGRAVITY_VERSION === "1" ? "1.0.5" : "1.0.6");
+  process.exit(0);
+}
 const stdin = fs.readFileSync(0, "utf8");
+const antigravitySettingsPath = process.env.HOME
+  ? path.join(process.env.HOME, ".gemini", "antigravity-cli", "settings.json")
+  : undefined;
 fs.writeFileSync(invocationPath, JSON.stringify({
   args: process.argv.slice(2),
+  antigravitySettings:
+    antigravitySettingsPath && fs.existsSync(antigravitySettingsPath)
+      ? fs.readFileSync(antigravitySettingsPath, "utf8")
+      : undefined,
+  cwd: process.cwd(),
   env: {
-    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-    ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
-    GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE,
-    GEMINI_CLI_TRUSTED_FOLDERS_PATH: process.env.GEMINI_CLI_TRUSTED_FOLDERS_PATH,
-    OPENCODE_CONFIG_CONTENT: process.env.OPENCODE_CONFIG_CONTENT,
-    OPENCODE_PERMISSION: process.env.OPENCODE_PERMISSION,
-  },
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+      AGY_CLI_DISABLE_AUTO_UPDATE: process.env.AGY_CLI_DISABLE_AUTO_UPDATE,
+      GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE,
+      GEMINI_CLI_TRUSTED_FOLDERS_PATH: process.env.GEMINI_CLI_TRUSTED_FOLDERS_PATH,
+      HOME: process.env.HOME,
+      HOMEDRIVE: process.env.HOMEDRIVE,
+      HOMEPATH: process.env.HOMEPATH,
+      OPENCODE_CONFIG_CONTENT: process.env.OPENCODE_CONFIG_CONTENT,
+      OPENCODE_PERMISSION: process.env.OPENCODE_PERMISSION,
+      USERPROFILE: process.env.USERPROFILE,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    },
   pid: process.pid,
   stdin,
 }));
