@@ -3,6 +3,7 @@ import { mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { invalidCli } from "../core/errors.js";
+import { assertAntigravityExecutableSupportsReviewPolicy } from "./antigravity.js";
 import { claudeCliReviewPolicyCliFlags } from "./claude-tool-policy.js";
 import { assertClaudeExecutableSupportsReviewPolicy } from "./claude.js";
 import {
@@ -49,7 +50,7 @@ type CliRunContext = {
   path?: string;
 };
 
-type CliPolicyCheckEngine = Extract<CliEngine, "claude" | "gemini" | "grok">;
+type CliPolicyCheckEngine = Extract<CliEngine, "antigravity" | "claude" | "gemini" | "grok">;
 type CliExecutableIdentity = {
   realpath: string;
   dev: number;
@@ -113,6 +114,13 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
         }
         if (engine === "grok") {
           await prepareGrokCliInvocation(
+            invocation,
+            input,
+            await hasPreparedPolicyCheck(engine, preparedRunContext, invocation, input),
+          );
+        }
+        if (engine === "antigravity") {
+          await prepareAntigravityCliInvocation(
             invocation,
             input,
             await hasPreparedPolicyCheck(engine, preparedRunContext, invocation, input),
@@ -196,6 +204,17 @@ async function prepareCliAdapter(
       name: "grok-policy",
       status: "passed",
       detail: "Grok executable supports Diffwarden review policy flags.",
+    });
+  }
+  if (engine === "antigravity") {
+    const policyEnv = input.env ?? process.env;
+    await assertAntigravityExecutableSupportsReviewPolicy(resolvedExecutable, policyEnv);
+    policyCheckEnvFingerprint = cliPolicyEnvFingerprint(policyEnv);
+    verifiedPolicyChecks.push(engine);
+    policyChecks.push({
+      name: "antigravity-policy",
+      status: "passed",
+      detail: "Antigravity executable supports Diffwarden review policy settings.",
     });
   }
 
@@ -315,7 +334,9 @@ async function hasPreparedPolicyCheck(
 }
 
 function isCliPolicyCheckEngine(engine: CliEngine): engine is CliPolicyCheckEngine {
-  return engine === "claude" || engine === "gemini" || engine === "grok";
+  return (
+    engine === "antigravity" || engine === "claude" || engine === "gemini" || engine === "grok"
+  );
 }
 
 async function cliExecutableIdentity(
@@ -452,6 +473,20 @@ async function prepareGrokCliInvocation(
     env,
     grokCliReviewPolicyCliFlags,
   );
+}
+
+async function prepareAntigravityCliInvocation(
+  invocation: CliInvocation,
+  input: ReviewAdapterInput,
+  policyAlreadyChecked = false,
+): Promise<void> {
+  const env = cliInvocationEnv(invocation, input);
+  invocation.resolvedExecutable =
+    invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
+  if (policyAlreadyChecked) {
+    return;
+  }
+  await assertAntigravityExecutableSupportsReviewPolicy(invocation.resolvedExecutable, env);
 }
 
 function cliInvocationEnv(

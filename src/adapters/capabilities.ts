@@ -215,7 +215,7 @@ const reviewerCapabilityDefinitions = {
         supportsModel: false,
         supportsEffort: false,
         captureMode: "text",
-        readonlyCapability: "prompt-only",
+        readonlyCapability: "tool-restricted",
       },
     },
   },

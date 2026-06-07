@@ -537,7 +537,29 @@ require each tool to be logged in or configured through its own environment vari
 Antigravity uses `agy --print` because `agy` print mode expects the prompt as the flag value.
 Diffwarden stores the full assembled review prompt in a temporary file and passes a short print
 prompt telling `agy` to read that file, keeping the diff out of process argv while preserving
-print-mode behavior.
+print-mode behavior. Review runs use `--sandbox` and a temporary `HOME`/`USERPROFILE` with an
+isolated `~/.gemini/antigravity-cli/settings.json`; Windows `HOMEDRIVE` and `HOMEPATH` are
+removed from the child environment so they cannot point back to the real profile. If the source
+Antigravity profile has valid non-policy settings, Diffwarden copies them as the base after
+filtering policy/control keys and then overwrites the review policy: `toolPermission` is `strict`,
+terminal sandboxing is enabled, the artifact review policy asks for review, MCP config is empty,
+and permissions deny `write_file(*)`, `command(*)`, `unsandboxed(*)`, `read_url(*)`,
+`execute_url(*)`, and `mcp(*)`.
+The temporary profile allows `read_file(*)`, disables non-workspace access, and trusts only the
+reviewed repository plus a dedicated temp prompt directory for that run. `agy` runs from that
+prompt directory, while the isolated home used for copied Antigravity auth identity files is a
+separate sibling directory outside both the process cwd and trusted roots, so reviewer file reads
+cannot inspect copied credentials. If the temp home would resolve inside the reviewed repository,
+Diffwarden fails closed before copying credentials; the same fail-closed rule applies when the
+source Antigravity `.gemini` directory is already inside the reviewed repository. Malformed
+source settings are ignored and replaced by the generated review profile. Diffwarden uses the same
+native roots for `--add-dir` and `trustedWorkspaces` so Windows drive-specific paths remain
+distinct. Review runs do not inherit
+permissive user settings such as `always-proceed`; explicitly sanitized home
+environment variables, including an explicit child environment with no home path, are respected
+and do not fall back to host credentials. Preflight requires `agy --version` to report `1.0.6`
+or newer, because that release fixed sandbox propagation for headless print mode after the
+permission system was introduced in `1.0.5`.
 
 Claude CLI transport uses the same `sdkOptions.authMode` values as the Claude SDK adapter.
 In `auto` mode, Diffwarden checks the selected Claude executable for logged-in Claude Code
@@ -550,8 +572,10 @@ workflow surfaces. It also passes `--no-session-persistence`, an empty `--settin
 `--no-chrome`. Claude CLI preflight verifies that the selected executable supports these policy
 flags. Diffwarden does not pass `--max-turns`; timeout remains the run-level limiter.
 
-Capability metadata is conservative. OpenCode, Antigravity, and Cursor SDK/CLI paths
-currently report prompt-only read-only behavior when hard enforcement is not proven.
+Capability metadata is conservative. Cursor SDK/CLI and OpenCode CLI currently report
+prompt-only read-only behavior when hard enforcement is not proven. Antigravity CLI reports
+tool-restricted behavior because Diffwarden supplies an isolated strict permissions profile, but
+the guarantees still depend on Antigravity's settings and permission engine.
 
 CLI model and effort metadata is conservative. Diffwarden records requested and resolved fields
 for values it explicitly passes, including provider-qualified model strings such as
