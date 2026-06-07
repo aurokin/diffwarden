@@ -125,6 +125,30 @@ describe("live doctor executable provenance", () => {
     });
   });
 
+  it("does not use disabled reviewer executable config when no default set is configured", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const defaultExecutable = executableFixture("agy");
+    writeConfig({
+      reviewers: [
+        {
+          id: "agy-disabled",
+          engine: "antigravity",
+          enabled: false,
+          cliOptions: { executable: executableFixture("agy-disabled") },
+        },
+      ],
+    });
+
+    const row = await antigravityRow({ PATH: testRoot() });
+
+    expect(row).toMatchObject({
+      status: `found: ${defaultExecutable}`,
+      executable: "agy",
+      resolvedExecutable: defaultExecutable,
+      executableSource: "adapter-default",
+    });
+  });
+
   it("reports defaulted and configured executables from the active reviewer set", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
     executableFixture("agy");
@@ -428,6 +452,43 @@ describe("live doctor executable provenance", () => {
       status: `found: ${defaultExecutable}`,
       executable: "agy",
       resolvedExecutable: defaultExecutable,
+      executableSource: "adapter-default",
+    });
+  });
+
+  it("warns and falls back when the active reviewer set references a disabled reviewer", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = executableFixture("agy");
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["agy-disabled"] },
+      reviewers: [
+        {
+          id: "agy-disabled",
+          engine: "antigravity",
+          enabled: false,
+          cliOptions: { executable: executableFixture("agy-disabled") },
+        },
+      ],
+    });
+
+    const rows = await collectLiveDoctorRows({
+      cwd: testRoot(),
+      repoRoot: testRoot(),
+      env: { PATH: testRoot() },
+    });
+    const configRow = rows.find((candidate) => candidate.id === "config");
+    const row = rows.find((candidate) => candidate.id === "antigravity");
+
+    expect(configRow).toMatchObject({
+      kind: "config",
+      status: "ignored invalid config",
+      auth: "Reviewer is disabled: agy-disabled in reviewer set: primary",
+    });
+    expect(row).toMatchObject({
+      status: `found: ${executable}`,
+      executable: "agy",
+      resolvedExecutable: executable,
       executableSource: "adapter-default",
     });
   });

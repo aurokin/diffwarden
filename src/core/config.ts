@@ -35,6 +35,7 @@ const reviewerConfigSchema = z
     transport: transportSchema.optional(),
     profile: z.string().min(1).optional(),
     provider: z.string().min(1).optional(),
+    enabled: z.boolean().optional(),
     model: z.string().min(1).optional(),
     effort: effortSchema.optional(),
     modelCatalog: z.array(z.string().min(1)).optional(),

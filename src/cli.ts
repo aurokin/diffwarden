@@ -39,7 +39,7 @@ const collectReviewers = (value: string, previous: string[]): string[] => [...pr
 const collectValues = (value: string, previous: string[]): string[] => [...previous, value];
 
 type ReviewerListSummary = {
-  schema_version: 1;
+  schema_version: 2;
   config: {
     path: string;
     sha256: string;
@@ -52,6 +52,7 @@ type ReviewerListSummary = {
 type ReviewerListEntry = {
   id: string;
   engine: string;
+  enabled: boolean;
   profile?: string;
   transport: "native" | "cli" | "app-server";
   provider?: string;
@@ -512,7 +513,7 @@ function renderMacosDoctorMarkdown(report: MacosDoctorReport): string {
 
 function summarizeReviewers(loadedConfig: LoadedDiffwardenConfig): ReviewerListSummary {
   return {
-    schema_version: 1,
+    schema_version: 2,
     config: {
       path: loadedConfig.path,
       sha256: loadedConfig.sha256,
@@ -528,6 +529,7 @@ function summarizeReviewers(loadedConfig: LoadedDiffwardenConfig): ReviewerListS
       return {
         id: reviewer.id,
         engine: reviewer.sdk,
+        enabled: reviewer.enabled !== false,
         ...(reviewer.profile !== undefined ? { profile: reviewer.profile } : {}),
         transport: publicTransport(transport),
         ...(reviewer.provider !== undefined ? { provider: reviewer.provider } : {}),
@@ -569,12 +571,13 @@ function renderReviewerListMarkdown(summary: ReviewerListSummary): string {
   if (summary.reviewers.length === 0) {
     lines.push("_None configured._", "");
   } else {
-    lines.push("| ID | Engine | Profile | Transport | Provider | Model | Effort |");
-    lines.push("| --- | --- | --- | --- | --- | --- | --- |");
+    lines.push("| ID | Engine | Enabled | Profile | Transport | Provider | Model | Effort |");
+    lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
     for (const reviewer of summary.reviewers) {
       const row = [
         reviewer.id,
         reviewer.engine,
+        reviewer.enabled ? "yes" : "no",
         reviewer.profile ?? "",
         reviewer.transport,
         reviewer.provider ?? "",

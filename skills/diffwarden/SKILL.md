@@ -31,6 +31,9 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
 2. Pick reviewers:
    - Use `diffwarden reviewers list` when you need to see configured reviewer IDs or reviewer
      sets before choosing.
+   - Treat reviewers shown as disabled as intentionally unavailable. Do not select them or
+     edit their `enabled` flag unless the user explicitly asks you to enable or disable that
+     reviewer.
    - Use explicit `--reviewer` values when the user names reviewers.
    - Prefer the configured default reviewer set unless the user specifies reviewers or a
      different set. Passing no reviewer flags uses `defaultReviewerSet` when config defines

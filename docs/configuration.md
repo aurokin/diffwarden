@@ -52,6 +52,32 @@ Use `transport: "native"` for the SDK-backed path when you want to be explicit, 
 `transport: "cli"` for executable-backed runs. Codex also supports a
 `transport: "app-server"` path for ephemeral `codex app-server` reviews.
 
+## Disabling Configured Reviewers
+
+Set `enabled: false` on a configured reviewer when it should stay in config but must not run,
+for example when a local app, CLI, or provider is temporarily unavailable. Omitted `enabled`
+means enabled.
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "droid-cli",
+      "engine": "droid",
+      "transport": "cli",
+      "enabled": false
+    }
+  ]
+}
+```
+
+Disabled reviewers remain visible in `diffwarden reviewers list` and JSON output as
+`enabled: false`. Selecting a disabled configured reviewer fails with a config error, whether
+it is selected directly by id, through an `engine:profile` spec, through `reviewerSets`, or
+through `defaultReviewerSet`. Diffwarden does not silently skip disabled reviewers because
+that could change who reviewed a patch. Bare built-in specs such as `claude`, `pi`, or
+`droid` are unaffected, even if a configured reviewer id happens to match a built-in name.
+
 ## Environment Defaults
 
 CLI flags take precedence over environment defaults.
