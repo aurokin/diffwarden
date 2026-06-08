@@ -43,6 +43,10 @@ import {
 import { cursorCliReviewMode, cursorCliSandboxMode } from "./cursor-policy.js";
 import { droidSessionTag } from "./droid-session.js";
 import {
+  droidCliReviewAllowedToolsArg,
+  droidCliReviewPolicyMetadata,
+} from "./droid-tool-policy.js";
+import {
   geminiCliReviewApprovalMode,
   geminiCliReviewDisabledExtensions,
   geminiCliReviewMcpAllowlist,
@@ -487,6 +491,8 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         "--output-format",
         "json",
         "--use-spec",
+        "--enabled-tools",
+        droidCliReviewAllowedToolsArg(),
         "--file",
         promptPath,
       ];
@@ -497,11 +503,14 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       if (input.reviewer.effort !== undefined && input.reviewer.effort !== "off") {
         args.push("--spec-reasoning-effort", droidCliEffort(input.reviewer.effort));
       }
+      const logGroupId = droidCliReviewLogGroupId(input);
       args.push("--tag", JSON.stringify(droidSessionTag(input, "cli")));
+      args.push("--log-group-id", logGroupId);
 
       return {
         executable: cliExecutable(input.reviewer, defaultCliExecutable("droid")),
         args,
+        droidLogGroupId: logGroupId,
         droidSessionDirectory: await droidCliSessionDirectory(input.cwd, input.env),
         captureMode: "text",
       };
@@ -514,6 +523,10 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       return normalizeJsonLikeAdapterOutput(result.stdout, {
         captureMode: "text",
         readonlyCapability: "enforced",
+        ...droidCliReviewPolicyMetadata(),
+        ...(invocation.droidLogGroupId !== undefined
+          ? { droidLogGroupId: invocation.droidLogGroupId }
+          : {}),
         ...settingsMetadata,
         ...cliRuntimeResolutionMetadata(result.stdout),
       });
@@ -923,6 +936,15 @@ function droidCliSessionId(stdout: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function droidCliReviewLogGroupId(input: { reviewer: { id: string } }): string {
+  return `diffwarden-${sanitizeDroidLogGroupPart(input.reviewer.id)}-${randomUUID()}`;
+}
+
+function sanitizeDroidLogGroupPart(value: string): string {
+  const sanitized = value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return sanitized || "reviewer";
 }
 
 async function readJsonRecord(file: string): Promise<Record<string, unknown> | undefined> {

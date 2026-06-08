@@ -11,6 +11,7 @@ export type CliInvocation = {
   unsetEnv?: string[];
   stdin?: string;
   outputPath?: string;
+  droidLogGroupId?: string | undefined;
   droidSessionDirectory?: string;
   captureMode: NonNullable<ReviewAdapterOutput["metadata"]>["captureMode"];
 };
