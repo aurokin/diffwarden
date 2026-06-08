@@ -311,7 +311,10 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stdout).toContain("Default reviewer set: 2");
     expect(result.stdout).toContain("| 2 | cursor-fast, pi-openrouter-high | yes |");
     expect(result.stdout).toContain(
-      "| pi-openrouter-high | pi | openrouter-high | native | openrouter | anthropic/claude-sonnet | high |",
+      "| cursor-fast | cursor | no | fast | native |  | composer-2.5 |  |",
+    );
+    expect(result.stdout).toContain(
+      "| pi-openrouter-high | pi | yes | openrouter-high | native | openrouter | anthropic/claude-sonnet | high |",
     );
     expect(result.stdout).not.toContain("OPENROUTER_API_KEY");
     expect(result.stdout).not.toContain("providerProfile");
@@ -333,7 +336,7 @@ describe("diffwarden CLI e2e", () => {
     const summary = JSON.parse(result.stdout);
 
     expect(summary).toMatchObject({
-      schema_version: 1,
+      schema_version: 2,
       config: {
         path: path.join(repo, "diffwarden.config.json"),
         sha256: expect.any(String),
@@ -347,11 +350,13 @@ describe("diffwarden CLI e2e", () => {
         {
           id: "pi-default",
           engine: "pi",
+          enabled: true,
           transport: "native",
         },
         {
           id: "cursor-fast",
           engine: "cursor",
+          enabled: false,
           profile: "fast",
           transport: "native",
           model: "composer-2.5",
@@ -359,6 +364,7 @@ describe("diffwarden CLI e2e", () => {
         {
           id: "pi-openrouter-high",
           engine: "pi",
+          enabled: true,
           profile: "openrouter-high",
           transport: "native",
           provider: "openrouter",
@@ -446,6 +452,7 @@ function writeDiffwardenConfig(repo: string): void {
             engine: "cursor",
             profile: "fast",
             transport: "native",
+            enabled: false,
             model: "composer-2.5",
           },
           {

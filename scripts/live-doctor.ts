@@ -436,7 +436,7 @@ async function loadConfigForDoctor(options: {
 function activeConfiguredReviewers(config: DiffwardenConfig): ActiveReviewer[] {
   const reviewers = config.reviewers ?? [];
   if (config.defaultReviewerSet === undefined) {
-    return reviewers;
+    return reviewers.filter(isConfiguredReviewerEnabled);
   }
 
   const specs = config.reviewerSets?.[config.defaultReviewerSet];
@@ -448,7 +448,7 @@ function activeConfiguredReviewers(config: DiffwardenConfig): ActiveReviewer[] {
   }
 
   return specs.flatMap((spec) => {
-    const resolved = configuredReviewerBySpec(reviewers, spec);
+    const resolved = configuredReviewerBySpec(reviewers, spec, config.defaultReviewerSet);
     if (!resolved.valid) {
       throw new Error(resolved.error);
     }
@@ -459,6 +459,7 @@ function activeConfiguredReviewers(config: DiffwardenConfig): ActiveReviewer[] {
 function configuredReviewerBySpec(
   reviewers: ConfiguredReviewer[],
   spec: string,
+  reviewerSet?: string,
 ): { valid: true; reviewer?: ActiveReviewer } | { valid: false; error: string } {
   if (spec.length === 0) {
     return { valid: false, error: "Reviewer spec cannot be empty" };
@@ -480,19 +481,37 @@ function configuredReviewerBySpec(
     const reviewer = reviewers.find(
       (candidate) => candidate.sdk === sdk && candidate.profile === profile,
     );
-    return reviewer === undefined
-      ? { valid: false, error: `Unknown reviewer profile: ${spec}` }
-      : { valid: true, reviewer };
+    if (reviewer === undefined) {
+      return { valid: false, error: `Unknown reviewer profile: ${spec}` };
+    }
+    if (!isConfiguredReviewerEnabled(reviewer)) {
+      return { valid: false, error: disabledReviewerError(reviewer, reviewerSet) };
+    }
+    return { valid: true, reviewer };
   }
 
   const reviewer = reviewers.find((candidate) => candidate.id === spec);
-  return reviewer === undefined
-    ? { valid: false, error: `Unknown configured reviewer: ${spec}` }
-    : { valid: true, reviewer };
+  if (reviewer === undefined) {
+    return { valid: false, error: `Unknown configured reviewer: ${spec}` };
+  }
+  if (!isConfiguredReviewerEnabled(reviewer)) {
+    return { valid: false, error: disabledReviewerError(reviewer, reviewerSet) };
+  }
+  return { valid: true, reviewer };
 }
 
 function builtInReviewer(id: string, sdk: ReviewerSdk): ActiveReviewer {
   return { id, sdk };
+}
+
+function isConfiguredReviewerEnabled(reviewer: ConfiguredReviewer): boolean {
+  return reviewer.enabled !== false;
+}
+
+function disabledReviewerError(reviewer: ConfiguredReviewer, reviewerSet?: string): string {
+  return `Reviewer is disabled: ${reviewer.id}${
+    reviewerSet === undefined ? "" : ` in reviewer set: ${reviewerSet}`
+  }`;
 }
 
 function isValidProfileName(profile: string): boolean {

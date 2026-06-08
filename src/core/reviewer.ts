@@ -76,6 +76,7 @@ export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewRe
         ? undefined
         : findConfiguredReviewerById(options.config, options.spec);
     if (configured !== undefined && options.config !== undefined) {
+      assertConfiguredReviewerEnabled(configured);
       return materializeConfiguredReviewer(options.config, configured, options);
     }
     if (options.config !== undefined) {
@@ -92,6 +93,7 @@ export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewRe
         { ...parsed, profile },
         options.spec,
       );
+      assertConfiguredReviewerEnabled(configured);
       return materializeConfiguredReviewer(options.config, configured, options);
     }
     throw invalidCli(`Reviewer profiles are not implemented yet: ${options.spec}`);
@@ -162,6 +164,10 @@ function resolveConfiguredReviewerSet(
 
   if (specs.length === 0) {
     throw invalidConfig(`Reviewer set is empty: ${name}`);
+  }
+
+  for (const spec of specs) {
+    assertReviewerSpecEnabledForSet(config, spec, name);
   }
 
   return specs;
@@ -312,6 +318,59 @@ function findConfiguredReviewerByProfile(
   }
 
   return reviewer;
+}
+
+function findConfiguredReviewerByParsedProfile(
+  config: DiffwardenConfig,
+  parsed: ParsedReviewerSpec & { profile: string },
+): NonNullable<DiffwardenConfig["reviewers"]>[number] | undefined {
+  return config.reviewers?.find(
+    (candidate) => candidate.sdk === parsed.sdk && candidate.profile === parsed.profile,
+  );
+}
+
+function assertReviewerSpecEnabledForSet(
+  config: DiffwardenConfig | undefined,
+  spec: string,
+  reviewerSet: string,
+): void {
+  if (config === undefined) {
+    return;
+  }
+
+  const parsed = parseReviewerSpecIfBuiltIn(spec);
+  if (parsed === undefined) {
+    const configured = findConfiguredReviewerById(config, spec);
+    if (configured !== undefined) {
+      assertConfiguredReviewerEnabled(configured, reviewerSet);
+    }
+    return;
+  }
+
+  if (parsed.profile !== undefined) {
+    const configured = findConfiguredReviewerByParsedProfile(config, {
+      ...parsed,
+      profile: parsed.profile,
+    });
+    if (configured !== undefined) {
+      assertConfiguredReviewerEnabled(configured, reviewerSet);
+    }
+  }
+}
+
+function assertConfiguredReviewerEnabled(
+  reviewer: NonNullable<DiffwardenConfig["reviewers"]>[number],
+  reviewerSet?: string,
+): void {
+  if (reviewer.enabled !== false) {
+    return;
+  }
+
+  throw invalidConfig(
+    `Reviewer is disabled: ${reviewer.id}${
+      reviewerSet === undefined ? "" : ` in reviewer set: ${reviewerSet}`
+    }`,
+  );
 }
 
 function validateConfiguredModel(

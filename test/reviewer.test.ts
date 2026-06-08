@@ -111,6 +111,50 @@ describe("resolveReviewerConfig", () => {
     });
   });
 
+  it("resolves configured reviewers when enabled is omitted", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "droid-cli-local",
+        config: {
+          reviewers: [{ id: "droid-cli-local", sdk: "droid", transport: "cli" }],
+        },
+      }),
+    ).toMatchObject({
+      id: "droid-cli-local",
+      sdk: "droid",
+      transport: "cli",
+    });
+  });
+
+  it("rejects direct disabled configured reviewer selections", () => {
+    expect(() =>
+      resolveReviewerConfig({
+        spec: "droid-cli-local",
+        config: {
+          reviewers: [{ id: "droid-cli-local", sdk: "droid", transport: "cli", enabled: false }],
+        },
+      }),
+    ).toThrow("Reviewer is disabled: droid-cli-local");
+  });
+
+  it("rejects disabled configured profile selections", () => {
+    expect(() =>
+      resolveReviewerConfig({
+        spec: "pi:openrouter-high",
+        config: {
+          reviewers: [
+            {
+              id: "pi-openrouter-high",
+              sdk: "pi",
+              profile: "openrouter-high",
+              enabled: false,
+            },
+          ],
+        },
+      }),
+    ).toThrow("Reviewer is disabled: pi-openrouter-high");
+  });
+
   it("applies built-in default models to configured reviewers when no model is configured", () => {
     expect(
       resolveReviewerConfig({
@@ -178,7 +222,9 @@ describe("resolveReviewerConfig", () => {
       resolveReviewerConfig({
         spec: "claude",
         config: {
-          reviewers: [{ id: "claude", sdk: "pi", model: "anthropic/claude-sonnet" }],
+          reviewers: [
+            { id: "claude", sdk: "pi", model: "anthropic/claude-sonnet", enabled: false },
+          ],
         },
       }),
     ).toMatchObject({
@@ -374,6 +420,55 @@ describe("resolveReviewerConfigs", () => {
         },
       }).map((reviewer) => reviewer.sdk),
     ).toEqual(["pi", "claude"]);
+  });
+
+  it("rejects reviewer sets that reference disabled configured reviewers", () => {
+    expect(() =>
+      resolveReviewerConfigs({
+        reviewerSet: "2",
+        config: {
+          reviewerSets: {
+            "2": ["pi", "droid-cli-local"],
+          },
+          reviewers: [{ id: "droid-cli-local", sdk: "droid", transport: "cli", enabled: false }],
+        },
+      }),
+    ).toThrow("Reviewer is disabled: droid-cli-local in reviewer set: 2");
+  });
+
+  it("rejects default reviewer sets that reference disabled configured reviewers", () => {
+    expect(() =>
+      resolveReviewerConfigs({
+        config: {
+          defaultReviewerSet: "temporary",
+          reviewerSets: {
+            temporary: ["droid-cli-local"],
+          },
+          reviewers: [{ id: "droid-cli-local", sdk: "droid", transport: "cli", enabled: false }],
+        },
+      }),
+    ).toThrow("Reviewer is disabled: droid-cli-local in reviewer set: temporary");
+  });
+
+  it("rejects reviewer sets that reference disabled configured profiles", () => {
+    expect(() =>
+      resolveReviewerConfigs({
+        reviewerSet: "2",
+        config: {
+          reviewerSets: {
+            "2": ["pi:openrouter-high"],
+          },
+          reviewers: [
+            {
+              id: "pi-openrouter-high",
+              sdk: "pi",
+              profile: "openrouter-high",
+              enabled: false,
+            },
+          ],
+        },
+      }),
+    ).toThrow("Reviewer is disabled: pi-openrouter-high in reviewer set: 2");
   });
 
   it("requires defaultReviewerSet for implicit configured runs", () => {

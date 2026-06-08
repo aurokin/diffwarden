@@ -133,6 +133,28 @@ describe("loadDiffwardenConfig", () => {
     });
   });
 
+  it("loads disabled configured reviewers without normalizing omitted enabled flags", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [
+        { id: "droid-temporary-offline", engine: "droid", enabled: false },
+        { id: "pi-default", engine: "pi" },
+      ],
+    });
+
+    const loaded = await loadDiffwardenConfig({ cwd: root, repoRoot: root });
+
+    expect(loaded?.config.reviewers?.[0]).toMatchObject({
+      id: "droid-temporary-offline",
+      sdk: "droid",
+      enabled: false,
+    });
+    expect(loaded?.config.reviewers?.[1]).toEqual({
+      id: "pi-default",
+      sdk: "pi",
+    });
+  });
+
   it("loads Codex app-server transport configuration", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {

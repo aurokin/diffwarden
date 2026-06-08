@@ -153,6 +153,9 @@ adapters, running preflight checks, or spending model/API time. JSON output is i
 agents and automation and must not include nested option bags such as `providerOptions`,
 `sdkOptions`, or `cliOptions`.
 
+Reviewer-list JSON currently emits `schema_version: 2`. Each configured reviewer summary
+includes `enabled: boolean`; omitted `enabled` in config is rendered as `true`.
+
 Reviewer specs should stay compact and SDK-agnostic at the public boundary:
 
 ```text
