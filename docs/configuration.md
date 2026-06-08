@@ -347,7 +347,11 @@ upstream docs.
 
 SDK-backed families can be configured to use a CLI transport.
 Droid users should prefer the CLI profile for routine reviews when Factory UI session
-history matters. Codex CLI disables Codex web search by default with
+history matters. Droid CLI uses `droid exec --use-spec`, keeps Droid's default read-only
+autonomy by leaving mission/unsafe autonomy flags unset, uses an explicit read/spec-control
+tool allowlist, verifies that allowlist with `--list-tools`, adds a Diffwarden log group ID,
+and relies on the configured reviewer timeout rather than tool-call, turn, step, or retry caps.
+Codex CLI disables Codex web search by default with
 `web_search = "disabled"`; set `cliOptions.webSearch` to `"enabled"` or `"inherit"` when a
 reviewer should use a different policy.
 

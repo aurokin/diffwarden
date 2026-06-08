@@ -14,6 +14,11 @@ import { antigravityCliReviewDeniedPermissions } from "../src/adapters/antigravi
 import { claudeCliReviewPolicyCliFlags } from "../src/adapters/claude-tool-policy.js";
 import { createCliAdapter } from "../src/adapters/cli.js";
 import {
+  droidCliReviewAllowedTools,
+  droidCliReviewAllowedToolsArg,
+  droidCliReviewPolicyCliFlags,
+} from "../src/adapters/droid-tool-policy.js";
+import {
   geminiCliReviewPolicyCliFlags,
   geminiCliSkipTrustFlag,
   geminiCliTrustWorkspaceEnvVar,
@@ -527,6 +532,218 @@ describe("createCliAdapter", () => {
     });
   });
 
+  it("preflights and runs Droid CLI reviews with explicit read-only tool policy", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const env = {
+      ...harness.env,
+      DIFFWARDEN_EXPECT_DROID_LIST_TOOLS_CWD: harness.cwd,
+    };
+    const reviewer = createReviewer("droid", harness.executable, {
+      model: "claude-opus-4-8",
+      effort: "minimal",
+    });
+
+    const preflight = await adapter.preflight?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env,
+    });
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env,
+    });
+    const invocation = harness.readInvocation();
+
+    expect(preflight?.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "droid-policy",
+          status: "passed",
+        }),
+        expect.objectContaining({
+          name: "readonly",
+          status: "passed",
+        }),
+      ]),
+    );
+    expect(output.metadata).toMatchObject({
+      captureMode: "text",
+      readonlyCapability: "enforced",
+      droidInteractionMode: "spec",
+      droidAutonomyLevel: "default-readonly",
+      droidToolPolicy: "allowlist",
+      droidAllowedTools: [
+        "read-cli",
+        "glob-search-cli",
+        "grep_tool_cli",
+        "ls-cli",
+        "exit-spec-mode",
+      ],
+      droidMissionMode: "disabled",
+      droidLogGroupId: expect.stringMatching(/^diffwarden-droid-[0-9a-f-]{36}$/),
+    });
+    expect(invocation.args).toEqual(
+      expect.arrayContaining([
+        "exec",
+        "--output-format",
+        "json",
+        "--use-spec",
+        "--enabled-tools",
+        droidCliReviewAllowedToolsArg(),
+        "--spec-model",
+        "claude-opus-4-8",
+        "--spec-reasoning-effort",
+        "low",
+        "--log-group-id",
+        expect.stringMatching(/^diffwarden-droid-[0-9a-f-]{36}$/),
+      ]),
+    );
+    expect(invocation.args).not.toContain("--disabled-tools");
+    expect(invocation.args).not.toContain("--auto");
+    expect(invocation.args).not.toContain("--skip-permissions-unsafe");
+    expect(invocation.args).not.toContain("--mission");
+  });
+
+  it("does not require Droid model and effort flags for default CLI reviews", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable);
+
+    const preflight = await adapter.preflight?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_DROID_NO_MODEL_FLAGS_HELP: "1",
+      },
+    });
+
+    expect(preflight?.checks).toContainEqual(
+      expect.objectContaining({
+        name: "droid-policy",
+        status: "passed",
+      }),
+    );
+  });
+
+  it("omits Droid log group metadata when the executable lacks that optional flag", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable);
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_DROID_NO_LOG_GROUP_HELP: "1",
+      },
+    });
+    const invocation = harness.readInvocation();
+
+    expect(invocation.args).not.toContain("--log-group-id");
+    expect(output.metadata).not.toHaveProperty("droidLogGroupId");
+  });
+
+  it("accepts provider-qualified Droid CLI models when help lists bare model ids", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable, {
+      provider: "factory",
+      model: "claude-opus-4-8",
+      effort: "high",
+    });
+
+    const preflight = await adapter.preflight?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_DROID_MODELS_HELP: "1",
+      },
+    });
+
+    expect(preflight?.checks).toContainEqual(
+      expect.objectContaining({
+        name: "droid-policy",
+        status: "passed",
+      }),
+    );
+  });
+
+  it("rechecks prepared Droid CLI policy when model requirements change", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const prepared = await adapter.prepare?.({
+      cwd: harness.cwd,
+      reviewer: createReviewer("droid", harness.executable),
+      readonly: true,
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_DROID_NO_MODEL_FLAGS_HELP: "1",
+      },
+    });
+    const reviewer = createReviewer("droid", harness.executable, { model: "claude-opus-4-8" });
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        runContext: prepared?.runContext,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_DROID_NO_MODEL_FLAGS_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--spec-model"),
+    });
+  });
+
+  it("rechecks prepared Droid CLI policy when review cwd changes", async () => {
+    const harness = createHarness("droid");
+    const markerPath = path.join(harness.cwd, "droid-list-tools.log");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable);
+    const prepared = await adapter.prepare?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: {
+        ...harness.env,
+        DIFFWARDEN_DROID_LIST_TOOLS_MARKER: markerPath,
+      },
+    });
+    const otherCwd = path.join(harness.cwd, "other-workspace");
+    mkdirSync(otherCwd);
+
+    await adapter.run({
+      ...createInput(reviewer, harness),
+      cwd: otherCwd,
+      target: {
+        kind: "custom",
+        repo_root: otherCwd,
+        diff_command: "test diff",
+        changed_files: ["file.ts"],
+      },
+      runContext: prepared?.runContext,
+      env: {
+        ...harness.env,
+        DIFFWARDEN_DROID_LIST_TOOLS_MARKER: markerPath,
+      },
+    });
+
+    const listToolRuns = readFileSync(markerPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+    expect(listToolRuns).toHaveLength(2);
+    expect(listToolRuns[1]).toEqual(expect.arrayContaining(["--cwd", otherCwd]));
+  });
+
   it("prefers Claude Code auth for Claude CLI runs and strips API credentials", async () => {
     const harness = createHarness("claude");
     const adapter = createCliAdapter("claude");
@@ -671,6 +888,112 @@ describe("createCliAdapter", () => {
     ).rejects.toMatchObject({
       code: "missing_requirement",
       message: expect.stringContaining("--admin-policy"),
+    });
+  });
+
+  it("fails Droid CLI preflight when the executable lacks review policy flags", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_OLD_DROID_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--enabled-tools"),
+    });
+  });
+
+  it("checks Droid CLI policy flags during direct runs", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable);
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_OLD_DROID_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--enabled-tools"),
+    });
+  });
+
+  it("fails Droid CLI preflight when the executable exposes unexpected review tools", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_DROID_BAD_TOOLS: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("tool allowlist"),
+    });
+  });
+
+  it("fails Droid CLI preflight when the requested model is not listed", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable, { model: "missing-model" });
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_DROID_MODELS_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("missing-model"),
+    });
+  });
+
+  it("fails Droid CLI preflight when the requested effort is unsupported", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable, {
+      model: "gpt-5.4-mini",
+      effort: "minimal",
+    });
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_DROID_MODELS_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("does not support reasoning effort low"),
     });
   });
 
@@ -1101,6 +1424,51 @@ if (engine === "grok" && process.argv.includes("--help")) {
   } else {
     process.stdout.write(${JSON.stringify(grokCliReviewPolicyCliFlags.join(" "))});
   }
+  process.exit(0);
+}
+if (engine === "droid" && process.argv[2] === "exec" && process.argv.includes("--help")) {
+  if (process.env.DIFFWARDEN_FAKE_OLD_DROID_HELP === "1") {
+    process.stdout.write("--cwd --output-format --use-spec --file --spec-model --spec-reasoning-effort --tag");
+  } else {
+    let flagsHelp = ${JSON.stringify([...droidCliReviewPolicyCliFlags])};
+    if (process.env.DIFFWARDEN_FAKE_DROID_NO_MODEL_FLAGS_HELP === "1") {
+      flagsHelp = flagsHelp.filter((flag) => flag !== "--spec-model" && flag !== "--spec-reasoning-effort");
+    }
+    if (process.env.DIFFWARDEN_FAKE_DROID_NO_LOG_GROUP_HELP === "1") {
+      flagsHelp = flagsHelp.filter((flag) => flag !== "--log-group-id");
+    }
+    const modelsHelp = process.env.DIFFWARDEN_FAKE_DROID_MODELS_HELP === "1"
+      ? "\\nAvailable Models:\\n  claude-opus-4-8              Claude Opus 4.8 (default)\\n  gpt-5.4-mini                 GPT 5.4 Mini\\nModel details:\\n  - Claude Opus 4.8: supports reasoning: Yes; supported: [off, low, medium, high]; default: high\\n  - GPT 5.4 Mini: supports reasoning: Yes; supported: [high]; default: high\\n"
+      : "";
+    process.stdout.write(flagsHelp.join(" ") + modelsHelp);
+  }
+  process.exit(0);
+}
+if (engine === "droid" && process.argv[2] === "exec" && process.argv.includes("--list-tools")) {
+  const markerPath = process.env.DIFFWARDEN_DROID_LIST_TOOLS_MARKER;
+  if (markerPath) {
+    fs.appendFileSync(markerPath, JSON.stringify(process.argv.slice(2)) + "\\n");
+  }
+  const expectedCwd = process.env.DIFFWARDEN_EXPECT_DROID_LIST_TOOLS_CWD;
+  if (expectedCwd) {
+    const cwdIndex = process.argv.indexOf("--cwd");
+    if (cwdIndex === -1 || process.argv[cwdIndex + 1] !== expectedCwd) {
+      process.stderr.write("droid list-tools missing expected cwd");
+      process.exit(75);
+    }
+  }
+  const expectedTools = ${JSON.stringify([...droidCliReviewAllowedTools])};
+  const tools = expectedTools.map((id) => ({
+    id,
+    llmId: id === "exit-spec-mode" ? "ExitSpecMode" : id,
+    currentlyAllowed: true,
+  }));
+  tools.push({
+    id: "execute-cli",
+    llmId: "Execute",
+    currentlyAllowed: process.env.DIFFWARDEN_FAKE_DROID_BAD_TOOLS === "1",
+  });
+  process.stdout.write(JSON.stringify(tools));
   process.exit(0);
 }
 if (engine === "antigravity" && process.argv.includes("--version")) {

@@ -52,6 +52,12 @@ subagents, memory/session mutation, and broad plugin surfaces unless a provider 
 perform a useful review without them. If shell access is the only practical inspection path,
 constrain it to read-only commands and document the weaker enforcement level.
 
+Prefer explicit allowlists over denylists whenever the transport supports them. Denylists are
+fallbacks for transports that do not provide a stable allowlist surface or where the allowlist is
+too coarse to run a useful review. When a provider adds unavoidable native control tools around a
+read-only/spec mode, document that exception separately instead of broadening the allowlist by
+category.
+
 Do not impose adapter-specific tool-call, turn, or step caps for normal reviews. Diffwarden's
 reviewer timeout is the run-level circuit breaker. Tool budgets can stop a real review before
 the model has enough evidence, especially on providers that use several small read/search turns.
@@ -422,8 +428,13 @@ diffwarden --target uncommitted --reviewer droid-cli
 ```
 
 Prefer Droid's CLI transport for routine reviews. It follows the current `droid exec`
-surface, uses read-only spec mode by default, and keeps Diffwarden on the same runtime path
-as the installed Droid CLI.
+surface, uses `--use-spec`, leaves `--auto` unset so Droid Exec stays in its documented
+default read-only autonomy mode, and passes an explicit `--enabled-tools` allowlist:
+`read-cli`, `glob-search-cli`, `grep_tool_cli`, `ls-cli`, and Droid's spec-control
+`exit-spec-mode` tool. Diffwarden preflights the installed CLI for those review-policy flags
+and runs `droid exec --list-tools --output-format json` with the same allowlist before running a
+review, so Droid CLI tool ID changes fail closed. Droid CLI invocations also receive a
+Diffwarden-scoped `--log-group-id` for Factory log filtering.
 
 The Droid CLI JSON result includes a `session_id` but not model or effort fields. When the
 local session settings file is available under `~/.factory/sessions`, Diffwarden reads that
@@ -442,8 +453,9 @@ review successful and omits those runtime fields rather than inferring defaults 
 The Droid SDK adapter remains available through `--reviewer droid` or configured native
 profiles. It uses `@factory/droid-sdk`, creates a session, reads resolved model and effort
 settings from the session init result, streams a prompt with native JSON Schema output, and
-runs in Droid's spec interaction mode for read-only review behavior. Treat this path as
-experimental if Factory UI session history matters, because SDK runs still appear in Droid
+runs in Droid's spec interaction mode with autonomy off and the SDK `Read`, `Glob`, `Grep`,
+`LS`, and `ExitSpecMode` tools explicitly allowlisted for read-only review behavior. Treat this
+path as experimental if Factory UI session history matters, because SDK runs still appear in Droid
 session history and may be grouped differently from CLI-created Droid Computer sessions. Set
 `FACTORY_API_KEY` or use local Droid auth supported by the installed CLI.
 
@@ -457,6 +469,11 @@ SDK and CLI sessions with `diffwarden` metadata for discovery. The current Droid
 do not expose an ephemeral/no-history review mode. Diffwarden cannot currently suppress
 Droid session history without isolating Factory's home/config directory, which is not the
 default review path.
+
+Diffwarden does not add Droid-specific tool-call, turn, step, retry, mission, compaction, or
+equivalent caps around review runs. The reviewer timeout is the Diffwarden-owned run-level
+circuit breaker. Droid-native context limits, structured-output behavior, session history, and
+any provider or organization policy limits still apply.
 
 Live SDK smoke test:
 

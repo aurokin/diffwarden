@@ -18,6 +18,10 @@ import { reviewResultJsonSchema } from "../core/schema.js";
 import { resolveExecutable } from "./cli-process.js";
 import { droidSessionTag } from "./droid-session.js";
 import {
+  droidSdkReviewAllowedToolList,
+  droidSdkReviewPolicyMetadata,
+} from "./droid-tool-policy.js";
+import {
   effortResolutionMetadata,
   modelResolutionMetadata,
   sdkOutputMetadata,
@@ -83,6 +87,7 @@ export function createDroidAdapter(
           execPath: executable,
           interactionMode: sdk.DroidInteractionMode.Spec,
           autonomyLevel: sdk.AutonomyLevel.Off,
+          enabledToolIds: droidSdkReviewAllowedToolList(),
           tags: [droidSessionTag(input, "sdk")],
           ...(input.env !== undefined ? { env: stringEnv(droidProcessEnv(input.env)) } : {}),
           ...(input.signal !== undefined ? { abortSignal: input.signal } : {}),
@@ -193,7 +198,13 @@ async function prepareDroidAdapter(
         {
           name: "readonly",
           status: "passed",
-          detail: "Droid runs in spec interaction mode for read-only review operations.",
+          detail:
+            "Droid runs in spec interaction mode with autonomy off for read-only review operations.",
+        },
+        {
+          name: "tools",
+          status: "passed",
+          detail: "Droid SDK review tools are explicitly allowlisted.",
         },
         {
           name: "model",
@@ -221,6 +232,7 @@ async function prepareDroidAdapter(
         },
       ],
       metadata: sdkPreflightMetadata("droid", {
+        ...droidSdkReviewPolicyMetadata(),
         executable: resolvedExecutable,
         ...(input.reviewer.model !== undefined ? { model: input.reviewer.model } : {}),
         ...(effort !== undefined ? { effort } : {}),
@@ -340,6 +352,7 @@ function droidOutputMetadata(
 ): NonNullable<ReviewAdapterOutput["metadata"]> {
   return sdkOutputMetadata("droid", {
     ...extra,
+    ...droidSdkReviewPolicyMetadata(),
     executable,
     sessionId: result.sessionId,
     durationMs: result.durationMs,

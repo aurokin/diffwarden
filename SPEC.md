@@ -719,6 +719,11 @@ Implemented CLI families:
 - Codex CLI sets `web_search = "disabled"` by default, with `cliOptions.webSearch` allowing `"enabled"`, `"disabled"`, or `"inherit"`.
 - Claude CLI uses `claude -p` with JSON output, JSON schema, `--tools Read,Grep,Glob`, matching `--allowedTools`, deny rules for write/shell/web/broad-agent tools, `--permission-mode dontAsk`, no session persistence, empty setting sources, strict empty MCP config, disabled slash commands, and disabled Chrome.
 - Cursor CLI uses `cursor-agent -p` with JSON output, plan mode, sandbox enabled, and workspace scoping.
+- Droid CLI uses `droid exec --use-spec`, default read-only autonomy with no mission/unsafe
+  autonomy flags, an explicit `read-cli`/`glob-search-cli`/`grep_tool_cli`/`ls-cli`/
+  `exit-spec-mode` tool allowlist verified with `--list-tools`, JSON output, Diffwarden session
+  tags/log group IDs, model/effort help validation where Droid exposes it, and no
+  Diffwarden-owned tool-call, turn, step, retry, or equivalent cap.
 - Gemini CLI uses JSON output, plan approval mode, a generated all-modes Policy Engine policy/admin policy that allows only `read_file`, `list_directory`, `glob`, and Gemini grep names (`grep_search` plus legacy alias `search_file_content`), an empty MCP allowlist, disabled extensions, and isolated session trust for headless startup. Diffwarden does not add Gemini-specific tool-call, turn, step, or retry caps; reviewer timeout is the run-level limiter. Gemini remains supported for enterprise and paid API-key users after Google's June 18, 2026 consumer/free Gemini CLI transition to Antigravity CLI.
 - OpenCode CLI uses JSONL output and `--pure`; its read-only capability is prompt-only until a supported per-run permission-deny path is proven.
 - Pi CLI uses JSON mode, no session, explicit read/list/search tools, and extension/skill/template/theme disabling.

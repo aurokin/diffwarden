@@ -20,6 +20,12 @@ import { cliSpecs } from "./cli-specs.js";
 import type { CliEngine, CliInvocation } from "./cli-types.js";
 import { codexCliWebSearchPolicy, codexWebSearchMetadata } from "./codex-options.js";
 import {
+  type DroidCliReviewPolicyOptions,
+  type DroidCliReviewPolicySupport,
+  assertDroidExecutableSupportsReviewPolicy,
+  droidCliReviewPolicyMetadata,
+} from "./droid-tool-policy.js";
+import {
   geminiCliReviewPolicyCliFlags,
   geminiCliReviewTrustedFoldersFileName,
   geminiCliTrustWorkspaceEnvVar,
@@ -50,7 +56,10 @@ type CliRunContext = {
   path?: string;
 };
 
-type CliPolicyCheckEngine = Extract<CliEngine, "antigravity" | "claude" | "gemini" | "grok">;
+type CliPolicyCheckEngine = Extract<
+  CliEngine,
+  "antigravity" | "claude" | "droid" | "gemini" | "grok"
+>;
 type CliExecutableIdentity = {
   realpath: string;
   dev: number;
@@ -63,6 +72,8 @@ type PreparedPolicyCheckState = {
   resolvedExecutable: string;
   executableIdentity?: CliExecutableIdentity;
   envFingerprint: string;
+  policyFingerprint?: string;
+  droidPolicySupport?: DroidCliReviewPolicySupport;
 };
 
 const preparedPolicyChecks = new WeakMap<object, PreparedPolicyCheckState>();
@@ -99,31 +110,52 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
           invocation.resolvedExecutable = preparedRunContext.resolvedExecutable;
         }
         if (engine === "claude") {
-          await prepareClaudeCliInvocation(
+          const preparedPolicyCheck = await hasPreparedPolicyCheck(
+            engine,
+            preparedRunContext,
             invocation,
             input,
-            await hasPreparedPolicyCheck(engine, preparedRunContext, invocation, input),
           );
+          await prepareClaudeCliInvocation(invocation, input, preparedPolicyCheck !== undefined);
         }
         if (engine === "gemini") {
-          await prepareGeminiCliInvocation(
+          const preparedPolicyCheck = await hasPreparedPolicyCheck(
+            engine,
+            preparedRunContext,
             invocation,
             input,
-            await hasPreparedPolicyCheck(engine, preparedRunContext, invocation, input),
           );
+          await prepareGeminiCliInvocation(invocation, input, preparedPolicyCheck !== undefined);
+        }
+        if (engine === "droid") {
+          const preparedPolicyCheck = await hasPreparedPolicyCheck(
+            engine,
+            preparedRunContext,
+            invocation,
+            input,
+          );
+          await prepareDroidCliInvocation(invocation, input, preparedPolicyCheck);
         }
         if (engine === "grok") {
-          await prepareGrokCliInvocation(
+          const preparedPolicyCheck = await hasPreparedPolicyCheck(
+            engine,
+            preparedRunContext,
             invocation,
             input,
-            await hasPreparedPolicyCheck(engine, preparedRunContext, invocation, input),
           );
+          await prepareGrokCliInvocation(invocation, input, preparedPolicyCheck !== undefined);
         }
         if (engine === "antigravity") {
+          const preparedPolicyCheck = await hasPreparedPolicyCheck(
+            engine,
+            preparedRunContext,
+            invocation,
+            input,
+          );
           await prepareAntigravityCliInvocation(
             invocation,
             input,
-            await hasPreparedPolicyCheck(engine, preparedRunContext, invocation, input),
+            preparedPolicyCheck !== undefined,
           );
         }
         const result = await runCli(invocation, input);
@@ -163,6 +195,8 @@ async function prepareCliAdapter(
   const policyChecks: ReviewAdapterPreflightResult["checks"] = [];
   const verifiedPolicyChecks: CliPolicyCheckEngine[] = [];
   let policyCheckEnvFingerprint: string | undefined;
+  let policyCheckFingerprint: string | undefined;
+  let droidPolicySupport: DroidCliReviewPolicySupport | undefined;
 
   if (engine === "claude") {
     const policyEnv = input.env ?? process.env;
@@ -190,6 +224,24 @@ async function prepareCliAdapter(
       status: "passed",
       detail: "Gemini executable supports Diffwarden review policy flags.",
     });
+  }
+  if (engine === "droid") {
+    const policyEnv = input.env ?? process.env;
+    const droidPolicyOptions = droidCliReviewPolicyOptions(input.reviewer, input.cwd);
+    droidPolicySupport = await assertDroidExecutableSupportsReviewPolicy(
+      resolvedExecutable,
+      policyEnv,
+      droidPolicyOptions,
+    );
+    policyCheckEnvFingerprint = cliPolicyEnvFingerprint(policyEnv);
+    policyCheckFingerprint = droidCliReviewPolicyOptionsFingerprint(droidPolicyOptions);
+    verifiedPolicyChecks.push(engine);
+    policyChecks.push({
+      name: "droid-policy",
+      status: "passed",
+      detail: "Droid executable supports Diffwarden review policy flags and tool allowlist.",
+    });
+    Object.assign(metadata, droidCliReviewPolicyMetadata());
   }
   if (engine === "grok") {
     const policyEnv = input.env ?? process.env;
@@ -229,6 +281,10 @@ async function prepareCliAdapter(
       policyChecks: new Set(verifiedPolicyChecks),
       resolvedExecutable,
       envFingerprint: policyCheckEnvFingerprint,
+      ...(policyCheckFingerprint !== undefined
+        ? { policyFingerprint: policyCheckFingerprint }
+        : {}),
+      ...(droidPolicySupport !== undefined ? { droidPolicySupport } : {}),
       ...(executableIdentity !== undefined
         ? { executableIdentity: { ...executableIdentity } }
         : {}),
@@ -312,30 +368,42 @@ async function hasPreparedPolicyCheck(
   runContext: CliRunContext | undefined,
   invocation: CliInvocation,
   input: ReviewAdapterInput,
-): Promise<boolean> {
+): Promise<PreparedPolicyCheckState | undefined> {
   if (!isCliPolicyCheckEngine(engine) || runContext === undefined) {
-    return false;
+    return undefined;
   }
   const policyChecks = preparedPolicyChecks.get(runContext);
   if (policyChecks?.policyChecks.delete(engine) !== true) {
-    return false;
+    return undefined;
   }
   if (policyChecks.policyChecks.size === 0) {
     preparedPolicyChecks.delete(runContext);
   }
   if (policyChecks.executableIdentity === undefined) {
-    return false;
+    return undefined;
   }
   if (policyChecks.envFingerprint !== cliPolicyCheckRunEnvFingerprint(engine, invocation, input)) {
-    return false;
+    return undefined;
+  }
+  if (
+    policyChecks.policyFingerprint !== undefined &&
+    policyChecks.policyFingerprint !== cliPolicyCheckRunPolicyFingerprint(engine, input)
+  ) {
+    return undefined;
   }
   const currentIdentity = await cliExecutableIdentity(policyChecks.resolvedExecutable);
-  return sameCliExecutableIdentity(policyChecks.executableIdentity, currentIdentity);
+  return sameCliExecutableIdentity(policyChecks.executableIdentity, currentIdentity)
+    ? policyChecks
+    : undefined;
 }
 
 function isCliPolicyCheckEngine(engine: CliEngine): engine is CliPolicyCheckEngine {
   return (
-    engine === "antigravity" || engine === "claude" || engine === "gemini" || engine === "grok"
+    engine === "antigravity" ||
+    engine === "claude" ||
+    engine === "droid" ||
+    engine === "gemini" ||
+    engine === "grok"
   );
 }
 
@@ -379,6 +447,18 @@ function cliPolicyCheckRunEnvFingerprint(
   return cliPolicyEnvFingerprint(
     cliInvocationEnv(invocation, input),
     engine === "gemini" ? [geminiCliTrustedFoldersPathEnvVar] : [],
+  );
+}
+
+function cliPolicyCheckRunPolicyFingerprint(
+  engine: CliPolicyCheckEngine,
+  input: ReviewAdapterInput,
+): string | undefined {
+  if (engine !== "droid") {
+    return undefined;
+  }
+  return droidCliReviewPolicyOptionsFingerprint(
+    droidCliReviewPolicyOptions(input.reviewer, input.cwd),
   );
 }
 
@@ -455,6 +535,63 @@ async function prepareGeminiCliInvocation(
     env,
     geminiCliReviewPolicyCliFlags,
   );
+}
+
+async function prepareDroidCliInvocation(
+  invocation: CliInvocation,
+  input: ReviewAdapterInput,
+  preparedPolicyCheck: PreparedPolicyCheckState | undefined,
+): Promise<void> {
+  const env = cliInvocationEnv(invocation, input);
+  invocation.resolvedExecutable =
+    invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
+  const support =
+    preparedPolicyCheck?.droidPolicySupport ??
+    (await assertDroidExecutableSupportsReviewPolicy(
+      invocation.resolvedExecutable,
+      env,
+      droidCliReviewPolicyOptions(input.reviewer, input.cwd),
+    ));
+  applyDroidCliPolicySupport(invocation, support);
+}
+
+function applyDroidCliPolicySupport(
+  invocation: CliInvocation,
+  support: DroidCliReviewPolicySupport,
+): void {
+  if (support.logGroupId) {
+    return;
+  }
+
+  const index = invocation.args.indexOf("--log-group-id");
+  if (index !== -1) {
+    invocation.args.splice(index, 2);
+  }
+  invocation.droidLogGroupId = undefined;
+}
+
+function droidCliReviewPolicyOptions(
+  reviewer: ReviewReviewerConfig,
+  cwd: string,
+): DroidCliReviewPolicyOptions {
+  const model = providerQualifiedModel(reviewer);
+  const effort =
+    reviewer.effort !== undefined && reviewer.effort !== "off"
+      ? droidCliEffort(reviewer.effort)
+      : undefined;
+  return {
+    cwd,
+    ...(model !== undefined ? { model } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+  };
+}
+
+function droidCliReviewPolicyOptionsFingerprint(options: DroidCliReviewPolicyOptions): string {
+  return JSON.stringify({
+    cwd: options.cwd,
+    model: options.model,
+    effort: options.effort,
+  });
 }
 
 async function prepareGrokCliInvocation(

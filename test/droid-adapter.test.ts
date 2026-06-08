@@ -40,6 +40,7 @@ describe("droidAdapter", () => {
       ["executable", "passed"],
       ["auth", "passed"],
       ["readonly", "passed"],
+      ["tools", "passed"],
       ["model", "passed"],
       ["effort", "passed"],
       ["machine", "passed"],
@@ -47,6 +48,10 @@ describe("droidAdapter", () => {
     expect(preflight?.metadata).toMatchObject({
       readonlyCapability: "enforced",
       transport: "sdk",
+      droidInteractionMode: "spec",
+      droidAutonomyLevel: "off",
+      droidToolPolicy: "allowlist",
+      droidAllowedTools: ["Read", "Glob", "Grep", "LS", "ExitSpecMode"],
       executable: "/opt/droid",
       model: "claude-test",
       effort: "low",
@@ -189,6 +194,10 @@ describe("droidAdapter", () => {
       captureMode: "native-structured",
       readonlyCapability: "enforced",
       transport: "sdk",
+      droidInteractionMode: "spec",
+      droidAutonomyLevel: "off",
+      droidToolPolicy: "allowlist",
+      droidAllowedTools: ["Read", "Glob", "Grep", "LS", "ExitSpecMode"],
       executable: "droid",
       model: "claude-test",
       requestedModel: "claude-test",
@@ -210,6 +219,7 @@ describe("droidAdapter", () => {
         specModeReasoningEffort: "xhigh",
         interactionMode: "spec",
         autonomyLevel: "off",
+        enabledToolIds: ["Read", "Glob", "Grep", "LS", "ExitSpecMode"],
         tags: [
           {
             name: "diffwarden",

@@ -11,6 +11,10 @@ import {
 } from "../src/adapters/capabilities.js";
 import { claudeCliReviewPolicyCliFlags } from "../src/adapters/claude-tool-policy.js";
 import { createCliAdapter } from "../src/adapters/cli.js";
+import {
+  droidCliReviewAllowedTools,
+  droidCliReviewPolicyCliFlags,
+} from "../src/adapters/droid-tool-policy.js";
 import { geminiCliReviewPolicyCliFlags } from "../src/adapters/gemini-tool-policy.js";
 import { grokCliReviewPolicyCliFlags } from "../src/adapters/grok-tool-policy.js";
 import type { ReviewReviewerConfig } from "../src/adapters/types.js";
@@ -174,6 +178,12 @@ function fakeCliContractScript(): string {
   return `#!/bin/sh
 executable="\${0##*/}"
 for arg in "$@"; do
+  if [ "$executable" = "droid" ] && [ "$arg" = "--list-tools" ]; then
+    printf '%s' ${JSON.stringify(
+      JSON.stringify([...droidCliReviewAllowedTools].map((id) => ({ id, currentlyAllowed: true }))),
+    )}
+    exit 0
+  fi
   if [ "$executable" = "agy" ] && [ "$arg" = "--version" ]; then
     printf '%s' '1.0.6'
     exit 0
@@ -183,6 +193,8 @@ for arg in "$@"; do
   fi
   if [ "$executable" = "claude" ]; then
     printf '%s' '${claudeCliReviewPolicyCliFlags.join(" ")}'
+  elif [ "$executable" = "droid" ]; then
+    printf '%s' '${droidCliReviewPolicyCliFlags.join(" ")}'
   elif [ "$executable" = "gemini" ]; then
     printf '%s' '${geminiCliReviewPolicyCliFlags.join(" ")}'
   elif [ "$executable" = "grok" ]; then

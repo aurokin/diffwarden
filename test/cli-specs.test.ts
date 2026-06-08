@@ -34,6 +34,10 @@ import {
 } from "../src/adapters/codex-tool-policy.js";
 import { cursorCliReviewMode, cursorCliSandboxMode } from "../src/adapters/cursor-policy.js";
 import {
+  droidCliReviewAllowedToolsArg,
+  droidCliReviewPolicyMetadata,
+} from "../src/adapters/droid-tool-policy.js";
+import {
   geminiCliReviewApprovalMode,
   geminiCliReviewDisabledExtensions,
   geminiCliReviewMcpAllowlist,
@@ -824,15 +828,23 @@ describe("cliSpecs", () => {
         "--output-format",
         "json",
         "--use-spec",
+        "--enabled-tools",
+        droidCliReviewAllowedToolsArg(),
         "--file",
         path.join(droidTemp, "droid-prompt.txt"),
         "--spec-model",
         "test-model",
         "--spec-reasoning-effort",
         "low",
+        "--log-group-id",
+        expect.stringMatching(/^diffwarden-droid-[0-9a-f-]{36}$/),
       ]),
     );
+    expect(droid.args).not.toContain("--disabled-tools");
     expect(droid.droidSessionDirectory).toBe(path.join(homeDir, ".factory", "sessions", "-repo"));
+    expect(droid.args).not.toContain("--auto");
+    expect(droid.args).not.toContain("--skip-permissions-unsafe");
+    expect(droid.args).not.toContain("--mission");
     expect(grok.args).toEqual(
       expect.arrayContaining([
         "--prompt-file",
@@ -1119,6 +1131,7 @@ describe("cliSpecs", () => {
       metadata: {
         captureMode: "text",
         readonlyCapability: "enforced",
+        ...droidCliReviewPolicyMetadata(),
         droidSessionId,
         droidSessionModel: "gpt-5.4-mini",
         droidSessionEffort: "high",
