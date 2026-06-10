@@ -217,17 +217,19 @@ Not implemented:
 Read from top to bottom until you have enough detail:
 
 1. `README.md` - quickstart, current status, and common commands.
-2. [`docs/comparisons.md`](./docs/comparisons.md) - Codex review comparison and SDK vs CLI
+2. [`docs/agent-workflows.md`](./docs/agent-workflows.md) - prompt patterns and raw
+   examples for using Diffwarden as an agent review gate.
+3. [`docs/comparisons.md`](./docs/comparisons.md) - Codex review comparison and SDK vs CLI
    transport tradeoffs.
-3. [`docs/features.md`](./docs/features.md) - supported reviewer feature matrix.
-4. [`docs/configuration.md`](./docs/configuration.md) - config files, reviewer sets, and
+4. [`docs/features.md`](./docs/features.md) - supported reviewer feature matrix.
+5. [`docs/configuration.md`](./docs/configuration.md) - config files, reviewer sets, and
    environment defaults.
-5. [`docs/adapters.md`](./docs/adapters.md) - SDK and CLI reviewer adapter behavior.
-6. [`docs/macos.md`](./docs/macos.md) - macOS executable trust and performance triage.
-7. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
+6. [`docs/adapters.md`](./docs/adapters.md) - SDK and CLI reviewer adapter behavior.
+7. [`docs/macos.md`](./docs/macos.md) - macOS executable trust and performance triage.
+8. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
    commands.
-8. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
-9. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
+9. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
+10. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
 
 ## Design Principles
 
