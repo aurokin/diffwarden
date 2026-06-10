@@ -28,8 +28,9 @@ export async function runCli(
     ...invocation.env,
   };
   for (const key of invocation.unsetEnv ?? []) {
-    Reflect.deleteProperty(env, key);
+    deleteEnvKey(env, key);
   }
+  // runCli and policy probes share resolveExecutable, which expands PATHEXT for Windows shims.
   const executable =
     invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
 
@@ -179,6 +180,16 @@ export async function resolveExecutable(
   }
 
   throw missingRequirement(`CLI executable not found: ${executable}`);
+}
+
+function deleteEnvKey(env: NodeJS.ProcessEnv, key: string): void {
+  Reflect.deleteProperty(env, key);
+  const normalized = key.toLowerCase();
+  for (const existingKey of Object.keys(env)) {
+    if (existingKey.toLowerCase() === normalized) {
+      Reflect.deleteProperty(env, existingKey);
+    }
+  }
 }
 
 export async function execCliFile(

@@ -24,6 +24,7 @@ export type ReviewReviewerConfig = {
     | "claude"
     | "pi"
     | "droid"
+    | "copilot"
     | "codex"
     | "gemini"
     | "opencode"
@@ -61,6 +62,7 @@ export type ReviewAdapterOutput = {
 
 export type ReviewAdapterPreflightInput = {
   cwd: string;
+  repoRoot?: string;
   reviewer: ReviewReviewerConfig;
   signal?: AbortSignal;
   readonly: boolean;

@@ -184,6 +184,7 @@ export const reviewerSdkSchema = z.enum([
   "claude",
   "pi",
   "droid",
+  "copilot",
   "codex",
   "gemini",
   "opencode",

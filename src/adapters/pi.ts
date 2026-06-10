@@ -127,7 +127,7 @@ export function createPiAdapter(
             name: "settings",
             status: "passed",
             detail:
-              "Pi SDK sessions use isolated in-memory settings; Diffwarden reviewer timeout remains the run-level circuit breaker.",
+              "Pi SDK sessions use isolated in-memory settings; Diffwarden only applies a reviewer timeout when configured.",
           },
         ],
         metadata,
@@ -607,7 +607,7 @@ function piSettingsMetadata(settingsManager: PiSettingsManager): Record<string, 
   return {
     piSettingsSource: "in-memory",
     piSettingsDiskInheritance: false,
-    piTimeoutPolicy: "diffwarden-reviewer-timeout",
+    piTimeoutPolicy: "diffwarden-configured-reviewer-timeout",
     piTransport: transport ?? null,
     piTransportSource: transport === undefined ? "not-exposed-by-installed-pi-sdk" : "settings",
     piSteeringMode: steeringMode ?? null,

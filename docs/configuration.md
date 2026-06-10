@@ -48,9 +48,10 @@ diffwarden reviewers list --format json
 
 Configured reviewers use `engine` for the reviewer family (`claude`, `pi`, `codex`, etc.).
 Legacy configs that still use `sdk` continue to load and are normalized internally.
-Use `transport: "native"` for the SDK-backed path when you want to be explicit, or
-`transport: "cli"` for executable-backed runs. Codex also supports a
-`transport: "app-server"` path for ephemeral `codex app-server` reviews.
+Use `transport: "sdk"` for the SDK-backed path when you want to be explicit, or
+`transport: "cli"` for executable-backed runs. Legacy `transport: "native"` values are
+accepted as an alias for `sdk`. Codex also supports a `transport: "app-server"` path for
+ephemeral `codex app-server` reviews.
 
 ## Disabling Configured Reviewers
 
@@ -87,7 +88,8 @@ DIFFWARDEN_REVIEWERS=cursor,claude,pi:openrouter-high
 DIFFWARDEN_REVIEWER_SET=2
 DIFFWARDEN_MODEL=anthropic/claude-sonnet-4-5
 DIFFWARDEN_EFFORT=high
-DIFFWARDEN_TIMEOUT_SECONDS=300
+# Optional: only set this when a review should have a wall-clock cap.
+DIFFWARDEN_TIMEOUT_SECONDS=1800
 ```
 
 Reviewer selector environment defaults are only applied after a config file is discovered.
@@ -299,8 +301,8 @@ reads or writes `auth.json`.
 
 The Pi SDK adapter always supplies an isolated in-memory `SettingsManager` for review runs.
 Diffwarden does not inherit global or project Pi `settings.json` files, and it does not add
-tool-call, turn, step, or retry caps around Pi. The reviewer timeout configured in Diffwarden
-is the authoritative run-level circuit breaker.
+tool-call, turn, step, retry, or default wall-clock caps around Pi. A configured reviewer
+timeout, when set, is the authoritative run-level circuit breaker.
 
 Diffwarden passes explicit Pi runtime defaults for review sessions:
 
@@ -350,17 +352,35 @@ Droid users should prefer the CLI profile for routine reviews when Factory UI se
 history matters. Droid CLI uses `droid exec --use-spec`, keeps Droid's default read-only
 autonomy by leaving mission/unsafe autonomy flags unset, uses an explicit read/spec-control
 tool allowlist, verifies that allowlist with `--list-tools`, adds a Diffwarden log group ID,
-and relies on the configured reviewer timeout rather than tool-call, turn, step, or retry caps.
+and relies only on an explicitly configured reviewer timeout rather than tool-call, turn, step,
+or retry caps.
 Codex CLI disables Codex web search by default with
 `web_search = "disabled"`; set `cliOptions.webSearch` to `"enabled"` or `"inherit"` when a
 reviewer should use a different policy.
+
+Copilot defaults to SDK transport. Set `sdkOptions.baseDirectory` to use a dedicated Copilot
+home, or `sdkOptions.executable` to force a Copilot-named runtime binary or readable `.js`
+runtime entry for the SDK path. Diffwarden launches `.js` runtime entries through Node. SDK
+runs stage only auth keys from the source Copilot home into a temporary Copilot home with empty
+MCP config.
+SDK reviews fail closed if the source Copilot home, resolved SDK runtime, or GitHub CLI auth
+directory is inside the reviewed repository.
+Set `transport: "cli"` and `cliOptions.executable` to run the Copilot CLI directly.
+CLI runs use a run-scoped `HOME`/`COPILOT_HOME`, isolated `GH_CONFIG_DIR`, and scoped Windows
+AppData paths, copy Copilot auth plus GitHub CLI `hosts.yml` auth from `GH_CONFIG_DIR`,
+`XDG_CONFIG_HOME`, home, or Windows AppData locations, use `-p/--prompt` for non-interactive
+mode with a short instruction that points at a run-scoped prompt file, and add only that prompt
+directory plus a run-scoped tool-output temp directory with `--add-dir`. User-level Copilot
+MCP config is replaced by an empty staged file; only repo-local MCP configs are parsed for
+explicit `--disable-mcp-server` flags. The resolved Copilot CLI executable must be outside the
+reviewed workspace, including executables found through `PATH`.
 
 OpenCode CLI receives prompts on stdin and uses a generated `diffwarden-review-*` agent in
 low-tool mode by default. Diffwarden supplies the patch in the prompt, allows only `read`,
 `glob`, and `grep` through both `OPENCODE_CONFIG_CONTENT` and `OPENCODE_PERMISSION`, denies all
 other OpenCode tool permissions, and tells OpenCode not to run the patch provenance command.
-Diffwarden does not inject an OpenCode step cap; the reviewer timeout is the run-level
-circuit breaker. Set `cliOptions.agent` to select an existing primary OpenCode agent. If
+Diffwarden does not inject an OpenCode step cap; only a configured reviewer timeout limits the
+run. Set `cliOptions.agent` to select an existing primary OpenCode agent. If
 `cliOptions.agent` is set, or if `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG`, or
 `OPENCODE_CONFIG_DIR` is already present in the effective environment passed to OpenCode,
 Diffwarden does not inject the generated agent config.
@@ -384,6 +404,15 @@ Diffwarden does not inject the generated agent config.
       "transport": "cli",
       "cliOptions": {
         "executable": "/Users/auro/.local/bin/droid"
+      }
+    },
+    {
+      "id": "copilot-sdk",
+      "engine": "copilot",
+      "transport": "sdk",
+      "sdkOptions": {
+        "baseDirectory": "/Users/auro/.copilot-diffwarden",
+        "executable": "/Users/auro/.local/bin/copilot"
       }
     },
     {
@@ -542,7 +571,8 @@ the review invocation.
 `LS` is not included. The current Claude tools reference no longer lists an `LS` built-in tool,
 and `Glob` is sufficient for path discovery inside Diffwarden's restricted review surface.
 Diffwarden does not add Claude tool-call, turn, step, or retry caps around normal reviews; the
-reviewer timeout is the run-level circuit breaker. Claude-native limits may still apply,
+configured reviewer timeout, when set, is the run-level circuit breaker. Claude-native limits
+may still apply,
 including model context limits, structured-output retry behavior, provider output limits, and
 built-in tool result limits.
 

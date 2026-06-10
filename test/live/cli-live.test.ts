@@ -20,6 +20,7 @@ const cliEngines = [
   "opencode",
   "pi",
   "droid",
+  "copilot",
   "grok",
   "antigravity",
 ] as const satisfies readonly CliEngine[];

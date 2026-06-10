@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -282,6 +282,293 @@ describe("live doctor executable provenance", () => {
       resolvedExecutable: executable,
       executableSource: "config",
       executableSourceDetail: "reviewer droid-sdk-local",
+    });
+  });
+
+  it("uses Copilot SDK executable overrides from sdkOptions", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = externalExecutableFixture("copilot-sdk-local");
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["copilot-sdk-local"] },
+      reviewers: [
+        {
+          id: "copilot-sdk-local",
+          engine: "copilot",
+          sdkOptions: { executable },
+        },
+      ],
+    });
+
+    const row = await doctorRow("copilot-sdk", { PATH: "" });
+
+    expect(row).toMatchObject({
+      status: `found: ${executable}`,
+      executable,
+      resolvedExecutable: executable,
+      executableSource: "config",
+      executableSourceDetail: "reviewer copilot-sdk-local",
+    });
+  });
+
+  it("does not report repo-local Copilot SDK executable overrides as usable runtimes", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = executableFixture("copilot-sdk-local");
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["copilot-sdk-local"] },
+      reviewers: [
+        {
+          id: "copilot-sdk-local",
+          engine: "copilot",
+          sdkOptions: { executable },
+        },
+      ],
+    });
+
+    const row = await doctorRow("copilot-sdk", { PATH: "" });
+
+    expect(row).toMatchObject({
+      status: `missing executable: ${executable}`,
+      executable,
+      executableSource: "config",
+      executableSourceDetail: "reviewer copilot-sdk-local",
+    });
+    expect(row.resolvedExecutable).toBeUndefined();
+  });
+
+  it("does not report dot-dot-prefixed repo-local Copilot SDK runtimes as usable", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = path.join(testRoot(), "..copilot-runtime", "copilot");
+    mkdirSync(path.dirname(executable), { recursive: true });
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", "utf8");
+    chmodSync(executable, 0o755);
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["copilot-sdk-local"] },
+      reviewers: [
+        {
+          id: "copilot-sdk-local",
+          engine: "copilot",
+          sdkOptions: { executable },
+        },
+      ],
+    });
+
+    const row = await doctorRow("copilot-sdk", { PATH: "" });
+
+    expect(row).toMatchObject({
+      status: `missing executable: ${executable}`,
+      executable,
+      executableSource: "config",
+      executableSourceDetail: "reviewer copilot-sdk-local",
+    });
+    expect(row.resolvedExecutable).toBeUndefined();
+  });
+
+  it("does not report generic Copilot SDK executable overrides as usable runtimes", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["copilot-sdk-local"] },
+      reviewers: [
+        {
+          id: "copilot-sdk-local",
+          engine: "copilot",
+          sdkOptions: { executable: process.execPath },
+        },
+      ],
+    });
+
+    const row = await doctorRow("copilot-sdk", { PATH: "" });
+
+    expect(row).toMatchObject({
+      status: `missing executable: ${process.execPath}`,
+      executable: process.execPath,
+      executableSource: "config",
+      executableSourceDetail: "reviewer copilot-sdk-local",
+    });
+    expect(row.resolvedExecutable).toBeUndefined();
+  });
+
+  it("accepts readable Copilot SDK JavaScript runtime overrides", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = externalReadableJavaScriptFixture("copilot-sdk-runtime.js");
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["copilot-sdk-local"] },
+      reviewers: [
+        {
+          id: "copilot-sdk-local",
+          engine: "copilot",
+          sdkOptions: { executable },
+        },
+      ],
+    });
+
+    const row = await doctorRow("copilot-sdk", { PATH: "" });
+
+    expect(row).toMatchObject({
+      status: `found: ${executable}`,
+      executable,
+      resolvedExecutable: executable,
+      executableSource: "config",
+      executableSourceDetail: "reviewer copilot-sdk-local",
+    });
+  });
+
+  it("resolves readable Copilot SDK JavaScript runtime overrides from PATH", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = externalReadableJavaScriptFixture("copilot-sdk-runtime.js");
+
+    const row = await doctorRow("copilot-sdk", {
+      PATH: path.dirname(executable),
+      DIFFWARDEN_LIVE_COPILOT_SDK_EXECUTABLE: "copilot-sdk-runtime.js",
+    });
+
+    expect(row).toMatchObject({
+      status: `found: ${executable}`,
+      executable: "copilot-sdk-runtime.js",
+      resolvedExecutable: executable,
+      executableSource: "env",
+      executableSourceDetail: "DIFFWARDEN_LIVE_COPILOT_SDK_EXECUTABLE",
+    });
+  });
+
+  it("matches runtime platform rules when resolving Copilot command shims from PATH", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = externalExecutableFixture("copilot.cmd");
+    const env = {
+      PATH: path.dirname(executable),
+      PATHEXT: ".cmd",
+      DIFFWARDEN_LIVE_COPILOT_SDK_EXECUTABLE: "copilot",
+    };
+
+    const sdkRow = await doctorRow("copilot-sdk", env, "darwin");
+    const nonWindowsCliRow = await doctorRow("copilot-cli", env, "darwin");
+    const windowsCliRow = await doctorRow("copilot-cli", env, "win32");
+
+    expect(sdkRow).toMatchObject({
+      status: "missing executable: copilot",
+      executable: "copilot",
+      executableSource: "env",
+      executableSourceDetail: "DIFFWARDEN_LIVE_COPILOT_SDK_EXECUTABLE",
+    });
+    expect(nonWindowsCliRow).toMatchObject({
+      status: "missing executable: copilot",
+      executable: "copilot",
+      executableSource: "adapter-default",
+    });
+    expect(windowsCliRow).toMatchObject({
+      status: `found: ${executable}`,
+      executable: "copilot",
+      resolvedExecutable: executable,
+      executableSource: "adapter-default",
+    });
+  });
+
+  it("does not require a standalone Copilot executable for SDK default runtime", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+
+    const row = await doctorRow("copilot-sdk", { PATH: "" });
+
+    expect(row).toMatchObject({
+      status: expect.stringContaining("found bundled runtime: "),
+      executableSource: "adapter-default",
+      executableSourceDetail: "SDK bundled runtime",
+      resolvedExecutable: expect.stringContaining(path.join("@github", "copilot", "index.js")),
+    });
+    expect(row.executable).toBeUndefined();
+  });
+
+  it("does not report a repo-local Copilot SDK bundled runtime as usable", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const rows = await collectLiveDoctorRows({
+      cwd: testRoot(),
+      repoRoot: process.cwd(),
+      env: {
+        HOME: testRoot(),
+        XDG_CONFIG_HOME: path.join(testRoot(), ".config"),
+        PATH: "",
+      },
+    });
+    const row = rows.find((candidate) => candidate.id === "copilot-sdk");
+
+    expect(row).toMatchObject({
+      status: "missing bundled runtime",
+      executableSource: "adapter-default",
+      executableSourceDetail: "SDK bundled runtime",
+    });
+    expect(row?.resolvedExecutable).toBeUndefined();
+  });
+
+  it("does not require a standalone Copilot executable for active SDK reviewers without overrides", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["copilot-sdk-default"] },
+      reviewers: [
+        {
+          id: "copilot-sdk-default",
+          engine: "copilot",
+        },
+      ],
+    });
+
+    const row = await doctorRow("copilot-sdk", { PATH: "" });
+
+    expect(row).toMatchObject({
+      status: expect.stringContaining("found bundled runtime: "),
+      executableSource: "adapter-default",
+      executableSourceDetail: "SDK bundled runtime",
+      resolvedExecutable: expect.stringContaining(path.join("@github", "copilot", "index.js")),
+    });
+    expect(row.executable).toBeUndefined();
+  });
+
+  it("reports mixed Copilot SDK bundled and configured runtimes", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = externalExecutableFixture("copilot-sdk-local");
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["copilot-sdk-default", "copilot-sdk-local"] },
+      reviewers: [
+        {
+          id: "copilot-sdk-default",
+          engine: "copilot",
+        },
+        {
+          id: "copilot-sdk-local",
+          engine: "copilot",
+          sdkOptions: { executable },
+        },
+      ],
+    });
+
+    const row = await doctorRow("copilot-sdk", { PATH: "" });
+
+    expect(row).toMatchObject({
+      status: "found multiple active runtimes",
+      executableSource: "config",
+      executableSourceDetail:
+        "multiple active reviewers: copilot-sdk-default (adapter-default: bundled runtime), copilot-sdk-local (config)",
+    });
+  });
+
+  it("uses Copilot SDK executable env overrides", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const executable = externalExecutableFixture("copilot-sdk-env");
+
+    const row = await doctorRow("copilot-sdk", {
+      PATH: "",
+      DIFFWARDEN_LIVE_COPILOT_SDK_EXECUTABLE: executable,
+    });
+
+    expect(row).toMatchObject({
+      status: `found: ${executable}`,
+      executable,
+      executableSource: "env",
+      executableSourceDetail: "DIFFWARDEN_LIVE_COPILOT_SDK_EXECUTABLE",
     });
   });
 
@@ -665,6 +952,42 @@ describe("live doctor executable provenance", () => {
     });
   });
 
+  it("discovers parent config from non-git subdirectories", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
+    const child = path.join(testRoot(), "nested", "tool");
+    mkdirSync(child, { recursive: true });
+    const executable = executableFixture("codex-config");
+    writeConfig({
+      defaultReviewerSet: "primary",
+      reviewerSets: { primary: ["codex-config"] },
+      reviewers: [
+        {
+          id: "codex-config",
+          engine: "codex",
+          transport: "cli",
+          cliOptions: { executable },
+        },
+      ],
+    });
+
+    const rows = await collectLiveDoctorRows({
+      cwd: child,
+      env: {
+        HOME: testRoot(),
+        XDG_CONFIG_HOME: path.join(testRoot(), ".config"),
+        PATH: "",
+      },
+    });
+    const row = rows.find((candidate) => candidate.id === "codex");
+
+    expect(row).toMatchObject({
+      status: `found: ${executable}`,
+      executable,
+      executableSource: "config",
+      executableSourceDetail: "reviewer codex-config",
+    });
+  });
+
   it("formats executable source labels in doctor output", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-"));
     const executable = executableFixture("agy-local");
@@ -702,7 +1025,7 @@ async function antigravityRow(env: NodeJS.ProcessEnv) {
   return await doctorRow("antigravity", env);
 }
 
-async function doctorRow(id: string, env: NodeJS.ProcessEnv) {
+async function doctorRow(id: string, env: NodeJS.ProcessEnv, platform?: NodeJS.Platform) {
   const rows = await collectLiveDoctorRows({
     cwd: testRoot(),
     repoRoot: testRoot(),
@@ -711,6 +1034,7 @@ async function doctorRow(id: string, env: NodeJS.ProcessEnv) {
       XDG_CONFIG_HOME: path.join(testRoot(), ".config"),
       ...env,
     },
+    ...(platform !== undefined ? { platform } : {}),
   });
   const row = rows.find((candidate) => candidate.id === id);
   if (row === undefined) {
@@ -723,6 +1047,22 @@ function executableFixture(name: string): string {
   const executable = path.join(testRoot(), name);
   writeFileSync(executable, "#!/bin/sh\nexit 0\n", "utf8");
   chmodSync(executable, 0o755);
+  return executable;
+}
+
+function externalExecutableFixture(name: string): string {
+  const directory = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-executable-"));
+  const executable = path.join(directory, name);
+  writeFileSync(executable, "#!/bin/sh\nexit 0\n", "utf8");
+  chmodSync(executable, 0o755);
+  return executable;
+}
+
+function externalReadableJavaScriptFixture(name: string): string {
+  const directory = mkdtempSync(path.join(tmpdir(), "diffwarden-live-doctor-runtime-"));
+  const executable = path.join(directory, name);
+  writeFileSync(executable, "export {};\n", "utf8");
+  chmodSync(executable, 0o644);
   return executable;
 }
 

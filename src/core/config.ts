@@ -255,7 +255,6 @@ function starterConfigJson(): string {
         },
       ],
       readonly: true,
-      timeoutSeconds: 300,
     },
     null,
     2,

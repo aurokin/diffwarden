@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -13,6 +14,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { antigravityCliReviewDeniedPermissions } from "../src/adapters/antigravity-tool-policy.js";
 import { claudeCliReviewPolicyCliFlags } from "../src/adapters/claude-tool-policy.js";
 import { createCliAdapter } from "../src/adapters/cli.js";
+import {
+  copilotCliReviewDeniedToolPatterns,
+  copilotCliReviewPolicyCliFlags,
+  copilotReviewAvailableToolsArg,
+  copilotReviewExcludedToolsArg,
+} from "../src/adapters/copilot-tool-policy.js";
 import {
   droidCliReviewAllowedTools,
   droidCliReviewAllowedToolsArg,
@@ -271,6 +278,468 @@ describe("createCliAdapter", () => {
     expect(invocation.args).not.toContain("--max-turns");
   });
 
+  it("runs Copilot CLI with read/search tool allowlisting", async () => {
+    const harness = createHarness("copilot");
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "diffwarden-copilot-cli-temp-"));
+    const adapter = createCliAdapter("copilot");
+    const reviewer = createReviewer("copilot", harness.executable, {
+      model: "gpt-test",
+      effort: "off",
+    });
+
+    const prepared = await adapter.prepare?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: {
+        ...harness.env,
+        COPILOT_ALLOW_ALL: "true",
+        COPILOT_CUSTOM_INSTRUCTIONS_DIRS: "/unsafe",
+        GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS: "true",
+        COPILOT_CACHE_HOME: path.join(harness.cwd, ".cache"),
+        NODE_OPTIONS: "--require /repo/hook.js",
+        NODE_PATH: "/repo/node_modules",
+        copilot_allow_all: "true",
+        node_options: "--require /repo/lower-hook.js",
+        TMP: path.join(harness.cwd, ".tmp"),
+        TEMP: path.join(harness.cwd, ".temp"),
+        TMPDIR: tempRoot,
+      },
+    });
+    if (prepared === undefined) {
+      throw new Error("Copilot CLI adapter did not return a prepared run context");
+    }
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      runContext: prepared.runContext,
+      env: {
+        ...harness.env,
+        COPILOT_ALLOW_ALL: "true",
+        COPILOT_CUSTOM_INSTRUCTIONS_DIRS: "/unsafe",
+        GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS: "true",
+        NODE_OPTIONS: "--require /repo/hook.js",
+        NODE_PATH: "/repo/node_modules",
+        copilot_allow_all: "true",
+        node_options: "--require /repo/lower-hook.js",
+        TMPDIR: tempRoot,
+      },
+    });
+    const invocation = harness.readInvocation();
+
+    expect(prepared.preflight?.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "copilot-policy",
+          status: "passed",
+        }),
+      ]),
+    );
+    expect(output.structured).toMatchObject({
+      overall_correctness: "patch is correct",
+      overall_explanation: "copilot ok",
+    });
+    expect(output.metadata).toMatchObject({
+      captureMode: "text",
+      readonlyCapability: "tool-restricted",
+      copilotToolPolicy: "read-search-allowlist",
+      copilotAllowedTools: ["view", "read_file", "file_search", "grep_search"],
+      requestedModel: "gpt-test",
+      resolvedModel: "gpt-test",
+      requestedEffort: "off",
+      resolvedEffort: "none",
+      effortResolutionSource: "adapter-selection",
+    });
+    expect(invocation.args).toEqual(
+      expect.arrayContaining([
+        "-C",
+        harness.cwd,
+        "--output-format",
+        "json",
+        "--stream",
+        "off",
+        "--available-tools",
+        copilotReviewAvailableToolsArg(),
+        "--excluded-tools",
+        copilotReviewExcludedToolsArg(),
+        "--allow-all-tools",
+        "--disable-builtin-mcps",
+        "--no-custom-instructions",
+        "--no-ask-user",
+        "--no-remote",
+        "--no-auto-update",
+        "--add-dir",
+        "--model",
+        "gpt-test",
+        "--effort",
+        "none",
+        "-p",
+      ]),
+    );
+    for (const pattern of copilotCliReviewDeniedToolPatterns) {
+      expect(invocation.args).toEqual(expect.arrayContaining(["--deny-tool", pattern]));
+    }
+    const promptIndex = invocation.args.indexOf("-p");
+    expect(promptIndex).toBeGreaterThanOrEqual(0);
+    const promptArg = invocation.args[promptIndex + 1];
+    if (promptArg === undefined) {
+      throw new Error("Copilot prompt argument was not captured");
+    }
+    expect(promptArg).toContain("copilot-prompt.txt");
+    expect(promptArg).not.toContain("GitHub Copilot transport note:");
+    const promptPath = promptArg.match(/from (.+copilot-prompt\.txt)\./)?.[1];
+    if (promptPath === undefined) {
+      throw new Error("Copilot prompt file path was not captured");
+    }
+    expect(invocation.args).toEqual(
+      expect.arrayContaining(["--add-dir", path.dirname(promptPath)]),
+    );
+    expect(invocation.args).toEqual(
+      expect.arrayContaining([
+        "--add-dir",
+        path.join(path.dirname(path.dirname(promptPath)), "copilot-tool-output-temp"),
+      ]),
+    );
+    expect(invocation.args).not.toContain("--attachment");
+    expect(invocation.args).not.toContain("--disallow-temp-dir");
+    expect(invocation.stdin).toBe("");
+    expect(invocation.args).not.toContain("--allow-all");
+    expect(invocation.args).not.toContain("--yolo");
+    expect(invocation.env.COPILOT_ALLOW_ALL).toBeUndefined();
+    expect(invocation.env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS).toBeUndefined();
+    expect(invocation.env.GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS).toBeUndefined();
+    expect(invocation.env.NODE_OPTIONS).toBeUndefined();
+    expect(invocation.env.NODE_PATH).toBeUndefined();
+    expect(invocation.env.copilot_allow_all).toBeUndefined();
+    expect(invocation.env.node_options).toBeUndefined();
+    expect(invocation.env.COPILOT_AUTO_UPDATE).toBe("false");
+    expect(invocation.env.COPILOT_OTEL_ENABLED).toBe("false");
+    expect(invocation.env.HOME).toContain("diffwarden-cli-");
+    expect(invocation.env.HOME).toEqual(expect.stringContaining(tempRoot));
+    expect(invocation.env.USERPROFILE).toBe(invocation.env.HOME);
+    expect(invocation.env.COPILOT_HOME).toBe(path.join(invocation.env.HOME ?? "", ".copilot"));
+    expect(invocation.env.COPILOT_CACHE_HOME).toBe(
+      path.join(invocation.env.HOME ?? "", ".cache", "copilot"),
+    );
+    expect(invocation.env.TMPDIR).toEqual(expect.stringContaining(tempRoot));
+    expect(invocation.env.TMPDIR).toEqual(expect.stringContaining("copilot-tool-output-temp"));
+    expect(invocation.env.TMP).toBe(invocation.env.TMPDIR);
+    expect(invocation.env.TEMP).toBe(invocation.env.TMPDIR);
+    expect(invocation.env.XDG_CONFIG_HOME).toBe(path.join(invocation.env.HOME ?? "", ".config"));
+    expect(invocation.env.XDG_STATE_HOME).toBe(
+      path.join(invocation.env.HOME ?? "", ".local", "state"),
+    );
+    expect(invocation.env.XDG_CACHE_HOME).toBe(path.join(invocation.env.HOME ?? "", ".cache"));
+    expect(invocation.env.APPDATA).toBe(path.join(invocation.env.HOME ?? "", "AppData", "Roaming"));
+    expect(invocation.env.LOCALAPPDATA).toBe(
+      path.join(invocation.env.HOME ?? "", "AppData", "Local"),
+    );
+    expect(invocation.env.HOMEDRIVE).toBeUndefined();
+    expect(invocation.env.HOMEPATH).toBeUndefined();
+    expect(JSON.parse(invocation.copilotConfig ?? "{}")).toEqual({});
+    expect(JSON.parse(invocation.copilotSettings ?? "{}")).toMatchObject({
+      skillDirectories: [],
+      disabledSkills: ["*", "customize-cloud-agent"],
+      enabledPlugins: {},
+      disableAllHooks: true,
+    });
+  });
+
+  it("rejects CLI temp roots inside the review workspace before creating them", async () => {
+    const harness = createHarness("copilot");
+    const adapter = createCliAdapter("copilot");
+    const reviewer = createReviewer("copilot", harness.executable);
+    const repoTempRoot = path.join(harness.cwd, ".tmp", "diffwarden");
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        env: {
+          ...harness.env,
+          TMPDIR: repoTempRoot,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("CLI temporary directory resolved inside"),
+    });
+    expect(existsSync(repoTempRoot)).toBe(false);
+  });
+
+  it("resolves relative CLI temp roots from the review cwd before workspace checks", async () => {
+    const harness = createHarness("copilot");
+    const adapter = createCliAdapter("copilot");
+    const reviewer = createReviewer("copilot", harness.executable);
+    const repoTempRoot = path.join(harness.cwd, ".tmp");
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        env: {
+          ...harness.env,
+          TMPDIR: ".tmp",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("CLI temporary directory resolved inside"),
+    });
+    expect(existsSync(repoTempRoot)).toBe(false);
+  });
+
+  it("allows repo-local temp roots for CLI transports without isolated homes", async () => {
+    const harness = createHarness("grok");
+    const adapter = createCliAdapter("grok");
+    const reviewer = createReviewer("grok", harness.executable);
+    const repoTempRoot = path.join(harness.cwd, ".tmp");
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        TMPDIR: ".tmp",
+      },
+    });
+
+    expect(output.text).toContain("grok text");
+    expect(existsSync(repoTempRoot)).toBe(true);
+  });
+
+  it("rejects Copilot CLI preflight when PATH resolves to a repo-local executable", async () => {
+    const harness = createHarness("copilot");
+    const repoExecutable = path.join(harness.cwd, "copilot");
+    writeFileSync(repoExecutable, fakeCliScript("copilot"), "utf8");
+    chmodSync(repoExecutable, 0o755);
+    const adapter = createCliAdapter("copilot");
+    const reviewer = {
+      id: "copilot",
+      sdk: "copilot",
+      transport: "cli",
+      readonly: true,
+    } satisfies ReviewReviewerConfig;
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: {
+          ...harness.env,
+          PATH: `${harness.cwd}${path.delimiter}${path.dirname(process.execPath)}`,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("Copilot CLI executable resolved inside"),
+    });
+  });
+
+  it("rejects Copilot CLI runs when the configured executable is inside the review workspace", async () => {
+    const harness = createHarness("copilot");
+    const repoExecutable = path.join(harness.cwd, "copilot");
+    writeFileSync(repoExecutable, fakeCliScript("copilot"), "utf8");
+    chmodSync(repoExecutable, 0o755);
+    const adapter = createCliAdapter("copilot");
+    const reviewer = createReviewer("copilot", repoExecutable);
+
+    await expect(adapter.run(createInput(reviewer, harness))).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("Copilot CLI executable resolved inside"),
+    });
+  });
+
+  it("isolates Copilot CLI preflight probes from ambient user state", async () => {
+    const harness = createHarness("copilot");
+    const adapter = createCliAdapter("copilot");
+    const reviewer = createReviewer("copilot", harness.executable);
+    const capturePath = path.join(path.dirname(harness.executable), "copilot-help-env.json");
+    const userHome = path.join(harness.cwd, "ambient-home");
+
+    await adapter.preflight?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: {
+        ...harness.env,
+        DIFFWARDEN_CAPTURE_COPILOT_HELP_ENV: capturePath,
+        HOME: userHome,
+        COPILOT_HOME: path.join(userHome, ".copilot"),
+        COPILOT_ALLOW_ALL: "true",
+        COPILOT_AUTO_UPDATE: "true",
+        COPILOT_CUSTOM_INSTRUCTIONS_DIRS: "/unsafe",
+        GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS: "true",
+        HOMEDRIVE: "C:",
+        HOMEPATH: "\\Users\\unsafe",
+        NODE_OPTIONS: "--require /repo/hook.js",
+        NODE_PATH: "/repo/node_modules",
+      },
+    });
+
+    const helpEnv = JSON.parse(readFileSync(capturePath, "utf8")) as Record<
+      string,
+      string | undefined
+    >;
+    expect(helpEnv.HOME).toContain("diffwarden-copilot-preflight-");
+    expect(helpEnv.HOME).not.toBe(userHome);
+    expect(helpEnv.USERPROFILE).toBe(helpEnv.HOME);
+    expect(helpEnv.COPILOT_HOME).toBe(path.join(helpEnv.HOME ?? "", ".copilot"));
+    expect(helpEnv.COPILOT_CACHE_HOME).toBe(path.join(helpEnv.HOME ?? "", ".cache", "copilot"));
+    expect(helpEnv.GH_CONFIG_DIR).toBe(path.join(helpEnv.HOME ?? "", ".config", "gh"));
+    expect(helpEnv.COPILOT_ALLOW_ALL).toBeUndefined();
+    expect(helpEnv.COPILOT_CUSTOM_INSTRUCTIONS_DIRS).toBeUndefined();
+    expect(helpEnv.GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS).toBeUndefined();
+    expect(helpEnv.HOMEDRIVE).toBeUndefined();
+    expect(helpEnv.HOMEPATH).toBeUndefined();
+    expect(helpEnv.NODE_OPTIONS).toBeUndefined();
+    expect(helpEnv.NODE_PATH).toBeUndefined();
+    expect(helpEnv.COPILOT_AUTO_UPDATE).toBe("false");
+    expect(helpEnv.COPILOT_OTEL_ENABLED).toBe("false");
+    expect(helpEnv.OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT).toBe("false");
+    expect(helpEnv.TMPDIR).toContain("copilot-tool-output-temp");
+    expect(helpEnv.TMP).toBe(helpEnv.TMPDIR);
+    expect(helpEnv.TEMP).toBe(helpEnv.TMPDIR);
+  });
+
+  it("fails Copilot CLI preflight when the executable lacks prompt mode support", async () => {
+    const harness = createHarness("copilot");
+    const adapter = createCliAdapter("copilot");
+    const reviewer = createReviewer("copilot", harness.executable);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_COPILOT_NO_PROMPT_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("-p"),
+    });
+  });
+
+  it("fails Copilot CLI preflight when configured model and effort flags are unsupported", async () => {
+    const harness = createHarness("copilot");
+    const adapter = createCliAdapter("copilot");
+    const reviewer = createReviewer("copilot", harness.executable, {
+      model: "gpt-test",
+      effort: "minimal",
+    });
+
+    await expect(
+      adapter.preflight?.({
+        cwd: harness.cwd,
+        reviewer,
+        readonly: true,
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_COPILOT_NO_MODEL_EFFORT_HELP: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--model"),
+    });
+  });
+
+  it("reuses Copilot CLI policy preflight checks during prepared runs", async () => {
+    const harness = createHarness("copilot");
+    const failHelpMarker = path.join(harness.cwd, "fail-copilot-help");
+    const env = {
+      ...harness.env,
+      DIFFWARDEN_FAIL_COPILOT_HELP_IF_MARKER: failHelpMarker,
+    };
+    const adapter = createCliAdapter("copilot");
+    const reviewer = createReviewer("copilot", harness.executable);
+    const prepared = await adapter.prepare?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env,
+    });
+    writeFileSync(failHelpMarker, "fail repeated help");
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      runContext: prepared?.runContext,
+      env,
+    });
+
+    expect(output.structured).toMatchObject({
+      overall_correctness: "patch is correct",
+      overall_explanation: "copilot ok",
+    });
+  });
+
+  it("fails Copilot CLI reviews when a non-recoverable session error arrives before review text", async () => {
+    const harness = createHarness("copilot");
+    const adapter = createCliAdapter("copilot");
+    const reviewer = createReviewer("copilot", harness.executable);
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_COPILOT_SESSION_ERROR_BEFORE_REVIEW: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("runtime failed before review"),
+    });
+  });
+
+  it("allows Copilot CLI reviews when a recoverable permission error arrives before review text", async () => {
+    const harness = createHarness("copilot");
+    const adapter = createCliAdapter("copilot");
+    const reviewer = createReviewer("copilot", harness.executable);
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_COPILOT_SESSION_ERROR_BEFORE_REVIEW: "1",
+        DIFFWARDEN_FAKE_COPILOT_SESSION_ERROR_TYPE: "permission",
+      },
+    });
+
+    expect(output.structured).toMatchObject({
+      overall_correctness: "patch is correct",
+      overall_explanation: "copilot ok",
+    });
+  });
+
+  it("rechecks Copilot CLI support for configured MCP disabling only when needed", async () => {
+    const harness = createHarness("copilot");
+    writeFileSync(
+      path.join(harness.cwd, ".mcp.json"),
+      JSON.stringify({ mcpServers: { local: { command: "node" } } }),
+      "utf8",
+    );
+    const adapter = createCliAdapter("copilot");
+    const reviewer = createReviewer("copilot", harness.executable);
+
+    const prepared = await adapter.prepare?.({
+      cwd: harness.cwd,
+      reviewer,
+      readonly: true,
+      env: harness.env,
+    });
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        runContext: prepared?.runContext,
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("--disable-mcp-server"),
+    });
+  });
+
   it("records adapter-default executable provenance when no executable is configured", async () => {
     const harness = createHarness("gemini");
     const adapter = createCliAdapter("gemini");
@@ -329,8 +798,9 @@ describe("createCliAdapter", () => {
     expect(invocation.args[1]).toContain("antigravity-prompt.txt");
     expect(invocation.cwd).toContain("antigravity-prompt");
     expect(invocation.args).toEqual(
-      expect.arrayContaining(["--print-timeout", "300s", "--sandbox", "--add-dir", harness.cwd]),
+      expect.arrayContaining(["--sandbox", "--add-dir", harness.cwd]),
     );
+    expect(invocation.args).not.toContain("--print-timeout");
     expect(invocation.args).not.toContain("review prompt");
     expect(invocation.env.HOME).toContain("diffwarden-cli-");
     const isolatedHome = invocation.env.HOME;
@@ -1311,16 +1781,20 @@ describe("createCliAdapter", () => {
 
 function createHarness(engine: CliEngine) {
   root = mkdtempSync(path.join(tmpdir(), "diffwarden-cli-adapter-"));
-  const executable = path.join(root, engine);
+  const cwd = path.join(root, "repo");
+  const bin = path.join(root, "bin");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  const executable = path.join(bin, engine);
   const invocationPath = path.join(root, `${engine}-invocation.json`);
   writeFileSync(executable, fakeCliScript(engine), "utf8");
   chmodSync(executable, 0o755);
 
   return {
-    cwd: root,
+    cwd,
     executable,
     env: {
-      PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
       DIFFWARDEN_FAKE_CLI: engine,
       DIFFWARDEN_INVOCATION_PATH: invocationPath,
     },
@@ -1328,6 +1802,8 @@ function createHarness(engine: CliEngine) {
       return JSON.parse(readFileSync(invocationPath, "utf8")) as {
         args: string[];
         antigravitySettings?: string;
+        copilotConfig?: string;
+        copilotSettings?: string;
         cwd: string;
         env: Record<string, string | undefined>;
         pid: number;
@@ -1426,6 +1902,56 @@ if (engine === "grok" && process.argv.includes("--help")) {
   }
   process.exit(0);
 }
+if (engine === "copilot" && process.argv.includes("--help")) {
+  const helpEnvPath = process.env.DIFFWARDEN_CAPTURE_COPILOT_HELP_ENV;
+  if (helpEnvPath) {
+    fs.writeFileSync(helpEnvPath, JSON.stringify({
+      APPDATA: process.env.APPDATA,
+      COPILOT_ALLOW_ALL: process.env.COPILOT_ALLOW_ALL,
+      COPILOT_AUTO_UPDATE: process.env.COPILOT_AUTO_UPDATE,
+      COPILOT_CACHE_HOME: process.env.COPILOT_CACHE_HOME,
+      COPILOT_HOME: process.env.COPILOT_HOME,
+      COPILOT_CUSTOM_INSTRUCTIONS_DIRS: process.env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS,
+      COPILOT_OTEL_ENABLED: process.env.COPILOT_OTEL_ENABLED,
+      GH_CONFIG_DIR: process.env.GH_CONFIG_DIR,
+      GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS:
+        process.env.GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS,
+      HOME: process.env.HOME,
+      HOMEDRIVE: process.env.HOMEDRIVE,
+      HOMEPATH: process.env.HOMEPATH,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      NODE_OPTIONS: process.env.NODE_OPTIONS,
+      NODE_PATH: process.env.NODE_PATH,
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT:
+        process.env.OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+      TEMP: process.env.TEMP,
+      TMP: process.env.TMP,
+      TMPDIR: process.env.TMPDIR,
+      USERPROFILE: process.env.USERPROFILE,
+      XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+      XDG_STATE_HOME: process.env.XDG_STATE_HOME,
+    }));
+  }
+  const failHelpMarker = process.env.DIFFWARDEN_FAIL_COPILOT_HELP_IF_MARKER;
+  if (failHelpMarker && fs.existsSync(failHelpMarker)) {
+    process.stderr.write("copilot help repeated after marker");
+    process.exit(67);
+  }
+  if (process.env.DIFFWARDEN_FAKE_OLD_COPILOT_HELP === "1") {
+    process.stdout.write("-p -C --output-format");
+  } else {
+    let flagsHelp = ${JSON.stringify([...copilotCliReviewPolicyCliFlags, "--model", "--effort"])};
+    if (process.env.DIFFWARDEN_FAKE_COPILOT_NO_PROMPT_HELP === "1") {
+      flagsHelp = flagsHelp.filter((flag) => flag !== "-p");
+    }
+    if (process.env.DIFFWARDEN_FAKE_COPILOT_NO_MODEL_EFFORT_HELP === "1") {
+      flagsHelp = flagsHelp.filter((flag) => flag !== "--model" && flag !== "--effort");
+    }
+    process.stdout.write(flagsHelp.join(" "));
+  }
+  process.exit(0);
+}
 if (engine === "droid" && process.argv[2] === "exec" && process.argv.includes("--help")) {
   if (process.env.DIFFWARDEN_FAKE_OLD_DROID_HELP === "1") {
     process.stdout.write("--cwd --output-format --use-spec --file --spec-model --spec-reasoning-effort --tag");
@@ -1485,26 +2011,59 @@ const stdin = fs.readFileSync(0, "utf8");
 const antigravitySettingsPath = process.env.HOME
   ? path.join(process.env.HOME, ".gemini", "antigravity-cli", "settings.json")
   : undefined;
+const copilotConfigPath = process.env.COPILOT_HOME
+  ? path.join(process.env.COPILOT_HOME, "config.json")
+  : undefined;
+const copilotSettingsPath = process.env.COPILOT_HOME
+  ? path.join(process.env.COPILOT_HOME, "settings.json")
+  : undefined;
 fs.writeFileSync(invocationPath, JSON.stringify({
   args: process.argv.slice(2),
   antigravitySettings:
     antigravitySettingsPath && fs.existsSync(antigravitySettingsPath)
       ? fs.readFileSync(antigravitySettingsPath, "utf8")
       : undefined,
+  copilotConfig:
+    copilotConfigPath && fs.existsSync(copilotConfigPath)
+      ? fs.readFileSync(copilotConfigPath, "utf8")
+      : undefined,
+  copilotSettings:
+    copilotSettingsPath && fs.existsSync(copilotSettingsPath)
+      ? fs.readFileSync(copilotSettingsPath, "utf8")
+      : undefined,
   cwd: process.cwd(),
   env: {
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
       ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
       AGY_CLI_DISABLE_AUTO_UPDATE: process.env.AGY_CLI_DISABLE_AUTO_UPDATE,
+      APPDATA: process.env.APPDATA,
+      COPILOT_ALLOW_ALL: process.env.COPILOT_ALLOW_ALL,
+      copilot_allow_all: process.env.copilot_allow_all,
+      COPILOT_AUTO_UPDATE: process.env.COPILOT_AUTO_UPDATE,
+      COPILOT_CACHE_HOME: process.env.COPILOT_CACHE_HOME,
+      COPILOT_HOME: process.env.COPILOT_HOME,
+      COPILOT_CUSTOM_INSTRUCTIONS_DIRS: process.env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS,
+      COPILOT_OTEL_ENABLED: process.env.COPILOT_OTEL_ENABLED,
+      GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS:
+        process.env.GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS,
       GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE,
       GEMINI_CLI_TRUSTED_FOLDERS_PATH: process.env.GEMINI_CLI_TRUSTED_FOLDERS_PATH,
       HOME: process.env.HOME,
       HOMEDRIVE: process.env.HOMEDRIVE,
       HOMEPATH: process.env.HOMEPATH,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      NODE_OPTIONS: process.env.NODE_OPTIONS,
+      NODE_PATH: process.env.NODE_PATH,
+      node_options: process.env.node_options,
       OPENCODE_CONFIG_CONTENT: process.env.OPENCODE_CONFIG_CONTENT,
       OPENCODE_PERMISSION: process.env.OPENCODE_PERMISSION,
+      TEMP: process.env.TEMP,
+      TMP: process.env.TMP,
+      TMPDIR: process.env.TMPDIR,
       USERPROFILE: process.env.USERPROFILE,
+      XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
       XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+      XDG_STATE_HOME: process.env.XDG_STATE_HOME,
     },
   pid: process.pid,
   stdin,
@@ -1539,6 +2098,13 @@ if (engine === "codex") {
   process.stdout.write(JSON.stringify({ result: engine + " text", session_id: process.env.DIFFWARDEN_FAKE_DROID_SESSION_ID }));
 } else if (engine === "grok") {
   process.stdout.write(JSON.stringify({ result: engine + " text" }));
+} else if (engine === "copilot") {
+  if (process.env.DIFFWARDEN_FAKE_COPILOT_SESSION_ERROR_BEFORE_REVIEW === "1") {
+    const errorType = process.env.DIFFWARDEN_FAKE_COPILOT_SESSION_ERROR_TYPE || "runtime";
+    const message = errorType === "permission" ? "blocked write_file" : "runtime failed before review";
+    process.stdout.write(JSON.stringify({ type: "session.error", data: { errorType, message } }) + "\\n");
+  }
+  process.stdout.write(JSON.stringify({ type: "assistant", message: { result: review } }) + "\\n");
 } else if (engine === "opencode" || engine === "pi") {
   process.stdout.write(JSON.stringify({ type: "tool_use", content: "ignored tool output" }) + "\\n");
   if (engine === "opencode") {

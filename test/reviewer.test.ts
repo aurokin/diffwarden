@@ -12,6 +12,7 @@ describe("parseReviewerSpec", () => {
     expect(parseReviewerSpec("claude")).toEqual({ sdk: "claude" });
     expect(parseReviewerSpec("cursor")).toEqual({ sdk: "cursor" });
     expect(parseReviewerSpec("droid")).toEqual({ sdk: "droid" });
+    expect(parseReviewerSpec("copilot")).toEqual({ sdk: "copilot" });
     expect(parseReviewerSpec("codex")).toEqual({ sdk: "codex" });
     expect(parseReviewerSpec("gemini")).toEqual({ sdk: "gemini" });
     expect(parseReviewerSpec("opencode")).toEqual({ sdk: "opencode" });
@@ -341,6 +342,7 @@ describe("resolveReviewerConfig", () => {
     });
     expect(resolveReviewerConfig({ spec: "pi" })).not.toHaveProperty("model");
     expect(resolveReviewerConfig({ spec: "droid" })).not.toHaveProperty("model");
+    expect(resolveReviewerConfig({ spec: "copilot" })).not.toHaveProperty("model");
   });
 
   it("defaults CLI-only reviewers to CLI transport", () => {

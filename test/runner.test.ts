@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -205,6 +206,40 @@ describe("runReview", () => {
     ]);
   });
 
+  it("respects CLI transport for Copilot reviewers", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    const copilotSdkAdapter = createMockAdapter("copilot");
+    const copilotCliAdapter = createMockAdapter("copilot:cli");
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "copilot-cli",
+      config: {
+        reviewers: [
+          {
+            id: "copilot-cli",
+            sdk: "copilot" as const,
+            transport: "cli" as const,
+          },
+        ],
+      },
+      adapters: {
+        copilot: copilotSdkAdapter,
+        "copilot:cli": copilotCliAdapter,
+      },
+    });
+
+    expect(artifact.reviewers?.[0]).toMatchObject({
+      id: "copilot-cli",
+      engine: "copilot",
+      transport: "cli",
+    });
+    expect(copilotSdkAdapter.calls).toEqual([]);
+    expect(copilotCliAdapter.calls.map((call) => call.phase)).toEqual(["preflight", "run"]);
+  });
+
   it("preserves Codex app-server transport in review and preflight artifacts", async () => {
     repo = createWorkspace();
     const resolved = createResolvedTarget(repo);
@@ -247,6 +282,24 @@ describe("runReview", () => {
       engine: "codex",
       transport: "app-server",
     });
+  });
+
+  it("passes the git repo root to standalone reviewer preflight reports", async () => {
+    repo = createWorkspace();
+    execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+    const cwd = path.join(repo, "packages", "app");
+    mkdirSync(cwd, { recursive: true });
+    const piAdapter = createPreflightInputCaptureAdapter("pi");
+
+    await runReviewerPreflightReport({
+      cwd,
+      reviewer: "pi",
+      adapters: {
+        pi: piAdapter,
+      },
+    });
+
+    expect(piAdapter.repoRoots).toEqual([realpathSync(repo)]);
   });
 
   it("rejects reviewer profiles before adapter execution", async () => {
@@ -831,6 +884,25 @@ function createMockAdapter(
           captureMode: "tool-call",
         },
       };
+    },
+  };
+}
+
+function createPreflightInputCaptureAdapter(
+  name: ReviewAdapter["name"],
+): ReviewAdapter & { repoRoots: Array<string | undefined> } {
+  const repoRoots: Array<string | undefined> = [];
+  return {
+    name,
+    repoRoots,
+    async preflight(input) {
+      repoRoots.push(input.repoRoot);
+      return {
+        checks: [{ name: "mock", status: "passed" }],
+      };
+    },
+    async run() {
+      throw new Error("run should not be called");
     },
   };
 }

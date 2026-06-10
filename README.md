@@ -201,11 +201,11 @@ Implemented:
 - Opt-in review history reports.
 - Project/user `diffwarden.config.json` discovery.
 - Reviewer sets and `engine[:profile]` reviewer specs.
-- Cursor, Claude, Pi, and Droid Agent SDK adapters.
+- Cursor, Claude, Pi, Droid, and GitHub Copilot SDK adapters.
 - Codex app-server transport with shared server reuse, structured review mode, and
   ephemeral read-only threads.
-- Thin CLI transport adapters for Codex, Gemini, OpenCode, Grok, Antigravity, and CLI
-  variants of Cursor, Claude, Pi, and Droid.
+- Thin CLI transport adapters for Codex, Gemini, OpenCode, Grok, Antigravity, GitHub
+  Copilot, and CLI variants of Cursor, Claude, Pi, and Droid.
 
 Not implemented:
 

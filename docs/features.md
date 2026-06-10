@@ -16,8 +16,9 @@ Legend:
 - `prompt-only`: Diffwarden asks for read-only review behavior, but hard enforcement is not
   proven for that adapter path.
 
-For the cross-transport tool policy, including the rule that reviewer timeout is the
-run-level circuit breaker instead of tool-call or step caps, see
+For the cross-transport tool policy, including the rule that optional configured reviewer
+timeouts are the only Diffwarden-owned run-level circuit breaker instead of tool-call or step
+caps, see
 [`adapters.md`](./adapters.md#tool-policy-guidelines).
 
 ## Reviewer Selection
@@ -30,6 +31,7 @@ run-level circuit breaker instead of tool-call or step caps, see
 | `cursor` | Cursor SDK | SDK | CLI | `cursor-agent` for CLI | `composer-2.5` |
 | `pi` | Pi Coding Agent SDK | SDK | CLI | `pi` for CLI | first authenticated Pi model |
 | `droid` | Factory Droid SDK | SDK | CLI | `droid` | Droid default |
+| `copilot` | GitHub Copilot SDK | SDK | CLI | `copilot` | CLI default |
 | `gemini` | Gemini CLI | CLI | no | `gemini` | CLI default |
 | `opencode` | OpenCode CLI | CLI | no | `opencode` | CLI default |
 | `grok` | Grok CLI | CLI | no | `grok` | CLI default |
@@ -64,6 +66,8 @@ SDK-backed reviewers can opt into CLI transport from config:
 | `pi` CLI | yes | yes | JSONL/text | tool-restricted | executable preflight; CLI owns auth |
 | `droid` SDK | yes | yes | native structured with text fallback | enforced | SDK load, executable check, auth warning/pass |
 | `droid` CLI | yes | yes | JSON/text | enforced | executable preflight; CLI owns auth |
+| `copilot` SDK | yes | yes | text | tool-restricted | SDK load; Copilot runtime owns auth |
+| `copilot` CLI | yes | yes | JSONL/text | tool-restricted | executable preflight; CLI owns auth |
 | `gemini` CLI | yes | no | JSON/text | tool-restricted | executable preflight; CLI owns auth |
 | `opencode` CLI | yes | yes | JSONL/text | prompt-only | executable preflight; CLI owns auth |
 | `grok` CLI | yes | yes | JSON/text | enforced | executable preflight; CLI owns auth |
@@ -83,9 +87,11 @@ SDK-backed reviewers can opt into CLI transport from config:
 | `pi` CLI | Uses print JSON mode, disables sessions, extensions, skills, prompt templates, themes, and context files, and restricts tools to `read`, `grep`, `find`, and `ls`. |
 | `droid` SDK | Uses Factory Droid spec interaction mode, autonomy off, JSON-schema output, an explicit `Read`/`Glob`/`Grep`/`LS`/`ExitSpecMode` tool allowlist, optional `sdkOptions.machineId`, and Diffwarden session tags. SDK sessions still appear in Factory session history. |
 | `droid` CLI | Uses `droid exec --use-spec`, default read-only autonomy, JSON output, an explicit `read-cli`/`glob-search-cli`/`grep_tool_cli`/`ls-cli`/`exit-spec-mode` tool allowlist verified with `--list-tools`, Diffwarden session tags/log group IDs, and model/effort flags where provided. This is the recommended Droid path for routine reviews. |
+| `copilot` SDK | Uses `@github/copilot-sdk` in empty mode with a run-scoped Copilot home that stages only auth state plus empty MCP config, config discovery/custom instructions/MCP/apps/extensions/skills/hooks/plugins disabled, repo-hook override env scrubbed, source-qualified `builtin:view`/`builtin:read_file`/`builtin:file_search`/`builtin:grep_search` available tools, matching write/shell/web/delegation exclusions, and a permission handler that approves read requests in the repo plus Copilot's run-scoped tool-output temp directory and rejects other permission kinds. The SDK path waits for `session.idle` instead of `sendAndWait`'s default timeout. |
+| `copilot` CLI | Uses `-p/--prompt` for non-interactive JSONL output with a short instruction that points to a run-scoped prompt file, adds only the prompt directory and a run-scoped tool-output temp directory with `--add-dir`, uses a run-scoped `HOME`/`COPILOT_HOME`, scoped Windows AppData paths, and an isolated `GH_CONFIG_DIR` that copies Copilot auth state plus GitHub CLI `hosts.yml`, requires the resolved executable to live outside the reviewed workspace, passes `--available-tools view,read_file,file_search,grep_search`, matching exclusions for write/edit/shell/web/delegation tools, disabled built-in/repo-configured MCP/custom instructions/ask-user/remote, scrubbed `COPILOT_ALLOW_ALL`, Node loader env, and repo-hook override env, and `--allow-all-tools` only because Copilot requires it for non-interactive mode and documents that availability filters still bound the exposed tools. |
 | `gemini` CLI | Uses JSON output, plan approval mode, a generated all-modes policy/admin policy allowing only `read_file`, `list_directory`, `glob`, and Gemini grep names (`grep_search` plus legacy alias `search_file_content`), empty MCP allowlisting, disabled extensions, and isolated session trust for headless startup. |
 | `opencode` CLI | Uses `opencode run --pure`, stdin prompt input, provider-qualified model support, effort mapped to variant, a generated low-tool `diffwarden-review-*` agent, and an `OPENCODE_PERMISSION` policy that allows only `read`, `glob`, and `grep` by default. It remains marked prompt-only until hard read-only enforcement is proven. |
-| `grok` CLI | Uses JSON output, `--permission-mode dontAsk`, `--tools read_file,grep,list_dir`, matching read/search allow rules, deny rules for shell/edit/write/web/MCP, `--sandbox read-only`, disabled subagents, disabled memory, and disabled web search. Diffwarden does not pass `--max-turns`; reviewer timeout is the run-level limiter. |
+| `grok` CLI | Uses JSON output, `--permission-mode dontAsk`, `--tools read_file,grep,list_dir`, matching read/search allow rules, deny rules for shell/edit/write/web/MCP, `--sandbox read-only`, disabled subagents, disabled memory, and disabled web search. Diffwarden does not pass `--max-turns`; only an explicitly configured reviewer timeout limits the run. |
 | `antigravity` CLI | Uses prompt-bearing print mode with a temp prompt file, sandbox mode, an isolated temporary Antigravity CLI settings profile, empty MCP config, strict tool permission, and deny rules for write, shell, unsandboxed, web, and MCP actions. The profile preserves valid non-policy user settings after filtering policy/control keys, then overrides the review policy so file reads are allowed only inside run-scoped trusted roots for the repository and prompt directory. `agy` runs from the prompt directory with `HOME`/`USERPROFILE` pointed at the isolated profile and Windows drive/path home variables removed; copied auth identity files live outside that cwd and outside trusted roots, with fail-closed handling if the temp home or source `.gemini` directory would resolve inside the repo. Model and effort overrides are rejected for this path. |
 
 ## Common Core Features

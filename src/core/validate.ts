@@ -126,7 +126,12 @@ function resolveFindingPath(filePath: string, repoRoot: string): string {
 
 function isPathInside(candidate: string, parent: string): boolean {
   const relativePath = path.relative(parent, candidate);
-  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relativePath))
+  );
 }
 
 function lineRangesOverlap(findingRange: LineRange, changedRanges: LineRange[]): boolean {

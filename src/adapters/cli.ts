@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { invalidCli } from "../core/errors.js";
+import { invalidCli, reviewerFailed } from "../core/errors.js";
 import { assertAntigravityExecutableSupportsReviewPolicy } from "./antigravity.js";
 import { claudeCliReviewPolicyCliFlags } from "./claude-tool-policy.js";
 import { assertClaudeExecutableSupportsReviewPolicy } from "./claude.js";
@@ -11,6 +11,7 @@ import {
   cliCapability,
   cliExecutableMetadata,
   cliExecutableSelection,
+  copilotCliEffort,
   droidCliEffort,
   grokCliEffort,
   providerQualifiedModel,
@@ -19,6 +20,12 @@ import { resolveExecutable, runCli, trimForMetadata } from "./cli-process.js";
 import { cliSpecs } from "./cli-specs.js";
 import type { CliEngine, CliInvocation } from "./cli-types.js";
 import { codexCliWebSearchPolicy, codexWebSearchMetadata } from "./codex-options.js";
+import {
+  copilotCliReviewPolicyCliFlags,
+  copilotCliReviewPolicyFlagsForArgs,
+  copilotReviewPolicyMetadata,
+} from "./copilot-tool-policy.js";
+import { assertCopilotExecutableSupportsReviewPolicy } from "./copilot.js";
 import {
   type DroidCliReviewPolicyOptions,
   type DroidCliReviewPolicySupport,
@@ -58,7 +65,7 @@ type CliRunContext = {
 
 type CliPolicyCheckEngine = Extract<
   CliEngine,
-  "antigravity" | "claude" | "droid" | "gemini" | "grok"
+  "antigravity" | "claude" | "copilot" | "droid" | "gemini" | "grok"
 >;
 type CliExecutableIdentity = {
   realpath: string;
@@ -77,6 +84,32 @@ type PreparedPolicyCheckState = {
 };
 
 const preparedPolicyChecks = new WeakMap<object, PreparedPolicyCheckState>();
+const copilotCliNodeBootstrapEnvKeys = ["NODE_OPTIONS", "NODE_PATH"];
+const copilotCliPolicyEnvIgnoredKeys = [
+  "APPDATA",
+  "COPILOT_ALLOW_ALL",
+  "COPILOT_AUTO_UPDATE",
+  "COPILOT_CACHE_HOME",
+  "COPILOT_CUSTOM_INSTRUCTIONS_DIRS",
+  "COPILOT_HOME",
+  "COPILOT_OTEL_ENABLED",
+  "GH_CONFIG_DIR",
+  "GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS",
+  "HOME",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "LOCALAPPDATA",
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "USERPROFILE",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_STATE_HOME",
+];
 
 export function createCliAdapter(engine: CliEngine): ReviewAdapter {
   const spec = cliSpecs[engine];
@@ -91,7 +124,9 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
       validateSupportedCliOverrides(engine, input.reviewer);
-      const tempDir = await mkdtemp(path.join(tmpdir(), "diffwarden-cli-"));
+      const tempDir = await createCliTempDir(input, "diffwarden-cli-", {
+        requireOutsideWorkspace: cliTempRootRequiresExternalWorkspace(engine),
+      });
       try {
         const invocation = await spec.buildInvocation(input, tempDir);
         const executableSelection = cliExecutableSelection(
@@ -126,6 +161,15 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
             input,
           );
           await prepareGeminiCliInvocation(invocation, input, preparedPolicyCheck !== undefined);
+        }
+        if (engine === "copilot") {
+          const preparedPolicyCheck = await hasPreparedPolicyCheck(
+            engine,
+            preparedRunContext,
+            invocation,
+            input,
+          );
+          await prepareCopilotCliInvocation(invocation, input, preparedPolicyCheck !== undefined);
         }
         if (engine === "droid") {
           const preparedPolicyCheck = await hasPreparedPolicyCheck(
@@ -224,6 +268,26 @@ async function prepareCliAdapter(
       status: "passed",
       detail: "Gemini executable supports Diffwarden review policy flags.",
     });
+  }
+  if (engine === "copilot") {
+    const requiredFlags = copilotCliReviewPolicyFlagsForArgs([
+      ...copilotCliReviewPolicyCliFlags,
+      ...(input.reviewer.model !== undefined ? ["--model"] : []),
+      ...(input.reviewer.effort !== undefined ? ["--effort"] : []),
+    ]);
+    await assertCopilotCliExecutableOutsideWorkspace(resolvedExecutable, input);
+    policyCheckEnvFingerprint = await assertCopilotExecutableSupportsReviewPolicyWithIsolatedHome(
+      resolvedExecutable,
+      input,
+      requiredFlags,
+    );
+    verifiedPolicyChecks.push(engine);
+    policyChecks.push({
+      name: "copilot-policy",
+      status: "passed",
+      detail: "Copilot executable supports Diffwarden review policy flags.",
+    });
+    Object.assign(metadata, copilotReviewPolicyMetadata());
   }
   if (engine === "droid") {
     const policyEnv = input.env ?? process.env;
@@ -401,6 +465,7 @@ function isCliPolicyCheckEngine(engine: CliEngine): engine is CliPolicyCheckEngi
   return (
     engine === "antigravity" ||
     engine === "claude" ||
+    engine === "copilot" ||
     engine === "droid" ||
     engine === "gemini" ||
     engine === "grok"
@@ -446,8 +511,18 @@ function cliPolicyCheckRunEnvFingerprint(
 ): string {
   return cliPolicyEnvFingerprint(
     cliInvocationEnv(invocation, input),
-    engine === "gemini" ? [geminiCliTrustedFoldersPathEnvVar] : [],
+    cliPolicyEnvIgnoredKeys(engine),
   );
+}
+
+function cliPolicyEnvIgnoredKeys(engine: CliPolicyCheckEngine): string[] {
+  if (engine === "gemini") {
+    return [geminiCliTrustedFoldersPathEnvVar];
+  }
+  if (engine === "copilot") {
+    return copilotCliPolicyEnvIgnoredKeys;
+  }
+  return [];
 }
 
 function cliPolicyCheckRunPolicyFingerprint(
@@ -481,7 +556,7 @@ async function assertGeminiExecutableSupportsReviewPolicyWithIsolatedTrust(
   resolvedExecutable: string,
   input: ReviewAdapterPreflightInput,
 ): Promise<string> {
-  const tempDir = await mkdtemp(path.join(tmpdir(), "diffwarden-gemini-preflight-"));
+  const tempDir = await createCliTempDir(input, "diffwarden-gemini-preflight-");
   try {
     const trustedFoldersPath = path.join(tempDir, geminiCliReviewTrustedFoldersFileName);
     await writeFile(trustedFoldersPath, "{}\n", "utf8");
@@ -499,6 +574,160 @@ async function assertGeminiExecutableSupportsReviewPolicyWithIsolatedTrust(
   } finally {
     await rm(tempDir, { force: true, recursive: true });
   }
+}
+
+async function assertCopilotExecutableSupportsReviewPolicyWithIsolatedHome(
+  resolvedExecutable: string,
+  input: ReviewAdapterPreflightInput,
+  requiredFlags: readonly string[],
+): Promise<string> {
+  const tempDir = await createCliTempDir(input, "diffwarden-copilot-preflight-", {
+    requireOutsideWorkspace: true,
+  });
+  try {
+    const env = await copilotCliPolicyProbeEnv(input, tempDir);
+    await assertCopilotExecutableSupportsReviewPolicy(resolvedExecutable, env, requiredFlags);
+    return cliPolicyEnvFingerprint(env, cliPolicyEnvIgnoredKeys("copilot"));
+  } finally {
+    await rm(tempDir, { force: true, recursive: true });
+  }
+}
+
+async function copilotCliPolicyProbeEnv(
+  input: ReviewAdapterPreflightInput,
+  tempDir: string,
+): Promise<NodeJS.ProcessEnv> {
+  const home = path.join(tempDir, "copilot-home");
+  const copilotHome = path.join(home, ".copilot");
+  const ghConfigDir = path.join(home, ".config", "gh");
+  const toolOutputTempDir = path.join(tempDir, "copilot-tool-output-temp");
+  await Promise.all([
+    mkdir(copilotHome, { recursive: true }),
+    mkdir(ghConfigDir, { recursive: true }),
+    mkdir(path.join(home, ".cache", "copilot"), { recursive: true }),
+    mkdir(path.join(home, ".local", "state"), { recursive: true }),
+    mkdir(path.join(home, "AppData", "Roaming"), { recursive: true }),
+    mkdir(path.join(home, "AppData", "Local"), { recursive: true }),
+    mkdir(toolOutputTempDir, { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(path.join(copilotHome, "config.json"), "{}\n", "utf8"),
+    writeFile(path.join(copilotHome, "settings.json"), "{}\n", "utf8"),
+    writeFile(path.join(copilotHome, "mcp-config.json"), "{}\n", "utf8"),
+  ]);
+
+  return scrubCliEnvKeys(
+    {
+      ...(input.env ?? process.env),
+      HOME: home,
+      USERPROFILE: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+      XDG_STATE_HOME: path.join(home, ".local", "state"),
+      XDG_CACHE_HOME: path.join(home, ".cache"),
+      APPDATA: path.join(home, "AppData", "Roaming"),
+      LOCALAPPDATA: path.join(home, "AppData", "Local"),
+      GH_CONFIG_DIR: ghConfigDir,
+      COPILOT_HOME: copilotHome,
+      COPILOT_CACHE_HOME: path.join(home, ".cache", "copilot"),
+      COPILOT_AUTO_UPDATE: "false",
+      COPILOT_OTEL_ENABLED: "false",
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "false",
+      TMPDIR: toolOutputTempDir,
+      TMP: toolOutputTempDir,
+      TEMP: toolOutputTempDir,
+    },
+    [
+      "COPILOT_ALLOW_ALL",
+      "COPILOT_CUSTOM_INSTRUCTIONS_DIRS",
+      "GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      ...copilotCliNodeBootstrapEnvKeys,
+    ],
+  );
+}
+
+async function createCliTempDir(
+  input: ReviewAdapterInput | ReviewAdapterPreflightInput,
+  prefix: string,
+  options: { requireOutsideWorkspace?: boolean } = {},
+): Promise<string> {
+  const parent = cliTempRoot(input.env, input.cwd);
+  if (
+    options.requireOutsideWorkspace === true &&
+    (await pathIsInsideReviewWorkspace(cliTempReviewRoots(input), parent))
+  ) {
+    throw reviewerFailed(
+      "CLI temporary directory resolved inside the review workspace; set TMPDIR, TMP, or TEMP outside the repository before running CLI reviews.",
+    );
+  }
+  await mkdir(parent, { recursive: true });
+  return await mkdtemp(path.join(parent, prefix));
+}
+
+function cliTempRootRequiresExternalWorkspace(engine: CliEngine): boolean {
+  return engine === "copilot" || engine === "antigravity";
+}
+
+function cliTempRoot(env: NodeJS.ProcessEnv | undefined, cwd: string): string {
+  const effectiveEnv = env ?? process.env;
+  const configured =
+    effectiveEnv.TMPDIR?.trim() || effectiveEnv.TMP?.trim() || effectiveEnv.TEMP?.trim();
+  if (configured !== undefined && configured !== "") {
+    return path.isAbsolute(configured) ? configured : path.resolve(cwd, configured);
+  }
+  return tmpdir();
+}
+
+function cliTempReviewRoots(input: ReviewAdapterInput | ReviewAdapterPreflightInput): string[] {
+  const repoRoot = "target" in input ? input.target.repo_root : input.repoRoot;
+  return [repoRoot, input.cwd].filter((root): root is string => Boolean(root));
+}
+
+async function pathIsInsideReviewWorkspace(
+  reviewRoots: readonly string[],
+  candidatePath: string,
+): Promise<boolean> {
+  const candidate = await realpathOrResolve(candidatePath);
+  for (const reviewRoot of new Set(reviewRoots.filter(Boolean))) {
+    if (isPathInside(await realpathOrResolve(reviewRoot), candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function realpathOrResolve(inputPath: string): Promise<string> {
+  try {
+    return await realpath(inputPath);
+  } catch (error) {
+    if (isNodeErrorWithCode(error, "ENOENT")) {
+      const resolved = path.resolve(inputPath);
+      const parent = path.dirname(resolved);
+      if (parent === resolved) {
+        return resolved;
+      }
+      return path.join(await realpathOrResolve(parent), path.basename(resolved));
+    }
+    throw error;
+  }
+}
+
+function isPathInside(parentPath: string, candidatePath: string): boolean {
+  const relative = path.relative(parentPath, candidatePath);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === code
+  );
 }
 
 async function prepareClaudeCliInvocation(
@@ -553,6 +782,26 @@ async function prepareDroidCliInvocation(
       droidCliReviewPolicyOptions(input.reviewer, input.cwd),
     ));
   applyDroidCliPolicySupport(invocation, support);
+}
+
+async function prepareCopilotCliInvocation(
+  invocation: CliInvocation,
+  input: ReviewAdapterInput,
+  policyAlreadyChecked = false,
+): Promise<void> {
+  const env = cliInvocationEnv(invocation, input);
+  invocation.resolvedExecutable =
+    invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
+  await assertCopilotCliExecutableOutsideWorkspace(invocation.resolvedExecutable, input);
+  const requiredFlags = copilotCliReviewPolicyFlagsForArgs(invocation.args);
+  if (policyAlreadyChecked && requiredFlags.length === copilotCliReviewPolicyCliFlags.length) {
+    return;
+  }
+  await assertCopilotExecutableSupportsReviewPolicy(
+    invocation.resolvedExecutable,
+    env,
+    requiredFlags,
+  );
 }
 
 function applyDroidCliPolicySupport(
@@ -626,6 +875,18 @@ async function prepareAntigravityCliInvocation(
   await assertAntigravityExecutableSupportsReviewPolicy(invocation.resolvedExecutable, env);
 }
 
+async function assertCopilotCliExecutableOutsideWorkspace(
+  resolvedExecutable: string,
+  input: ReviewAdapterInput | ReviewAdapterPreflightInput,
+): Promise<void> {
+  // The support probe executes before Copilot's own tool policy applies, so reject repo wrappers.
+  if (await pathIsInsideReviewWorkspace(cliTempReviewRoots(input), resolvedExecutable)) {
+    throw reviewerFailed(
+      "Copilot CLI executable resolved inside the review workspace; install Copilot outside the repository or set cliOptions.executable to an external binary.",
+    );
+  }
+}
+
 function cliInvocationEnv(
   invocation: CliInvocation,
   input: Pick<ReviewAdapterInput, "env">,
@@ -636,10 +897,28 @@ function cliInvocationEnv(
   };
 
   for (const key of invocation.unsetEnv ?? []) {
-    Reflect.deleteProperty(env, key);
+    deleteCliEnvKey(env, key);
   }
 
   return env;
+}
+
+function scrubCliEnvKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): NodeJS.ProcessEnv {
+  const next = { ...env };
+  for (const key of keys) {
+    deleteCliEnvKey(next, key);
+  }
+  return next;
+}
+
+function deleteCliEnvKey(env: NodeJS.ProcessEnv, key: string): void {
+  Reflect.deleteProperty(env, key);
+  const normalized = key.toLowerCase();
+  for (const existingKey of Object.keys(env)) {
+    if (existingKey.toLowerCase() === normalized) {
+      Reflect.deleteProperty(env, existingKey);
+    }
+  }
 }
 
 function pathContext(env: NodeJS.ProcessEnv | undefined): { path?: string } {
@@ -717,6 +996,9 @@ function cliResolvedEffort(engine: CliEngine, effort: string): string {
   }
   if (engine === "droid") {
     return effort === "off" ? "off" : droidCliEffort(effort);
+  }
+  if (engine === "copilot") {
+    return copilotCliEffort(effort);
   }
   if (engine === "grok") {
     return effort === "off" ? "off" : grokCliEffort(effort);

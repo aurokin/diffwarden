@@ -130,3 +130,10 @@ export function grokCliEffort(effort: string): string {
 export function droidCliEffort(effort: string): string {
   return effort === "minimal" ? "low" : effort;
 }
+
+export function copilotCliEffort(effort: string): string {
+  if (effort === "off") {
+    return "none";
+  }
+  return effort === "minimal" ? "low" : effort;
+}

@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -32,6 +33,12 @@ import {
   codexCliPromptStdinArg,
   codexCliReviewBaseArgs,
 } from "../src/adapters/codex-tool-policy.js";
+import {
+  copilotCliReviewDeniedToolPatterns,
+  copilotReviewAvailableToolsArg,
+  copilotReviewExcludedToolsArg,
+  copilotReviewPolicyMetadata,
+} from "../src/adapters/copilot-tool-policy.js";
 import { cursorCliReviewMode, cursorCliSandboxMode } from "../src/adapters/cursor-policy.js";
 import {
   droidCliReviewAllowedToolsArg,
@@ -183,6 +190,571 @@ describe("cliSpecs", () => {
     expect(invocation.unsetEnv).toEqual([geminiCliTrustWorkspaceEnvVar]);
     expect(readFileSync(policyPath, "utf8")).toBe(geminiCliReviewPolicyToml());
     expect(readFileSync(trustedFoldersPath, "utf8")).toBe("{}\n");
+  });
+
+  it("builds Copilot read/search allowlisted text CLI invocations", async () => {
+    const home = createTempDir();
+    const tempDir = createTempDir();
+    mkdirSync(path.join(home, ".copilot"), { recursive: true });
+    mkdirSync(path.join(home, ".config", "gh"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".copilot", "config.json"),
+      JSON.stringify({
+        copilotTokens: { "github.com": "token" },
+        lastLoggedInUser: { host: "github.com", login: "octo" },
+        loggedInUsers: [{ host: "github.com", login: "octo" }],
+        staff: true,
+        installedPlugins: [{ name: "unsafe", marketplace: "test", installed_at: "now" }],
+        marketplaces: { test: { source: "owner/repo" } },
+      }),
+      "utf8",
+    );
+    writeFileSync(
+      path.join(home, ".config", "gh", "hosts.yml"),
+      "github.com:\n  oauth_token: gh-token\n",
+      "utf8",
+    );
+    writeFileSync(path.join(home, ".config", "gh", "config.yml"), "git_protocol: ssh\n", "utf8");
+    const invocation = await cliSpecs.copilot.buildInvocation(
+      createInput(
+        createReviewer("copilot", {
+          model: "gpt-test",
+          effort: "minimal",
+        }),
+        { env: { HOME: home } },
+      ),
+      tempDir,
+    );
+    const isolatedCopilotHome = invocation.env?.COPILOT_HOME;
+    const isolatedGhConfigDir = invocation.env?.GH_CONFIG_DIR;
+    if (isolatedCopilotHome === undefined) {
+      throw new Error("Copilot isolated home was not captured");
+    }
+    if (isolatedGhConfigDir === undefined) {
+      throw new Error("Copilot isolated GitHub CLI config dir was not captured");
+    }
+
+    expect(invocation).toMatchObject({
+      executable: "copilot",
+      captureMode: "text",
+      env: {
+        HOME: path.join(tempDir, "copilot-home"),
+        USERPROFILE: path.join(tempDir, "copilot-home"),
+        XDG_CONFIG_HOME: path.join(tempDir, "copilot-home", ".config"),
+        XDG_STATE_HOME: path.join(tempDir, "copilot-home", ".local", "state"),
+        XDG_CACHE_HOME: path.join(tempDir, "copilot-home", ".cache"),
+        APPDATA: path.join(tempDir, "copilot-home", "AppData", "Roaming"),
+        LOCALAPPDATA: path.join(tempDir, "copilot-home", "AppData", "Local"),
+        GH_CONFIG_DIR: path.join(tempDir, "copilot-home", ".config", "gh"),
+        COPILOT_HOME: path.join(tempDir, "copilot-home", ".copilot"),
+        COPILOT_CACHE_HOME: path.join(tempDir, "copilot-home", ".cache", "copilot"),
+        COPILOT_AUTO_UPDATE: "false",
+        COPILOT_OTEL_ENABLED: "false",
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "false",
+        TMPDIR: path.join(tempDir, "copilot-tool-output-temp"),
+        TMP: path.join(tempDir, "copilot-tool-output-temp"),
+        TEMP: path.join(tempDir, "copilot-tool-output-temp"),
+      },
+      unsetEnv: [
+        "COPILOT_ALLOW_ALL",
+        "COPILOT_CUSTOM_INSTRUCTIONS_DIRS",
+        "GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+      ],
+    });
+    const promptIndex = invocation.args.indexOf("-p");
+    expect(promptIndex).toBe(invocation.args.length - 2);
+    const promptArg = invocation.args[promptIndex + 1];
+    if (promptArg === undefined) {
+      throw new Error("Copilot prompt argument was not captured");
+    }
+    const promptDir = path.join(tempDir, "copilot-prompt");
+    const toolOutputTempDir = path.join(tempDir, "copilot-tool-output-temp");
+    const promptPath = path.join(promptDir, "copilot-prompt.txt");
+
+    expect(invocation.args).toEqual([
+      "-C",
+      "/repo",
+      "--output-format",
+      "json",
+      "--stream",
+      "off",
+      "--available-tools",
+      copilotReviewAvailableToolsArg(),
+      "--excluded-tools",
+      copilotReviewExcludedToolsArg(),
+      "--allow-all-tools",
+      ...copilotCliReviewDeniedToolPatterns.flatMap((pattern) => ["--deny-tool", pattern]),
+      "--disable-builtin-mcps",
+      "--no-custom-instructions",
+      "--no-ask-user",
+      "--no-remote",
+      "--no-auto-update",
+      "--add-dir",
+      promptDir,
+      "--add-dir",
+      toolOutputTempDir,
+      "--model",
+      "gpt-test",
+      "--effort",
+      "low",
+      "-p",
+      promptArg,
+    ]);
+    expect(promptArg).toContain(promptPath);
+    expect(promptArg).not.toContain("GitHub Copilot transport note:");
+    expect(readFileSync(promptPath, "utf8")).toContain("GitHub Copilot transport note:");
+    expect(readFileSync(promptPath, "utf8")).toContain("review prompt");
+    expect(invocation.stdin).toBeUndefined();
+    expect(invocation.args).not.toContain("--attachment");
+    expect(invocation.args).not.toContain("--allow-all");
+    expect(invocation.args).not.toContain("--yolo");
+    expect(JSON.parse(readFileSync(path.join(isolatedCopilotHome, "config.json"), "utf8"))).toEqual(
+      {
+        copilotTokens: { "github.com": "token" },
+        lastLoggedInUser: { host: "github.com", login: "octo" },
+        loggedInUsers: [{ host: "github.com", login: "octo" }],
+        staff: true,
+      },
+    );
+    expect(
+      JSON.parse(readFileSync(path.join(isolatedCopilotHome, "settings.json"), "utf8")),
+    ).toMatchObject({
+      askUser: false,
+      autoUpdate: false,
+      memory: false,
+      remoteSessions: false,
+      skillDirectories: [],
+      disabledSkills: ["*", "customize-cloud-agent"],
+      enabledPlugins: {},
+      disableAllHooks: true,
+      extensions: {
+        mode: "disabled",
+        disabledExtensions: ["*"],
+      },
+    });
+    expect(readFileSync(path.join(isolatedCopilotHome, "mcp-config.json"), "utf8")).toBe("{}\n");
+    expect(readFileSync(path.join(isolatedGhConfigDir, "hosts.yml"), "utf8")).toBe(
+      "github.com:\n  oauth_token: gh-token\n",
+    );
+    expect(
+      readFileSync(
+        path.join(tempDir, "copilot-home", "AppData", "Roaming", "GitHub CLI", "hosts.yml"),
+        "utf8",
+      ),
+    ).toBe("github.com:\n  oauth_token: gh-token\n");
+    expect(existsSync(path.join(isolatedGhConfigDir, "config.yml"))).toBe(false);
+  });
+
+  it("merges legacy Copilot config auth when config.json is partially migrated", async () => {
+    const home = createTempDir();
+    const tempDir = createTempDir();
+    mkdirSync(path.join(home, ".copilot"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".copilot", "config.json"),
+      JSON.stringify({
+        copilotTokens: "",
+        lastLoggedInUser: { host: "github.com", login: "octo" },
+        loggedInUsers: [],
+        staff: {},
+        installedPlugins: [{ name: "plugin-without-auth" }],
+      }),
+      "utf8",
+    );
+    writeFileSync(
+      path.join(home, ".copilot", "config"),
+      [
+        'copilotTokens={"github.com":"legacy-token"}',
+        'loggedInUsers=[{"host":"github.com","login":"legacy"}]',
+        "staff=true",
+        'marketplaces={"unsafe":{"source":"owner/repo"}}',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const invocation = await cliSpecs.copilot.buildInvocation(
+      createInput(createReviewer("copilot"), { env: { HOME: home } }),
+      tempDir,
+    );
+    const isolatedCopilotHome = invocation.env?.COPILOT_HOME;
+    if (isolatedCopilotHome === undefined) {
+      throw new Error("Copilot isolated home was not captured");
+    }
+
+    expect(JSON.parse(readFileSync(path.join(isolatedCopilotHome, "config.json"), "utf8"))).toEqual(
+      {
+        copilotTokens: { "github.com": "legacy-token" },
+        lastLoggedInUser: { host: "github.com", login: "octo" },
+        loggedInUsers: [{ host: "github.com", login: "legacy" }],
+        staff: true,
+      },
+    );
+  });
+
+  it("stages Copilot CLI auth from relative paths resolved from the caller cwd", async () => {
+    const repoRoot = realpathSync(createTempDir());
+    const cwd = path.join(repoRoot, "packages", "app");
+    const sourceCopilotHome = realpathSync(createTempDir());
+    const sourceGhConfigDir = path.join(realpathSync(createTempDir()), "gh");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(sourceCopilotHome, { recursive: true });
+    mkdirSync(sourceGhConfigDir, { recursive: true });
+    writeFileSync(
+      path.join(sourceCopilotHome, "config.json"),
+      JSON.stringify({
+        copilotTokens: { "github.com": "relative-token" },
+        lastLoggedInUser: { host: "github.com", login: "relative" },
+      }),
+      "utf8",
+    );
+    writeFileSync(
+      path.join(sourceGhConfigDir, "hosts.yml"),
+      "github.com:\n  oauth_token: relative-gh-token\n",
+      "utf8",
+    );
+
+    const invocation = await cliSpecs.copilot.buildInvocation(
+      createInput(createReviewer("copilot"), {
+        cwd,
+        repoRoot,
+        env: {
+          COPILOT_HOME: path.relative(cwd, sourceCopilotHome),
+          GH_CONFIG_DIR: path.relative(cwd, sourceGhConfigDir),
+        },
+      }),
+      createTempDir(),
+    );
+    const isolatedCopilotHome = invocation.env?.COPILOT_HOME;
+    const isolatedGhConfigDir = invocation.env?.GH_CONFIG_DIR;
+    if (isolatedCopilotHome === undefined || isolatedGhConfigDir === undefined) {
+      throw new Error("Copilot isolated auth paths were not captured");
+    }
+
+    expect(JSON.parse(readFileSync(path.join(isolatedCopilotHome, "config.json"), "utf8"))).toEqual(
+      {
+        copilotTokens: { "github.com": "relative-token" },
+        lastLoggedInUser: { host: "github.com", login: "relative" },
+      },
+    );
+    expect(readFileSync(path.join(isolatedGhConfigDir, "hosts.yml"), "utf8")).toBe(
+      "github.com:\n  oauth_token: relative-gh-token\n",
+    );
+  });
+
+  it("copies Copilot auth from USERPROFILE when explicit env has no HOME", async () => {
+    const userProfile = createTempDir();
+    const tempDir = createTempDir();
+    mkdirSync(path.join(userProfile, ".copilot"), { recursive: true });
+    writeFileSync(
+      path.join(userProfile, ".copilot", "config.json"),
+      JSON.stringify({
+        copilotTokens: { "github.com": "profile-token" },
+      }),
+      "utf8",
+    );
+
+    const invocation = await cliSpecs.copilot.buildInvocation(
+      createInput(createReviewer("copilot"), {
+        env: {
+          HOME: "",
+          USERPROFILE: userProfile,
+        },
+      }),
+      tempDir,
+    );
+    const isolatedCopilotHome = invocation.env?.COPILOT_HOME;
+    if (isolatedCopilotHome === undefined) {
+      throw new Error("Copilot isolated home was not captured");
+    }
+
+    expect(JSON.parse(readFileSync(path.join(isolatedCopilotHome, "config.json"), "utf8"))).toEqual(
+      {
+        copilotTokens: { "github.com": "profile-token" },
+      },
+    );
+  });
+
+  it("copies GitHub CLI hosts from XDG_CONFIG_HOME for Copilot CLI auth", async () => {
+    const xdgConfigHome = createTempDir();
+    const tempDir = createTempDir();
+    mkdirSync(path.join(xdgConfigHome, "gh"), { recursive: true });
+    writeFileSync(
+      path.join(xdgConfigHome, "gh", "hosts.yml"),
+      "github.com:\n  oauth_token: xdg-token\n",
+      "utf8",
+    );
+
+    const invocation = await cliSpecs.copilot.buildInvocation(
+      createInput(createReviewer("copilot"), {
+        env: {
+          HOME: "",
+          XDG_CONFIG_HOME: xdgConfigHome,
+        },
+      }),
+      tempDir,
+    );
+    const isolatedGhConfigDir = invocation.env?.GH_CONFIG_DIR;
+    if (isolatedGhConfigDir === undefined) {
+      throw new Error("Copilot isolated GitHub CLI config dir was not captured");
+    }
+
+    expect(readFileSync(path.join(isolatedGhConfigDir, "hosts.yml"), "utf8")).toBe(
+      "github.com:\n  oauth_token: xdg-token\n",
+    );
+  });
+
+  it("uses XDG GitHub CLI auth precedence before HOME for Copilot CLI auth", async () => {
+    const xdgConfigHome = createTempDir();
+    const copilotHome = createTempDir();
+    const tempDir = createTempDir();
+    mkdirSync(path.join(xdgConfigHome, "gh"), { recursive: true });
+    writeFileSync(
+      path.join(xdgConfigHome, "gh", "hosts.yml"),
+      "github.com:\n  oauth_token: xdg-token\n",
+      "utf8",
+    );
+
+    const invocation = await cliSpecs.copilot.buildInvocation(
+      createInput(createReviewer("copilot"), {
+        env: {
+          COPILOT_HOME: copilotHome,
+          HOME: "/repo",
+          XDG_CONFIG_HOME: xdgConfigHome,
+        },
+      }),
+      tempDir,
+    );
+    const isolatedGhConfigDir = invocation.env?.GH_CONFIG_DIR;
+    if (isolatedGhConfigDir === undefined) {
+      throw new Error("Copilot isolated GitHub CLI config dir was not captured");
+    }
+
+    expect(readFileSync(path.join(isolatedGhConfigDir, "hosts.yml"), "utf8")).toBe(
+      "github.com:\n  oauth_token: xdg-token\n",
+    );
+  });
+
+  it("falls back to HOME GitHub CLI hosts when XDG has no Copilot CLI auth", async () => {
+    const xdgConfigHome = createTempDir();
+    const home = createTempDir();
+    const tempDir = createTempDir();
+    mkdirSync(path.join(xdgConfigHome, "gh"), { recursive: true });
+    mkdirSync(path.join(home, ".config", "gh"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".config", "gh", "hosts.yml"),
+      "github.com:\n  oauth_token: home-token\n",
+      "utf8",
+    );
+
+    const invocation = await cliSpecs.copilot.buildInvocation(
+      createInput(createReviewer("copilot"), {
+        env: {
+          HOME: home,
+          XDG_CONFIG_HOME: xdgConfigHome,
+        },
+      }),
+      tempDir,
+    );
+    const isolatedGhConfigDir = invocation.env?.GH_CONFIG_DIR;
+    if (isolatedGhConfigDir === undefined) {
+      throw new Error("Copilot isolated GitHub CLI config dir was not captured");
+    }
+
+    expect(readFileSync(path.join(isolatedGhConfigDir, "hosts.yml"), "utf8")).toBe(
+      "github.com:\n  oauth_token: home-token\n",
+    );
+  });
+
+  it("fails closed when Copilot CLI source credentials are inside a dot-dot-prefixed repo path", async () => {
+    const repoRoot = createTempDir();
+    const sourceHome = path.join(repoRoot, "..copilot-home");
+    mkdirSync(path.join(sourceHome, ".copilot"), { recursive: true });
+
+    await expect(
+      cliSpecs.copilot.buildInvocation(
+        createInput(createReviewer("copilot"), {
+          cwd: repoRoot,
+          repoRoot,
+          env: { HOME: sourceHome },
+        }),
+        createTempDir(),
+      ),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("inside the review workspace"),
+    });
+  });
+
+  it("fails closed when relative Copilot CLI GitHub auth paths resolve inside the caller cwd repo", async () => {
+    const repoRoot = createTempDir();
+    const ghConfigDir = path.join(repoRoot, ".config", "gh");
+    mkdirSync(ghConfigDir, { recursive: true });
+    writeFileSync(
+      path.join(ghConfigDir, "hosts.yml"),
+      "github.com:\n  oauth_token: token\n",
+      "utf8",
+    );
+
+    await expect(
+      cliSpecs.copilot.buildInvocation(
+        createInput(createReviewer("copilot"), {
+          cwd: repoRoot,
+          repoRoot,
+          env: {
+            COPILOT_HOME: createTempDir(),
+            GH_CONFIG_DIR: ".config/gh",
+          },
+        }),
+        createTempDir(),
+      ),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("GitHub CLI auth state resolved inside"),
+    });
+  });
+
+  it("fails closed when Copilot CLI temp home is inside a dot-dot-prefixed repo path", async () => {
+    const repoRoot = createTempDir();
+    const tempDir = path.join(repoRoot, "..tmp", "diffwarden-cli");
+    mkdirSync(tempDir, { recursive: true });
+
+    await expect(
+      cliSpecs.copilot.buildInvocation(
+        createInput(createReviewer("copilot"), {
+          cwd: repoRoot,
+          repoRoot,
+          env: { HOME: "" },
+        }),
+        tempDir,
+      ),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("inside the review workspace"),
+    });
+  });
+
+  it("treats explicit Copilot env objects without a home as an auth boundary", async () => {
+    const tempDir = createTempDir();
+
+    const invocation = await cliSpecs.copilot.buildInvocation(
+      createInput(createReviewer("copilot"), {
+        env: {
+          PATH: "/usr/bin",
+        },
+      }),
+      tempDir,
+    );
+    const isolatedCopilotHome = invocation.env?.COPILOT_HOME;
+    if (isolatedCopilotHome === undefined) {
+      throw new Error("Copilot isolated home was not captured");
+    }
+
+    expect(JSON.parse(readFileSync(path.join(isolatedCopilotHome, "config.json"), "utf8"))).toEqual(
+      {},
+    );
+  });
+
+  it("disables repo-local Copilot MCP servers in CLI review invocations", async () => {
+    const repoRoot = createTempDir();
+    const cwd = path.join(repoRoot, "packages", "app");
+    const home = createTempDir();
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(path.join(home, ".copilot"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".copilot", "mcp-config.json"),
+      "{ invalid user mcp json",
+      "utf8",
+    );
+    writeFileSync(
+      path.join(repoRoot, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          "workspace-mcp": { command: "node" },
+          "shared-mcp": { command: "node" },
+        },
+      }),
+      "utf8",
+    );
+    mkdirSync(path.join(repoRoot, ".vscode"), { recursive: true });
+    writeFileSync(
+      path.join(repoRoot, ".vscode", "mcp.json"),
+      JSON.stringify({
+        servers: {
+          "vscode-mcp": { command: "node" },
+        },
+      }),
+      "utf8",
+    );
+
+    const invocation = await cliSpecs.copilot.buildInvocation(
+      createInput(createReviewer("copilot"), {
+        cwd,
+        repoRoot,
+        env: { HOME: home },
+      }),
+      createTempDir(),
+    );
+
+    expect(valuesAfterFlag(invocation.args, "-C")).toEqual([repoRoot]);
+    expect(valuesAfterFlag(invocation.args, "--disable-mcp-server")).toEqual([
+      "workspace-mcp",
+      "shared-mcp",
+      "vscode-mcp",
+    ]);
+  });
+
+  it("ignores source Copilot MCP config paths for isolated CLI review invocations", async () => {
+    const repoRoot = createTempDir();
+    const cwd = path.join(repoRoot, "packages", "app");
+    const sourceHome = path.join(path.dirname(repoRoot), "relative-copilot-home");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(sourceHome, { recursive: true });
+    writeFileSync(
+      path.join(sourceHome, "mcp-config.json"),
+      JSON.stringify({
+        mcpServers: {
+          "relative-home-mcp": { command: "node" },
+        },
+      }),
+      "utf8",
+    );
+
+    const invocation = await cliSpecs.copilot.buildInvocation(
+      createInput(createReviewer("copilot"), {
+        cwd,
+        repoRoot,
+        env: { COPILOT_HOME: path.relative(cwd, sourceHome) },
+      }),
+      createTempDir(),
+    );
+
+    expect(valuesAfterFlag(invocation.args, "--disable-mcp-server")).not.toContain(
+      "relative-home-mcp",
+    );
+  });
+
+  it("fails closed when configured Copilot MCP config cannot be parsed", async () => {
+    const repoRoot = createTempDir();
+    const cwd = path.join(repoRoot, "packages", "app");
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(path.join(repoRoot, ".mcp.json"), "{ invalid json", "utf8");
+
+    await expect(
+      cliSpecs.copilot.buildInvocation(
+        createInput(createReviewer("copilot"), {
+          cwd,
+          repoRoot,
+          env: { HOME: createTempDir() },
+        }),
+        createTempDir(),
+      ),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("Failed to parse Copilot MCP config"),
+    });
   });
 
   it("builds Antigravity prompt-bearing print invocations without stdin", async () => {
@@ -1094,6 +1666,283 @@ describe("cliSpecs", () => {
     });
     expect(piOutput.metadata).not.toHaveProperty("resolvedEffort");
 
+    const copilotOutput = await cliSpecs.copilot.parseOutput(
+      runResult({
+        stdout: `${JSON.stringify({ type: "assistant", message: { result: reviewResult() } })}\n`,
+      }),
+      { executable: "copilot", args: [], captureMode: "text" },
+    );
+    expect(copilotOutput).toMatchObject({
+      structured: {
+        overall_correctness: "patch is correct",
+        overall_explanation: "ok",
+      },
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "tool-restricted",
+        ...copilotReviewPolicyMetadata(),
+      },
+    });
+
+    await expect(
+      cliSpecs.copilot.parseOutput(
+        runResult({
+          stdout: `${JSON.stringify({
+            type: "assistant",
+            message: { result: JSON.stringify(reviewResult()) },
+          })}\n`,
+        }),
+        { executable: "copilot", args: [], captureMode: "text" },
+      ),
+    ).resolves.toMatchObject({
+      structured: {
+        overall_correctness: "patch is correct",
+        overall_explanation: "ok",
+      },
+    });
+
+    const copilotAssistantMessageOutput = await cliSpecs.copilot.parseOutput(
+      runResult({
+        stdout: `${JSON.stringify({
+          type: "assistant.message",
+          data: {
+            content: JSON.stringify(reviewResult()),
+          },
+        })}\n`,
+      }),
+      { executable: "copilot", args: [], captureMode: "text" },
+    );
+    expect(copilotAssistantMessageOutput).toMatchObject({
+      structured: {
+        overall_correctness: "patch is correct",
+        overall_explanation: "ok",
+      },
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "tool-restricted",
+        ...copilotReviewPolicyMetadata(),
+      },
+    });
+
+    await expect(
+      cliSpecs.copilot.parseOutput(
+        runResult({
+          stdout: JSON.stringify(
+            {
+              type: "assistant.message",
+              data: {
+                content: JSON.stringify(reviewResult()),
+              },
+            },
+            null,
+            2,
+          ),
+        }),
+        { executable: "copilot", args: [], captureMode: "text" },
+      ),
+    ).resolves.toMatchObject({
+      structured: {
+        overall_correctness: "patch is correct",
+        overall_explanation: "ok",
+      },
+    });
+
+    await expect(
+      cliSpecs.copilot.parseOutput(
+        runResult({
+          stdout: [
+            JSON.stringify({
+              type: "assistant.message",
+              agentId: "helper-agent",
+              data: {
+                content: JSON.stringify({
+                  ...reviewResult(),
+                  overall_explanation: "helper review",
+                }),
+              },
+            }),
+            JSON.stringify({
+              type: "session.error",
+              agentId: "helper-agent",
+              data: {
+                errorType: "runtime",
+                message: "helper failed after collecting context",
+              },
+            }),
+            JSON.stringify({
+              type: "assistant.message",
+              data: {
+                content: JSON.stringify({
+                  ...reviewResult(),
+                  overall_explanation: "root review",
+                }),
+              },
+            }),
+          ].join("\n"),
+        }),
+        { executable: "copilot", args: [], captureMode: "text" },
+      ),
+    ).resolves.toMatchObject({
+      structured: {
+        overall_correctness: "patch is correct",
+        overall_explanation: "root review",
+      },
+    });
+
+    const copilotTextOutput = await cliSpecs.copilot.parseOutput(
+      runResult({
+        stdout: `${JSON.stringify({
+          type: "assistant.message",
+          data: {
+            content: "plain Copilot review",
+          },
+        })}\n`,
+      }),
+      { executable: "copilot", args: [], captureMode: "text" },
+    );
+    expect(copilotTextOutput).toMatchObject({
+      text: "plain Copilot review",
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "tool-restricted",
+        ...copilotReviewPolicyMetadata(),
+      },
+    });
+
+    const copilotRootTextOutput = await cliSpecs.copilot.parseOutput(
+      runResult({
+        stdout: [
+          JSON.stringify({
+            type: "assistant.message",
+            agentId: "helper-agent",
+            data: {
+              content: "helper Copilot review",
+            },
+          }),
+          JSON.stringify({
+            type: "assistant.message",
+            data: {
+              content: "root Copilot review",
+            },
+          }),
+        ].join("\n"),
+      }),
+      { executable: "copilot", args: [], captureMode: "text" },
+    );
+    expect(copilotRootTextOutput).toMatchObject({
+      text: "root Copilot review",
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "tool-restricted",
+        ...copilotReviewPolicyMetadata(),
+      },
+    });
+
+    await expect(
+      cliSpecs.copilot.parseOutput(
+        runResult({
+          stdout: `${JSON.stringify({
+            type: "session.error",
+            data: {
+              message: "authentication failed",
+            },
+          })}\n`,
+        }),
+        { executable: "copilot", args: [], captureMode: "text" },
+      ),
+    ).rejects.toThrow("Copilot reviewer failed: authentication failed");
+
+    await expect(
+      cliSpecs.copilot.parseOutput(
+        runResult({
+          stdout: [
+            JSON.stringify({
+              type: "assistant.message",
+              data: {
+                content: "partial text",
+              },
+            }),
+            JSON.stringify({
+              type: "session.error",
+              data: {
+                message: "runtime failed",
+              },
+            }),
+          ].join("\n"),
+        }),
+        { executable: "copilot", args: [], captureMode: "text" },
+      ),
+    ).rejects.toThrow("Copilot reviewer failed: runtime failed");
+
+    await expect(
+      cliSpecs.copilot.parseOutput(
+        runResult({
+          stdout: [
+            JSON.stringify({
+              type: "session.error",
+              data: {
+                errorType: "model_call",
+                message: "model retry",
+              },
+            }),
+            JSON.stringify({
+              type: "assistant.message",
+              data: {
+                content: JSON.stringify(reviewResult()),
+              },
+            }),
+          ].join("\n"),
+        }),
+        { executable: "copilot", args: [], captureMode: "text" },
+      ),
+    ).resolves.toMatchObject({
+      structured: {
+        overall_correctness: "patch is correct",
+      },
+    });
+
+    await expect(
+      cliSpecs.copilot.parseOutput(
+        runResult({
+          stdout: [
+            JSON.stringify({
+              type: "session.error",
+              data: {
+                errorType: "permission",
+                message: "blocked write_file",
+              },
+            }),
+            JSON.stringify({
+              type: "assistant.message",
+              data: {
+                content: JSON.stringify(reviewResult()),
+              },
+            }),
+          ].join("\n"),
+        }),
+        { executable: "copilot", args: [], captureMode: "text" },
+      ),
+    ).resolves.toMatchObject({
+      structured: {
+        overall_correctness: "patch is correct",
+      },
+    });
+
+    await expect(
+      cliSpecs.copilot.parseOutput(
+        runResult({
+          stdout: `${JSON.stringify({
+            type: "session.error",
+            data: {
+              errorType: "model_call",
+              message: "model retry exhausted",
+            },
+          })}\n`,
+        }),
+        { executable: "copilot", args: [], captureMode: "text" },
+      ),
+    ).rejects.toThrow("Copilot reviewer failed: model retry exhausted");
+
     const droidHome = createTempDir();
     const droidInvocation = await cliSpecs.droid.buildInvocation(
       createInput(createReviewer("droid"), { env: { HOME: droidHome } }),
@@ -1295,11 +2144,25 @@ function runResult(options: Partial<CliRunResult>): CliRunResult {
 }
 
 function writeReviewOutput(outputPath: string): void {
-  const review = {
+  writeFileSync(outputPath, JSON.stringify(reviewResult()));
+}
+
+function valuesAfterFlag(args: readonly string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < args.length - 1; index += 1) {
+    const value = args[index + 1];
+    if (args[index] === flag && value !== undefined) {
+      values.push(value);
+    }
+  }
+  return values;
+}
+
+function reviewResult() {
+  return {
     findings: [],
     overall_correctness: "patch is correct",
     overall_explanation: "ok",
     overall_confidence_score: 1,
   };
-  writeFileSync(outputPath, JSON.stringify(review));
 }

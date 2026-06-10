@@ -14,6 +14,7 @@ SDK adapters remain the default for:
 - `claude`
 - `pi`
 - `droid`
+- `copilot`
 
 CLI-only reviewers use `transport: "cli"` automatically:
 
@@ -58,9 +59,10 @@ too coarse to run a useful review. When a provider adds unavoidable native contr
 read-only/spec mode, document that exception separately instead of broadening the allowlist by
 category.
 
-Do not impose adapter-specific tool-call, turn, or step caps for normal reviews. Diffwarden's
-reviewer timeout is the run-level circuit breaker. Tool budgets can stop a real review before
-the model has enough evidence, especially on providers that use several small read/search turns.
+Do not impose adapter-specific tool-call, turn, step, or default wall-clock caps for normal
+reviews. A reviewer timeout is only a run-level circuit breaker when the user or config
+explicitly sets one. Tool budgets can stop a real review before the model has enough evidence,
+especially on providers that use several small read/search turns.
 If a provider has an unavoidable native cap, surface that as a transport limitation rather than
 treating it as Diffwarden policy.
 
@@ -98,6 +100,7 @@ Current SDK coverage:
 | Claude SDK | Reports the model Diffwarden passes to the SDK, using `sonnet` when no override is configured. | Maps public effort values to Claude native effort or disabled thinking. |
 | Pi SDK | Reports the selected authenticated provider/model from Pi's model registry. | Reports the requested and clamped Pi thinking level. |
 | Droid SDK | Reads the effective spec-mode model from `session.initResult.settings`. | Reads the effective spec-mode reasoning effort from `session.initResult.settings`. |
+| Copilot SDK | Reports the requested model and promotes provider-result model metadata from `assistant.usage` / `assistant.message` events when available. | Maps `minimal` to `low`, omits SDK reasoning effort for `off`, and promotes provider-result effort metadata when available. |
 
 CLI transports always report deterministic values that Diffwarden passes on the command line:
 `requestedModel` / `requestedEffort` preserve configured or per-run overrides, and
@@ -200,9 +203,9 @@ exposes this fact as `execEnabled: true` in preflight and adapter metadata. A la
 pass can explore disabling shell/unified exec once the minimum required file-read surface is
 proven.
 
-Diffwarden does not add Codex-specific tool-call, turn, step, retry, or equivalent caps. The
-reviewer timeout remains the run-level limiter. Codex-native limits that can still affect a
-review include model context/truncation behavior, command output capture and command timeout
+Diffwarden does not add Codex-specific tool-call, turn, step, retry, or equivalent caps. A
+configured reviewer timeout, when set, remains the run-level limiter. Codex-native limits that
+can still affect a review include model context/truncation behavior, command output capture and command timeout
 defaults, app-server socket launch/handshake waits, and native review mode's rendered-text
 parsing path.
 
@@ -295,8 +298,9 @@ outdated local executable falls back to `ANTHROPIC_API_KEY` when one is availabl
 `claude-code` mode fails preflight with a missing-requirement error instead of running with a
 weaker policy.
 
-Diffwarden does not set Claude SDK `maxTurns` for review runs; the reviewer timeout is the
-run-level limiter. Claude-native limits can still stop or shape a run, including model context
+Diffwarden does not set Claude SDK `maxTurns` for review runs; only a configured reviewer
+timeout limits the run. Claude-native limits can still stop or shape a run, including model
+context
 limits, structured-output retry behavior, provider output limits, and built-in tool result
 limits such as Glob result caps.
 
@@ -373,8 +377,8 @@ request timeout/retry/max retry delay, compaction enabled/reserve/keep-recent to
 HTTP idle timeout when the installed Pi SDK exposes that getter. With
 `@earendil-works/pi-coding-agent@0.75.3`, HTTP idle timeout is not exposed through the public
 settings manager, so Diffwarden reports it as unavailable instead of guessing. These are
-Pi-native/provider-native controls, not Diffwarden tool-call or step caps. Diffwarden's
-reviewer timeout remains the run-level circuit breaker.
+Pi-native/provider-native controls, not Diffwarden tool-call or step caps. A configured reviewer
+timeout, when set, is the Diffwarden-owned run-level circuit breaker.
 
 Diffwarden does not add Pi-specific tool-call, turn, step, retry, or equivalent caps. The
 provider-owned limits that can affect a run are Pi SDK settings and provider transport behavior:
@@ -471,14 +475,93 @@ Droid session history without isolating Factory's home/config directory, which i
 default review path.
 
 Diffwarden does not add Droid-specific tool-call, turn, step, retry, mission, compaction, or
-equivalent caps around review runs. The reviewer timeout is the Diffwarden-owned run-level
-circuit breaker. Droid-native context limits, structured-output behavior, session history, and
+equivalent caps around review runs. A configured reviewer timeout, when set, is the
+Diffwarden-owned run-level circuit breaker. Droid-native context limits, structured-output
+behavior, session history, and
 any provider or organization policy limits still apply.
 
 Live SDK smoke test:
 
 ```bash
 DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk
+```
+
+## GitHub Copilot
+
+```bash
+diffwarden --target uncommitted --reviewer copilot
+```
+
+The Copilot SDK adapter uses `@github/copilot-sdk` with `mode: "empty"`. Diffwarden disables
+config discovery, custom instructions, MCP Apps, extensions, custom agents,
+plugin/skill/instruction directories, session telemetry, coauthor behavior, and schedule
+management for review sessions. SDK runs use a temporary Copilot home with filtered auth state
+and an empty `mcp-config.json`, because the SDK only serializes explicit `mcpServers` and does
+not expose the CLI's `--disable-mcp-server` switch. Infinite sessions are disabled so review
+runs do not create persistent workspace checkpoints/history. The session exposes only
+Copilot's read/search tools:
+`builtin:view`, `builtin:read_file`, `builtin:file_search`, and `builtin:grep_search`.
+In Copilot naming, `file_search` is the glob-style file finder and `grep_search` is text search.
+Diffwarden also scrubs the Copilot repo-hook override environment variable before starting the
+SDK runtime.
+The SDK permission handler
+approves `read` permission requests and rejects shell, write, URL, MCP, memory, custom-tool,
+hook, extension, and other permission kinds.
+
+The SDK path listens for `session.idle` after `session.send()` instead of calling
+`sendAndWait()`, whose SDK default wait timeout is not Diffwarden policy. A configured reviewer
+timeout, when set, remains the run-level circuit breaker.
+
+By default the SDK path reads Copilot auth from `sdkOptions.baseDirectory`, then
+`$COPILOT_HOME`, then `$HOME/.copilot`, stages only auth keys into a run-scoped Copilot home,
+and points the runtime at that staged home. Diffwarden rejects SDK reviews when the source
+Copilot home resolves inside the reviewed workspace, because Copilot's read/search tools are
+intentionally allowed to inspect repository files. Explicit `sdkOptions.executable` runtime
+overrides and GitHub CLI auth directories derived from `GH_CONFIG_DIR`, `XDG_CONFIG_HOME`,
+`HOME`, `USERPROFILE`, or Windows AppData must also resolve outside the reviewed workspace.
+Set `sdkOptions.executable` to force the SDK runtime to spawn a Copilot-named runtime binary
+or readable `.js` runtime entry. Diffwarden launches `.js` entries through Node. Otherwise,
+Diffwarden resolves the SDK-bundled `@github/copilot` runtime entry explicitly. The resolved
+runtime must live outside the reviewed workspace; source-checkout development installs should
+configure an external runtime or use Copilot CLI transport when reviewing the Diffwarden
+repository itself.
+
+Copilot CLI transport uses `-p/--prompt` for non-interactive mode, writes the large assembled
+review prompt to a run-scoped prompt file, requests JSONL output, and uses the same read/search
+tool list. The CLI currently requires `--allow-all-tools` in non-interactive mode. Diffwarden
+pairs it with `--available-tools view,read_file,file_search,grep_search`, explicit
+write/shell/URL denials, disabled built-in and repo-configured MCP servers, disabled custom
+instructions, disabled ask-user, disabled remote control, explicit `--add-dir` roots for the
+prompt directory and a run-scoped tool-output temp directory, `COPILOT_ALLOW_ALL` scrubbing,
+Node loader env scrubbing, and repo-hook override env scrubbing. Each CLI run receives a
+temporary `HOME`/`COPILOT_HOME`, isolated `GH_CONFIG_DIR`, and Windows `APPDATA`/`LOCALAPPDATA`
+scoped under that same temporary home. Diffwarden copies Copilot auth state from the source
+Copilot home and GitHub CLI `hosts.yml` auth from `GH_CONFIG_DIR`, `XDG_CONFIG_HOME/gh`,
+`$HOME/.config/gh`, or the standard Windows GitHub CLI config directory; installed plugins,
+marketplaces, hooks, MCP config, personal skills, custom agents, other GitHub CLI config, and
+user settings are not copied. The resolved Copilot CLI executable must live outside the
+reviewed workspace because support probes execute before Copilot's tool policy applies. Copilot
+documents that permission approvals do not expose tools filtered out by `--available-tools`,
+and that denials take precedence over allow rules.
+
+To call the CLI transport directly, define a reviewer id such as:
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "copilot-cli",
+      "engine": "copilot",
+      "transport": "cli"
+    }
+  ]
+}
+```
+
+Then run:
+
+```bash
+diffwarden --target uncommitted --reviewer copilot-cli
 ```
 
 ## CLI Transports
@@ -520,8 +603,8 @@ prompt mode to start. Gemini CLI policy preflight uses the same inherited-trust 
 temporary trusted-folders isolation for its `--help` capability probe. Gemini may downgrade
 approval mode for untrusted startup phases, which is why Diffwarden's generated policy applies
 across all approval modes instead of only Plan Mode.
-Diffwarden does not pass a Gemini tool-call, turn, step, retry, or equivalent cap; the
-reviewer timeout is the run-level limiter. Diffwarden also does not enable `--sandbox` by
+Diffwarden does not pass a Gemini tool-call, turn, step, retry, or equivalent cap; only a
+configured reviewer timeout limits the run. Diffwarden also does not enable `--sandbox` by
 default because Gemini sandboxing depends on provider-native local sandbox prerequisites; the
 default read-only posture is the policy-restricted Plan Mode invocation.
 
@@ -531,8 +614,8 @@ embedded patch first, uses a generated low-tool `diffwarden-review-*` agent by d
 while denying every other tool permission unless the caller already supplied
 OpenCode config through `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, or
 selected `cliOptions.agent`. Diffwarden also sets `OPENCODE_PERMISSION` with the same tool
-policy for the spawned process. Diffwarden does not inject an OpenCode step cap; the configured
-reviewer timeout is the run-level circuit breaker. Set `cliOptions.agent` to use an existing
+policy for the spawned process. Diffwarden does not inject an OpenCode step cap; only a
+configured reviewer timeout limits the run. Set `cliOptions.agent` to use an existing
 primary OpenCode agent.
 
 Grok CLI writes the prompt to a temp file and runs headless with JSON output,
@@ -543,13 +626,14 @@ explicit deny rules for `Bash`, `Edit`, `Write`, `WebFetch`, and `MCPTool`,
 sandbox permits Grok's own `~/.grok` and temp writes but blocks repository writes for review
 runs; the low-tool allowlist keeps the model on file read, directory listing, and grep search
 tools. Diffwarden preflights the selected executable for these policy flags and does not pass
-`--max-turns`; the configured reviewer timeout remains the run-level limiter.
+`--max-turns`; only a configured reviewer timeout limits the run.
 
-SDK-backed families, including Droid, can use `transport: "cli"` from config.
-`cliOptions.executable` can point at non-standard CLI installs, such as local `pi`, `droid`, or
-`agy` binaries. Droid SDK reviewers use `sdkOptions.executable`, with `cliOptions.executable`
-kept as a legacy fallback. CLI auth is delegated to the underlying executable, so live runs
-require each tool to be logged in or configured through its own environment variables.
+SDK-backed families, including Droid and Copilot, can use `transport: "cli"` from config.
+`cliOptions.executable` can point at non-standard CLI installs, such as local `pi`, `droid`,
+`copilot`, or `agy` binaries. Droid SDK reviewers use `sdkOptions.executable`, with
+`cliOptions.executable` kept as a legacy fallback. CLI auth is delegated to the underlying
+executable, so live runs require each tool to be logged in or configured through its own
+environment variables.
 
 Antigravity uses `agy --print` because `agy` print mode expects the prompt as the flag value.
 Diffwarden stores the full assembled review prompt in a temporary file and passes a short print
@@ -587,7 +671,7 @@ auth with Anthropic API credentials removed, then removes those credentials from
 workflow surfaces. It also passes `--no-session-persistence`, an empty `--setting-sources`,
 `--strict-mcp-config` with an empty MCP config file, `--disable-slash-commands`, and
 `--no-chrome`. Claude CLI preflight verifies that the selected executable supports these policy
-flags. Diffwarden does not pass `--max-turns`; timeout remains the run-level limiter.
+flags. Diffwarden does not pass `--max-turns`; only a configured reviewer timeout limits the run.
 
 Capability metadata is conservative. Cursor SDK/CLI and OpenCode CLI currently report
 prompt-only read-only behavior when hard enforcement is not proven. Antigravity CLI reports

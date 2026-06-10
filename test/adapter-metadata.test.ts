@@ -163,7 +163,7 @@ describe("SDK adapter metadata", () => {
 
   it("rejects reviewer SDKs that do not support the SDK transport", () => {
     for (const sdk of reviewerSdkValues) {
-      if (["cursor", "claude", "pi", "droid"].includes(sdk)) {
+      if (["cursor", "claude", "pi", "droid", "copilot"].includes(sdk)) {
         continue;
       }
       expect(() => sdkPreflightMetadata(sdk)).toThrow(`${sdk} SDK transport is not supported`);

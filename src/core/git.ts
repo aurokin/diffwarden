@@ -48,6 +48,18 @@ export async function resolveGitTarget(
   return resolveCommitTarget(repoRoot, spec.sha, git);
 }
 
+export async function tryGetRepoRoot(
+  cwd: string,
+  options: ResolveGitTargetOptions = {},
+): Promise<string | undefined> {
+  const git = options.runGit ?? runGit;
+  try {
+    return await git(cwd, ["rev-parse", "--show-toplevel"]);
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveUncommittedTarget(
   repoRoot: string,
   headSha: string,

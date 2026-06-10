@@ -1,6 +1,7 @@
 import { claudeAdapter } from "../adapters/claude.js";
 import { createCliAdapter } from "../adapters/cli.js";
 import { createCodexAppServerAdapter } from "../adapters/codex-app-server.js";
+import { copilotAdapter } from "../adapters/copilot.js";
 import { cursorAdapter } from "../adapters/cursor.js";
 import { droidAdapter } from "../adapters/droid.js";
 import { fakeAdapter } from "../adapters/fake.js";
@@ -22,6 +23,7 @@ import {
 } from "./errors.js";
 import type { ReviewErrorCode } from "./errors.js";
 import type { ResolvedDiff } from "./git.js";
+import { tryGetRepoRoot } from "./git.js";
 import { parseReviewOutput } from "./parse.js";
 import { buildReviewPrompt } from "./prompt.js";
 import { type ReviewerOverrideSource, resolveReviewerConfigs } from "./reviewer.js";
@@ -415,11 +417,13 @@ export async function runReviewerPreflightReport(
     ...(options.config !== undefined ? { config: options.config } : {}),
   });
   const env = options.env ?? process.env;
+  const repoRoot = await tryGetRepoRoot(options.cwd);
   const started = Date.now();
   const artifacts = await Promise.all(
     reviewers.map((reviewer) =>
       runSingleReviewerPreflight({
         cwd: options.cwd,
+        ...(repoRoot !== undefined ? { repoRoot } : {}),
         reviewer,
         env,
         ...(options.adapters !== undefined ? { adapters: options.adapters } : {}),
@@ -468,6 +472,7 @@ async function preflightReviewerOutcome(options: {
       type: "context",
       context: await preflightReviewer({
         cwd: options.options.cwd,
+        repoRoot: options.options.resolved.target.repo_root,
         reviewer: options.reviewer,
         env: options.env,
         ...(options.options.adapters !== undefined ? { adapters: options.options.adapters } : {}),
@@ -614,6 +619,7 @@ type ReviewerContext = {
 
 async function preflightReviewer(options: {
   cwd: string;
+  repoRoot?: string;
   reviewer: ReviewReviewerConfig;
   env: NodeJS.ProcessEnv;
   adapters?: Partial<Record<string, ReviewAdapter>>;
@@ -623,6 +629,7 @@ async function preflightReviewer(options: {
   const start = Date.now();
   const preflightInput = {
     cwd: options.cwd,
+    ...(options.repoRoot !== undefined ? { repoRoot: options.repoRoot } : {}),
     reviewer: options.reviewer,
     signal: abortController.signal,
     readonly: true,
@@ -664,6 +671,7 @@ async function preflightReviewer(options: {
 
 async function runSingleReviewerPreflight(options: {
   cwd: string;
+  repoRoot?: string;
   reviewer: ReviewReviewerConfig;
   env: NodeJS.ProcessEnv;
   adapters?: Partial<Record<string, ReviewAdapter>>;
@@ -948,6 +956,7 @@ function getAdapter(
     return override;
   }
 
+  // Transport-specific branches must stay before SDK-specific branches for dual-path engines.
   if (reviewer.transport === "cli") {
     if (reviewer.sdk === "fake") {
       throw invalidCli("Fake reviewer does not support CLI transport");
@@ -980,6 +989,10 @@ function getAdapter(
 
   if (reviewer.sdk === "droid") {
     return droidAdapter;
+  }
+
+  if (reviewer.sdk === "copilot") {
+    return copilotAdapter;
   }
 
   return createCliAdapter(reviewer.sdk);

@@ -28,7 +28,7 @@
     "test:live": "pnpm live:spend-ok && pnpm test:live:sdk && pnpm test:live:cli && pnpm test:live:e2e",
     "test:live:cli": "pnpm live:spend-ok && INTEGRATION_TEST_ON=1 vitest run --config vitest.live.config.ts test/live/cli-live.test.ts",
     "test:live:e2e": "pnpm live:spend-ok && pnpm build && INTEGRATION_TEST_ON=1 vitest run --config vitest.live.config.ts test/live/e2e-live.test.ts",
-    "test:live:sdk": "pnpm live:spend-ok && INTEGRATION_TEST_ON=1 vitest run --config vitest.live.config.ts test/cursor-adapter.test.ts test/claude-adapter.test.ts test/pi-adapter.test.ts test/droid-adapter.test.ts",
+    "test:live:sdk": "pnpm live:spend-ok && INTEGRATION_TEST_ON=1 vitest run --config vitest.live.config.ts test/cursor-adapter.test.ts test/claude-adapter.test.ts test/pi-adapter.test.ts test/droid-adapter.test.ts test/copilot-adapter.test.ts",
     "live:spend-ok": "tsx scripts/require-live-spend.ts",
     "typecheck": "tsc -p tsconfig.test.json --noEmit"
   },
@@ -40,6 +40,7 @@
     "@cursor/sdk": "^1.0.18",
     "@earendil-works/pi-coding-agent": "0.75.3",
     "@factory/droid-sdk": "^0.3.0",
+    "@github/copilot-sdk": "^1.0.0",
     "commander": "^12.1.0",
     "zod": "^4.4.3"
   },

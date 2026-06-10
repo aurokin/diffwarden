@@ -70,7 +70,7 @@ describe("piAdapter", () => {
       piImplicitModelSelectionScope: "all-authenticated-models",
       piSettingsSource: "in-memory",
       piSettingsDiskInheritance: false,
-      piTimeoutPolicy: "diffwarden-reviewer-timeout",
+      piTimeoutPolicy: "diffwarden-configured-reviewer-timeout",
     });
     expect(preflight?.checks.find((check) => check.name === "model")).toMatchObject({
       status: "passed",
@@ -254,7 +254,7 @@ describe("piAdapter", () => {
     expect(preflight?.metadata).toMatchObject({
       piSettingsSource: "in-memory",
       piSettingsDiskInheritance: false,
-      piTimeoutPolicy: "diffwarden-reviewer-timeout",
+      piTimeoutPolicy: "diffwarden-configured-reviewer-timeout",
       piTransport: "auto",
       piTransportSource: "settings",
       piSteeringMode: "one-at-a-time",
@@ -283,7 +283,7 @@ describe("piAdapter", () => {
     expect(output.metadata).toMatchObject({
       piSettingsSource: "in-memory",
       piSettingsDiskInheritance: false,
-      piTimeoutPolicy: "diffwarden-reviewer-timeout",
+      piTimeoutPolicy: "diffwarden-configured-reviewer-timeout",
       piTransport: "auto",
       piTransportSource: "settings",
       piSteeringMode: "one-at-a-time",

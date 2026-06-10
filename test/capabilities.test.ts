@@ -14,6 +14,7 @@ const expectedReviewerSdks = [
   "claude",
   "pi",
   "droid",
+  "copilot",
   "codex",
   "gemini",
   "opencode",
@@ -32,7 +33,9 @@ describe("reviewerCapabilities", () => {
     expect(defaultReviewerModel("claude")).toBe("sonnet");
     expect(defaultReviewerModel("pi")).toBeUndefined();
     expect(defaultReviewerModel("droid")).toBeUndefined();
+    expect(defaultReviewerModel("copilot")).toBeUndefined();
 
+    expect(defaultReviewerTransport("copilot")).toBeUndefined();
     expect(defaultReviewerTransport("codex")).toBe("cli");
     expect(defaultReviewerTransport("gemini")).toBe("cli");
     expect(defaultReviewerTransport("opencode")).toBe("cli");
@@ -100,6 +103,17 @@ describe("reviewerCapabilities", () => {
     expect(getTransportCapability("claude", "cli")).toMatchObject({
       defaultExecutable: "claude",
       captureMode: "native-structured",
+      readonlyCapability: "tool-restricted",
+    });
+    expect(getTransportCapability("copilot", "sdk")).toMatchObject({
+      captureMode: "text",
+      readonlyCapability: "tool-restricted",
+    });
+    expect(getTransportCapability("copilot", "cli")).toMatchObject({
+      defaultExecutable: "copilot",
+      supportsModel: true,
+      supportsEffort: true,
+      captureMode: "text",
       readonlyCapability: "tool-restricted",
     });
     expect(getTransportCapability("cursor", "cli")).toMatchObject({

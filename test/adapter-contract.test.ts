@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,6 +11,7 @@ import {
 } from "../src/adapters/capabilities.js";
 import { claudeCliReviewPolicyCliFlags } from "../src/adapters/claude-tool-policy.js";
 import { createCliAdapter } from "../src/adapters/cli.js";
+import { copilotCliReviewPolicyCliFlags } from "../src/adapters/copilot-tool-policy.js";
 import {
   droidCliReviewAllowedTools,
   droidCliReviewPolicyCliFlags,
@@ -161,15 +162,19 @@ function cliEngines(): CliEngine[] {
 function createCliHarness(defaultExecutable: string) {
   const root = mkdtempSync(path.join(tmpdir(), "diffwarden-adapter-contract-"));
   roots.push(root);
-  const executable = path.join(root, defaultExecutable);
+  const cwd = path.join(root, "repo");
+  const bin = path.join(root, "bin");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  const executable = path.join(bin, defaultExecutable);
   writeFileSync(executable, fakeCliContractScript(), "utf8");
   chmodSync(executable, 0o755);
 
   return {
-    cwd: root,
+    cwd,
     executable,
     env: {
-      PATH: root,
+      PATH: bin,
     },
   };
 }
@@ -195,6 +200,8 @@ for arg in "$@"; do
     printf '%s' '${claudeCliReviewPolicyCliFlags.join(" ")}'
   elif [ "$executable" = "droid" ]; then
     printf '%s' '${droidCliReviewPolicyCliFlags.join(" ")}'
+  elif [ "$executable" = "copilot" ]; then
+    printf '%s' '${copilotCliReviewPolicyCliFlags.join(" ")}'
   elif [ "$executable" = "gemini" ]; then
     printf '%s' '${geminiCliReviewPolicyCliFlags.join(" ")}'
   elif [ "$executable" = "grok" ]; then
