@@ -34,7 +34,7 @@ Agents call the CLI. The CLI resolves the target diff, runs one or more reviewer
 7. Keep code review read-only by default.
 8. Produce output that is useful to both humans and automation.
 9. Support one, two, or many reviewer agents in one command, including multiple instances of the same SDK with different provider/model configuration.
-10. Ship as a public GitHub repository named `aurokin/diffwarden`; npm distribution is deferred.
+10. Ship as a public GitHub repository named `aurokin/diffwarden`; npm publishes the `diffwarden` CLI package.
 
 ## 3. Scope boundaries
 
@@ -1264,7 +1264,7 @@ Resolved design decisions:
 - Multi-reviewer deduplication: exact file, exact line range, exact priority, and normalized-title match only. Do not fuzzy-merge findings in v1.
 - Adapter shape: adapters run SDKs and capture output; core code owns prompt assembly, parsing, validation, rendering, and aggregation.
 - Cursor sequencing: prove local SDK execution and terminal text capture first; then add a local `review_output` custom tool with streamed `tool_call` capture as the preferred structured-output upgrade, based on `@cursor/sdk@1.0.18` exposing custom tools, MCP config, and tool-call events but no native JSON-schema output option.
-- Package/repository/CLI name: `diffwarden`; public GitHub repo is `aurokin/diffwarden`; npm publishing is deferred.
+- Package/repository/CLI name: `diffwarden`; public GitHub repo is `aurokin/diffwarden`; npm publishing provides the CLI package.
 - Config file name is `diffwarden.config.json`.
 - Config is required for real SDK runs and should be discovered through project config, then XDG user config.
 - `diffwarden init` creates the user-level config.

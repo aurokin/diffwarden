@@ -13,12 +13,19 @@ stay behind adapters.
 
 ## Quick Start
 
+Install from npm:
+
+```bash
+npm install --global diffwarden
+diffwarden --version
+```
+
 Install from the GitHub source release or a local checkout:
 
 ```bash
 git clone https://github.com/aurokin/diffwarden.git
 cd diffwarden
-git checkout v0.3.0
+git checkout v0.3.1
 pnpm install
 pnpm build
 pnpm link --global
@@ -206,11 +213,11 @@ Implemented:
   ephemeral read-only threads.
 - Thin CLI transport adapters for Codex, Gemini, OpenCode, Grok, Antigravity, GitHub
   Copilot, and CLI variants of Cursor, Claude, Pi, and Droid.
+- npm publishing for the `diffwarden` CLI package.
 
 Not implemented:
 
 - Publishing review comments to external services.
-- npm publishing. GitHub source releases are available.
 
 ## Documentation
 
