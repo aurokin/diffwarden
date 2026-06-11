@@ -1,12 +1,14 @@
 {
   "name": "diffwarden",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "A small CLI for agent-callable code review.",
   "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@11.5.2",
   "bin": {
     "diffwarden": "dist/cli.js"
   },
-  "files": ["dist/", "README.md", "docs/", "skills/diffwarden/", "assets/logo.png"],
+  "files": ["dist/", "README.md", "LICENSE", "docs/", "skills/diffwarden/", "assets/logo.png"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aurokin/diffwarden.git"

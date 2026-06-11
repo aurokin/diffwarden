@@ -13,34 +13,53 @@ stay behind adapters.
 
 ## Quick Start
 
-Install from npm:
+Requires Node `>=22.19.0`.
+
+Install the published CLI from npm:
 
 ```bash
 npm install --global diffwarden
 diffwarden --version
 ```
 
-Install from the GitHub source release or a local checkout:
+For a one-off run without a global install:
+
+```bash
+npx --yes diffwarden@latest --version
+```
+
+From any Git checkout, run a credential-free smoke review:
+
+```bash
+diffwarden --target uncommitted --reviewer fake
+```
+
+For real reviews, use an installed and authenticated reviewer. Replace `pi` with the
+reviewer you want to use:
+
+```bash
+diffwarden doctor --reviewer pi
+diffwarden --target base:main --reviewer pi
+```
+
+Create a starter user config when you want to run Diffwarden without passing reviewers
+on every command:
+
+```bash
+diffwarden init
+diffwarden reviewers list
+diffwarden --target base:main
+```
+
+For local development from a source checkout:
 
 ```bash
 git clone https://github.com/aurokin/diffwarden.git
 cd diffwarden
-git checkout v0.3.1
-pnpm install
-pnpm build
-pnpm link --global
-diffwarden --version
-```
-
-For local development without installing the binary:
-
-```bash
 pnpm install
 pnpm build
 pnpm dev -- --target uncommitted --reviewer fake
 ```
-
-The project requires Node `>=22.19.0`.
 
 ## Common Commands
 
@@ -233,10 +252,11 @@ Read from top to bottom until you have enough detail:
    environment defaults.
 6. [`docs/adapters.md`](./docs/adapters.md) - SDK and CLI reviewer adapter behavior.
 7. [`docs/macos.md`](./docs/macos.md) - macOS executable trust and performance triage.
-8. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
+8. [`docs/release.md`](./docs/release.md) - GitHub and npm release process.
+9. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
    commands.
-9. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
-10. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
+10. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
+11. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
 
 ## Design Principles
 
