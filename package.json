@@ -4,7 +4,7 @@
   "description": "A small CLI for agent-callable code review.",
   "type": "module",
   "bin": {
-    "diffwarden": "./dist/cli.js"
+    "diffwarden": "dist/cli.js"
   },
   "files": ["dist/", "README.md", "docs/", "skills/diffwarden/", "assets/logo.png"],
   "repository": {
