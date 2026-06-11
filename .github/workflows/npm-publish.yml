@@ -36,11 +36,21 @@ jobs:
       - name: Check npm version
         id: published
         run: |
-          if npm view "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}" version >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+          package="${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}"
+          for attempt in 1 2 3 4 5 6; do
+            if npm view "$package" version >/dev/null 2>&1; then
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              echo "$package is already published; skipping publish." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+
+            if [ "$attempt" != "6" ]; then
+              sleep 10
+            fi
+          done
+
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+          echo "$package is not published yet; continuing." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enable Corepack
         if: steps.published.outputs.exists == 'false'

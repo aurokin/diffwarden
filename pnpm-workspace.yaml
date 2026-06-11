@@ -1,5 +1,18 @@
 packages:
   - .
 
+allowBuilds:
+  '@biomejs/biome': true
+  '@google/genai': true
+  esbuild: true
+  koffi: true
+  protobufjs: true
+  sqlite3: true
+
 onlyBuiltDependencies:
+  - '@biomejs/biome'
+  - '@google/genai'
+  - esbuild
+  - koffi
+  - protobufjs
   - sqlite3

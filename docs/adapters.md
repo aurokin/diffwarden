@@ -228,8 +228,9 @@ The JSONL store keeps Diffwarden reviews out of Cursor's default persistent loca
 Cursor still does not expose deterministic read/glob/grep-only tool allowlisting for this path,
 so Diffwarden reports prompt-only read-only capability instead of hard enforcement.
 
-The SDK currently depends on `sqlite3`, so `pnpm-workspace.yaml` allows pnpm to run the
-`sqlite3` build script through `onlyBuiltDependencies`.
+Several SDK and toolchain dependencies install native or platform-specific artifacts, so
+`pnpm-workspace.yaml` explicitly approves their install scripts with `allowBuilds` and
+keeps the dependency list mirrored in `onlyBuiltDependencies`.
 
 Live smoke test:
 
