@@ -7,9 +7,9 @@
 A small CLI for agent-callable code review.
 
 `diffwarden` lets coding agents request a review of local changes, a branch diff, or a
-single commit, then receive Markdown or structured JSON findings. The CLI owns target
-resolution, review prompting, parsing, validation, and rendering; reviewer SDKs and CLIs
-stay behind adapters.
+single commit, then receive human display output, agent-readable text, or structured JSON
+findings. The CLI owns target resolution, review prompting, parsing, validation, and
+rendering; reviewer SDKs and CLIs stay behind adapters.
 
 ## Quick Start
 
@@ -31,14 +31,13 @@ npx --yes diffwarden@latest --version
 From any Git checkout, run a credential-free smoke review:
 
 ```bash
-diffwarden --target uncommitted --reviewer fake
+diffwarden review --target uncommitted --reviewer fake
 ```
 
-That command writes the stable JSON artifact by default. For a human-facing display while
-the review runs, use the explicit review surface:
+That command renders the human review display. Agents should opt into direct text output:
 
 ```bash
-diffwarden review --target uncommitted --reviewer fake
+diffwarden review --target uncommitted --reviewer fake --agent
 ```
 
 For real reviews, use an installed and authenticated reviewer. Replace `pi` with the
@@ -46,7 +45,7 @@ reviewer you want to use:
 
 ```bash
 diffwarden doctor --reviewer pi
-diffwarden --target base:main --reviewer pi
+diffwarden review --target base:main --reviewer pi
 ```
 
 Create a starter user config when you want to run Diffwarden without passing reviewers
@@ -55,7 +54,7 @@ on every command:
 ```bash
 diffwarden init
 diffwarden reviewers list
-diffwarden --target base:main
+diffwarden review --target base:main
 ```
 
 For local development from a source checkout:
@@ -65,23 +64,24 @@ git clone https://github.com/aurokin/diffwarden.git
 cd diffwarden
 pnpm install
 pnpm build
-pnpm dev -- --target uncommitted --reviewer fake
+pnpm dev -- review --target uncommitted --reviewer fake
 ```
 
 ## Common Commands
 
 ```bash
-diffwarden --target uncommitted --reviewer fake
-diffwarden --target base:main --reviewer cursor
-diffwarden --target base:main --reviewer claude --model sonnet --effort high
-diffwarden --target base:main --reviewer pi --model anthropic/claude-sonnet-4-5
-diffwarden --target base:main --reviewer droid-cli --model claude-opus-4-7
-diffwarden --target base:main --reviewer-set 2
-diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
-diffwarden --target commit:abc123 --format json
+diffwarden review --target uncommitted --reviewer fake
+diffwarden review --target base:main --reviewer cursor
+diffwarden review --target base:main --reviewer claude --model sonnet --effort high
+diffwarden review --target base:main --reviewer pi --model anthropic/claude-sonnet-4-5
+diffwarden review --target base:main --reviewer droid-cli --model claude-opus-4-7
 diffwarden review --target base:main --reviewer-set 2
-diffwarden --target base:main --reviewer-set 2 --report
-diffwarden --target base:main --reviewer-set 2 --fail-on-findings P2
+diffwarden review --target base:main --reviewer cursor --reviewer pi:openrouter-high
+diffwarden review --target commit:abc123 --json
+diffwarden review --target base:main --reviewer-set 2 --agent
+diffwarden review --target base:main --reviewer-set 2 --report
+diffwarden review --target base:main --reviewer-set 2 --fail-on-findings P2
+diffwarden review show review.json
 ```
 
 Verify reviewer runtime, auth, model, and effort settings without reviewing a diff:
@@ -122,25 +122,26 @@ Create a starter user config with:
 diffwarden init
 ```
 
-## Output Formats
+## Review Output Modes
 
-`--format` selects how results are written to **stdout**:
+`diffwarden review` defaults to a human-facing terminal display. Output modes are explicit:
 
-| Format | Stable machine contract? | What stdout receives |
+| Mode | Stable machine contract? | What stdout receives |
 | --- | --- | --- |
-| `json` (default) | Yes | One final `ReviewArtifact` JSON object after every reviewer finishes |
-| `ndjson` | Yes (versioned event stream) | Newline-delimited review events as work progresses |
-| `markdown` | Human-readable, not a parsing contract | One compatibility report after every reviewer finishes |
+| default | No | Human review display with progress and final summary |
+| `--agent` | Human-readable, agent-oriented | Plain text final summary optimized for coding agents |
+| `--json` | Yes | One final `ReviewArtifact` JSON object after every reviewer finishes |
+| `--ndjson` | Yes (versioned event stream) | Newline-delimited review events as work progresses |
 
-`markdown` and `json` are final-result-only and unchanged: stdout stays empty until
-aggregation completes. They remain the right choice when you only need the finished
-artifact.
+`--agent` and `--json` are final-result-only: stdout stays quiet until aggregation
+completes. `--agent` avoids ANSI, spinners, and framing so coding agents can read findings
+without parsing terminal presentation.
 
-`ndjson` streams typed review events for incremental consumers (agents, CI). Each line is
+`--ndjson` streams typed review events for incremental consumers (agents, CI). Each line is
 one JSON event carrying `schema_version: 2`:
 
 ```bash
-diffwarden --target base:main --reviewer-set 2 --format ndjson
+diffwarden review --target base:main --reviewer-set 2 --ndjson
 ```
 
 ```json
@@ -159,18 +160,17 @@ Event-stream guarantees:
   terminal failure such as all reviewers failing or a strict-mode violation).
 - `reviewer_result` events are **provisional** (`provisional: true`): their findings are
   pre-aggregation and are not yet deduplicated or merged across reviewers. Only
-  `final_result.artifact` is authoritative — treat it as the equivalent of `--format json`.
+  `final_result.artifact` is authoritative; treat it as the equivalent of `--json`.
 - Under concurrency, `reviewer_result`/`reviewer_failed` arrive in completion order, but
   the `reviewers` array in `final_result.artifact` always follows selection order.
 - `--out`, `--report`, and `--fail-on-findings` operate on the final artifact and behave
   identically across formats. In `ndjson` mode a terminal `error` frame is emitted and the
   process exits non-zero without throwing, so the stream stays a clean sequence of frames.
-- `--verbose` only shapes `markdown` and is rejected with all other formats.
 
-Human progress (not a contract): when stdout is `markdown` or `json` **and stderr is a
-TTY**, diffwarden prints per-reviewer progress lines to **stderr** so long multi-reviewer
-runs are not silent. This is purely informational, is suppressed when stderr is not a TTY
-(pipes, CI), and never appears in `ndjson` mode. Only stdout carries the stable contracts.
+Human progress (not a contract): in `--json` mode, when stderr is a TTY, diffwarden prints
+per-reviewer progress lines to **stderr** so long multi-reviewer runs are not silent. This
+is purely informational, is suppressed when stderr is not a TTY (pipes, CI), and never
+appears in `--agent` or `--ndjson` mode. Only stdout carries the stable contracts.
 
 ## Human Review Display
 
@@ -179,25 +179,25 @@ Use `diffwarden review` when a person wants to watch or inspect a run:
 ```bash
 diffwarden review --target base:main --reviewer-set 2
 diffwarden review --target uncommitted --reviewer fake --out review.json
+diffwarden review show review.json
+diffwarden review show review.json --agent
 ```
 
 The review display is intentionally not a stable parsing contract. It renders reviewer
 fan-out, preflight/run status, warnings, failed reviewers, verdict, confidence, and finding
 summaries for humans. It avoids full-screen terminal behavior and falls back to plain text
-outside capable TTYs. Use the default JSON output, `--format json`, `--format ndjson`, or
-`--out` when an agent or script needs data.
-
-Markdown remains available with `--format markdown` for compatibility, but it is no longer
-the default human path.
+outside capable TTYs. Use `--agent`, `--json`, `--ndjson`, or `--out` when an agent or
+script needs data. `review show` can render a saved artifact as human display, `--agent`, or
+`--json`; it does not support `--ndjson` because there is no live event stream to replay.
 
 ## Review History Reports
 
 Reports are opt-in. Use `--report` to persist an analysis-friendly JSON record of a run:
 
 ```bash
-diffwarden --target base:main --reviewer-set 2 --report
-diffwarden --target custom:"Review auth paths" --reviewer pi --report --report-scope repo
-diffwarden --target uncommitted --reviewer fake --report --report-dir ./tmp/reports
+diffwarden review --target base:main --reviewer-set 2 --report
+diffwarden review --target custom:"Review auth paths" --reviewer pi --report --report-scope repo
+diffwarden review --target uncommitted --reviewer fake --report --report-dir ./tmp/reports
 ```
 
 Reports include the cwd, target mode, custom instructions for `custom:<text>` targets,
@@ -289,7 +289,10 @@ Read from top to bottom until you have enough detail:
 - Simple CLI first: agents call one command and get a review.
 - SDK-agnostic internals: adapter differences stay out of core review logic.
 - Codex-style review semantics and output schema.
-- Structured review results first; readable Markdown by default.
+- Light Greptile influence on CLI shape: command surfaces should leave room for
+  human, agent, and machine-readable review modes to grow independently.
+- Human review by default under `review`; explicit `--agent`, `--json`, and `--ndjson`
+  modes for non-human callers.
 - Read-only behavior by default.
 - Adapter read-only guarantees must be documented explicitly.
 - External comment publishing and write-capable tools are permanently out of scope.

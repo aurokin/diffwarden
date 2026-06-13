@@ -137,7 +137,7 @@ but writes and approval escalations are constrained by Codex's sandbox and appro
 ## Codex App Server
 
 ```bash
-diffwarden --target uncommitted --reviewer codex-app-server
+diffwarden review --target uncommitted --reviewer codex-app-server
 ```
 
 The Codex app-server path is configured through a named reviewer with
@@ -212,14 +212,14 @@ parsing path.
 ## Cursor SDK
 
 ```bash
-diffwarden --target uncommitted --reviewer cursor
+diffwarden review --target uncommitted --reviewer cursor
 ```
 
 Requires `CURSOR_API_KEY` in the environment. For local development with zsh-based
 dotfiles, an interactive shell may be needed if the key is exported from `.zshrc`.
 
 ```bash
-zsh -lic 'pnpm dev -- --target uncommitted --reviewer cursor'
+zsh -lic 'pnpm dev -- review --target uncommitted --reviewer cursor'
 ```
 
 The adapter uses `@cursor/sdk` local mode with `mode: "plan"`, `sandboxOptions: { enabled: true }`,
@@ -241,7 +241,7 @@ zsh -lic 'DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk'
 ## Claude SDK
 
 ```bash
-diffwarden --target uncommitted --reviewer claude
+diffwarden review --target uncommitted --reviewer claude
 ```
 
 The Claude adapter can use either a locally authenticated Claude Code executable or
@@ -314,7 +314,7 @@ DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk
 ## Pi SDK
 
 ```bash
-diffwarden --target uncommitted --reviewer pi --model anthropic/claude-sonnet-4-5
+diffwarden review --target uncommitted --reviewer pi --model anthropic/claude-sonnet-4-5
 ```
 
 The adapter loads `@earendil-works/pi-coding-agent`, checks environment-backed
@@ -429,7 +429,7 @@ For provider-qualified CLI runs, either pass the full provider/model string in
 ## Droid
 
 ```bash
-diffwarden --target uncommitted --reviewer droid-cli
+diffwarden review --target uncommitted --reviewer droid-cli
 ```
 
 Prefer Droid's CLI transport for routine reviews. It follows the current `droid exec`
@@ -490,7 +490,7 @@ DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk
 ## GitHub Copilot
 
 ```bash
-diffwarden --target uncommitted --reviewer copilot
+diffwarden review --target uncommitted --reviewer copilot
 ```
 
 The Copilot SDK adapter uses `@github/copilot-sdk` with `mode: "empty"`. Diffwarden disables
@@ -562,17 +562,17 @@ To call the CLI transport directly, define a reviewer id such as:
 Then run:
 
 ```bash
-diffwarden --target uncommitted --reviewer copilot-cli
+diffwarden review --target uncommitted --reviewer copilot-cli
 ```
 
 ## CLI Transports
 
 ```bash
-diffwarden --target uncommitted --reviewer codex
-diffwarden --target uncommitted --reviewer gemini
-diffwarden --target uncommitted --reviewer opencode
-diffwarden --target uncommitted --reviewer grok
-diffwarden --target uncommitted --reviewer antigravity
+diffwarden review --target uncommitted --reviewer codex
+diffwarden review --target uncommitted --reviewer gemini
+diffwarden review --target uncommitted --reviewer opencode
+diffwarden review --target uncommitted --reviewer grok
+diffwarden review --target uncommitted --reviewer antigravity
 ```
 
 The shared CLI adapter performs executable preflight, runs the selected CLI in its most

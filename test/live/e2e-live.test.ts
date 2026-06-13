@@ -59,12 +59,12 @@ describe("live diffwarden CLI e2e", () => {
       const result = await runBuiltDiffwarden(
         fixture.repo,
         [
+          "review",
           "--target",
           "uncommitted",
           "--cwd",
           fixture.repo,
-          "--format",
-          "json",
+          "--json",
           "--strict",
           ...reviewerSpecs.flatMap((reviewer) => ["--reviewer", reviewer]),
         ],

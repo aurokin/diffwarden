@@ -41,19 +41,21 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
    - If neither is available, explain that Diffwarden needs an explicit reviewer, a reviewer
      set, or a config-defined `defaultReviewerSet`.
 
-3. Run `diffwarden` from the repository being reviewed. If running from another directory,
-   pass `--cwd <repo>`.
+3. Run `diffwarden review` from the repository being reviewed. If running from another
+   directory, pass `--cwd <repo>`.
 
-4. Pick an output format:
-   - Use default Markdown for human-facing responses.
-   - Use `--format json` when another tool or agent needs the final structured artifact.
-   - Use `--format ndjson` for incremental consumers that need progress events before the
-     final artifact is ready.
+4. Pick an output mode:
+   - Use `--agent` for the normal coding-agent path. It emits plain text without terminal
+     presentation.
+   - Use `--json` when another tool needs the final structured artifact.
+   - Use `--ndjson` for incremental consumers that need progress events before the final
+     artifact is ready.
+   - Omit mode flags only when a human wants to watch the interactive display.
 
 5. For CI-like checks, use `--fail-on-findings <P0|P1|P2|P3>` only when the user wants an
-   exit-code gate. It preserves normal Markdown or JSON output and exits `1` when final
-   aggregated findings include a prioritized finding at or above the threshold. Findings
-   without `priority` do not trigger the gate.
+   exit-code gate. It preserves normal output and exits `1` when final aggregated findings
+   include a prioritized finding at or above the threshold. Findings without `priority` do
+   not trigger the gate.
 
 6. Read warnings before deciding whether output is complete. Multi-reviewer runs can return
    partial results when one reviewer fails unless `--strict` is used.
@@ -64,18 +66,19 @@ Use real built-in reviewers or configured profile names in `--reviewer`; do not 
 literal placeholder `<reviewer>`.
 
 ```bash
-diffwarden --target base:main
-diffwarden --target base:main --reviewer-set <name|count>
-diffwarden --target commit:<sha> --format json
-diffwarden --target uncommitted --reviewer cursor
-diffwarden --target base:main --reviewer pi
-diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
-diffwarden --target base:main --reviewer claude --model sonnet --effort high
-diffwarden --target base:main --reviewer droid-cli --model claude-opus-4-7 --effort high
-diffwarden --target base:main --reviewer cursor --format json --out review.json
-diffwarden --target base:main --reviewer-set <name> --format ndjson
-diffwarden --target 'custom:Review auth flow and permission checks' --reviewer-set <name>
-diffwarden --target base:main --reviewer-set <name> --fail-on-findings P2
+diffwarden review --target base:main --agent
+diffwarden review --target base:main --reviewer-set <name|count> --agent
+diffwarden review --target commit:<sha> --json
+diffwarden review --target uncommitted --reviewer cursor --agent
+diffwarden review --target base:main --reviewer pi --agent
+diffwarden review --target base:main --reviewer cursor --reviewer pi:openrouter-high --agent
+diffwarden review --target base:main --reviewer claude --model sonnet --effort high --agent
+diffwarden review --target base:main --reviewer droid-cli --model claude-opus-4-7 --effort high --agent
+diffwarden review --target base:main --reviewer cursor --json --out review.json
+diffwarden review show review.json --agent
+diffwarden review --target base:main --reviewer-set <name> --ndjson
+diffwarden review --target 'custom:Review auth flow and permission checks' --reviewer-set <name> --agent
+diffwarden review --target base:main --reviewer-set <name> --fail-on-findings P2 --agent
 diffwarden reviewers list
 diffwarden reviewers list --format json
 diffwarden init
@@ -84,12 +87,12 @@ diffwarden init
 Use `fake` only for credential-free smoke checks, not real review:
 
 ```bash
-diffwarden --target uncommitted --reviewer fake
+diffwarden review --target uncommitted --reviewer fake --agent
 ```
 
 ## Output Handling
 
-- Default Markdown can be shown directly to the user.
+- `--agent` output can be read directly and summarized to the user.
 - JSON artifacts use `schema_version: 2` and include target, result, validation, warnings,
   and per-reviewer artifacts.
 - NDJSON events use `schema_version: 2`. Parse each stdout line as one event. After

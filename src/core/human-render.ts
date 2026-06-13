@@ -100,6 +100,68 @@ export function renderHumanReviewSummary(
   return `${lines.join("\n")}\n`;
 }
 
+export function renderHumanReviewArtifact(
+  artifact: ReviewArtifact,
+  options: HumanReviewRenderOptions = {},
+): string {
+  const style = createStyle(options);
+  const lines = [
+    style.heading("diffwarden review"),
+    `Target: ${formatTarget(artifact.target.kind, artifact.target)}`,
+    `Reviewers: ${formatReviewers(artifact)}`,
+  ];
+
+  return `${lines.join("\n")}\n${renderHumanReviewSummary(artifact, options)}`;
+}
+
+export function renderAgentReviewSummary(artifact: ReviewArtifact): string {
+  const counts = findingCounts(artifact.result.findings);
+  const failedReviewers =
+    artifact.reviewers?.filter((reviewer) => reviewer.status === "failed") ?? [];
+  const successfulReviewers =
+    artifact.reviewers?.filter((reviewer) => reviewer.status !== "failed") ?? [];
+  const findingTotal = artifact.result.findings.length;
+  const lines = [
+    "Diffwarden Review",
+    `Target: ${formatTarget(artifact.target.kind, artifact.target)}`,
+    `Verdict: ${artifact.result.overall_correctness}`,
+    `Confidence: ${formatConfidence(artifact.result.overall_confidence_score)}`,
+    `Findings: ${formatAgentFindingCount(findingTotal, counts)}`,
+    `Reviewers: ${formatReviewers(artifact)}`,
+    `Reviewer status: ${successfulReviewers.length} passed, ${failedReviewers.length} failed`,
+  ];
+
+  if (artifact.warnings !== undefined && artifact.warnings.length > 0) {
+    lines.push("", "Warnings:");
+    for (const warning of artifact.warnings) {
+      lines.push(`- ${warning}`);
+    }
+  }
+
+  if (failedReviewers.length > 0) {
+    lines.push("", "Failed reviewers:");
+    for (const reviewer of failedReviewers) {
+      lines.push(`- ${reviewer.id}: ${reviewer.error?.message ?? "Unknown error"}`);
+    }
+  }
+
+  if (findingTotal === 0) {
+    lines.push("", "No findings.");
+  } else {
+    lines.push("", "Findings:");
+    for (const [index, finding] of [...artifact.result.findings].sort(compareFindings).entries()) {
+      lines.push(...renderAgentFinding(index + 1, finding));
+    }
+  }
+
+  const explanation = artifact.result.overall_explanation.trim();
+  if (explanation !== "") {
+    lines.push("", "Overall explanation:", explanation);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
 export function shouldUseHumanColor(options: {
   env?: NodeJS.ProcessEnv;
   stream?: Pick<NodeJS.WriteStream, "isTTY">;
@@ -148,6 +210,58 @@ function formatFindingCount(
   ].filter((part): part is string => part !== undefined);
 
   return `${total} (${parts.join(", ")})`;
+}
+
+function formatAgentFindingCount(total: number, counts: FindingCounts): string {
+  if (total === 0) {
+    return "0";
+  }
+
+  const parts = [
+    counts.p0 > 0 ? `P0 ${counts.p0}` : undefined,
+    counts.p1 > 0 ? `P1 ${counts.p1}` : undefined,
+    counts.p2 > 0 ? `P2 ${counts.p2}` : undefined,
+    counts.p3 > 0 ? `P3 ${counts.p3}` : undefined,
+    counts.unspecified > 0 ? `Unspecified ${counts.unspecified}` : undefined,
+  ].filter((part): part is string => part !== undefined);
+
+  return `${total} (${parts.join(", ")})`;
+}
+
+function renderAgentFinding(index: number, finding: ReviewArtifactFinding): string[] {
+  const location = finding.code_location;
+  const lines = [
+    `${index}. ${formatPlainPriority(finding.priority)} ${finding.title}`,
+    `File: ${location.absolute_file_path}:${location.line_range.start}-${location.line_range.end}`,
+    `Confidence: ${formatConfidence(finding.confidence_score)}`,
+  ];
+
+  if (finding.reviewer_ids !== undefined && finding.reviewer_ids.length > 0) {
+    lines.push(`Reviewers: ${finding.reviewer_ids.join(", ")}`);
+  }
+
+  const body = finding.body.trim();
+  if (body !== "") {
+    lines.push("Body:", body);
+  }
+
+  return lines;
+}
+
+function formatPlainPriority(priority: ReviewArtifactFinding["priority"]): string {
+  return priority === undefined ? "P?" : `P${priority}`;
+}
+
+function formatReviewers(artifact: ReviewArtifact): string {
+  if (artifact.reviewers !== undefined && artifact.reviewers.length > 0) {
+    return artifact.reviewers.map((reviewer) => reviewer.id).join(", ");
+  }
+
+  if (artifact.engine !== undefined) {
+    return artifact.engine;
+  }
+
+  return "unknown";
 }
 
 function findingCounts(findings: ReviewArtifactFinding[]): FindingCounts {

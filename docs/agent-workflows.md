@@ -4,7 +4,7 @@ Diffwarden is most useful when a coding agent needs a repeatable review gate bef
 reporting, committing, or moving an external issue to done. These workflows are
 prompt patterns for agents that already know how to edit code and run project checks.
 They do not change Diffwarden's CLI contract: the product still accepts a target,
-runs the configured reviewers, and returns Markdown, JSON, or NDJSON.
+runs the configured reviewers, and returns human display, agent text, JSON, or NDJSON.
 
 Raw prompt examples are kept separately:
 
@@ -32,10 +32,10 @@ the decisions made while handling the review.
 Common commands:
 
 ```bash
-diffwarden --target uncommitted
-diffwarden --target uncommitted --reviewer-set 2
-diffwarden --target uncommitted --reviewer cursor --reviewer claude
-diffwarden --target base:main --reviewer-set 2
+diffwarden review --target uncommitted --agent
+diffwarden review --target uncommitted --reviewer-set 2 --agent
+diffwarden review --target uncommitted --reviewer cursor --reviewer claude --agent
+diffwarden review --target base:main --reviewer-set 2 --agent
 ```
 
 If the repo or user config does not define `defaultReviewerSet`, pass an explicit

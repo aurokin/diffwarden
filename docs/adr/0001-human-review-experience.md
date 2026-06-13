@@ -6,14 +6,15 @@ Accepted, 2026-06-13
 
 ## Context
 
-Diffwarden's primary contract is agent-callable code review. Agents and automation should be able
-to run `diffwarden`, receive a stable `ReviewArtifact` as JSON, and make downstream decisions from
-that artifact. Humans still need a first-class way to run or inspect reviews, but that surface should
-not compromise the default machine-readable path.
+Diffwarden's primary contract is agent-callable code review. Agents should be able to run
+`diffwarden review --agent` and receive direct plain text they can act on, while automation can run
+`diffwarden review --json` or `diffwarden review --ndjson` for stable structured contracts. Humans
+still need a first-class way to run or inspect reviews, but that surface should not compromise the
+agent or machine-readable paths.
 
 Two open product issues touch this area:
 
-- AUR-537 proposes making JSON the default output and adding a human terminal UI.
+- AUR-537 proposes adding distinct human, agent, and machine-readable review modes.
 - AUR-567 proposes host-aware reviewer discovery and setup.
 
 The human experience should share the `diffwarden-marketing` "night watch" feel: dark terminal-native
@@ -31,8 +32,10 @@ Instead, build a frameworkless, TTY-aware human review renderer on top of the ex
 The initial human review experience should:
 
 - Use an explicit human entry point such as `diffwarden review` or an explicit human output mode.
-- Keep the default agent path machine-readable, with JSON as the default stdout contract once AUR-537
-  is implemented.
+- Make `diffwarden review` human by default.
+- Make `diffwarden review --agent` the explicit agent-readable plain text path.
+- Make `diffwarden review --json` and `diffwarden review --ndjson` the explicit stable structured
+  contracts.
 - Treat human output as presentation, not a stable parsing contract.
 - Render live reviewer fan-out, reviewer state changes, warnings, failed reviewers, verdict,
   confidence, finding counts, and final finding summaries.
@@ -43,8 +46,8 @@ The initial human review experience should:
   keybindings.
 
 AUR-567 should use the same visual language for discovery, but it should not depend on a full TUI.
-Discovery should remain JSON-first for agents and scripts. Human setup may use plain tables, status
-rows, and a narrow prompt flow for explicit config changes.
+Discovery should keep explicit JSON modes for agents and scripts. Human setup may use plain tables,
+status rows, and a narrow prompt flow for explicit config changes.
 
 ## Deferred
 
@@ -64,7 +67,8 @@ of the marketing site's visual language without inheriting terminal compatibilit
 
 Positive consequences:
 
-- Preserves Diffwarden's simple agent contract.
+- Preserves Diffwarden's simple agent contract while leaving room for human, agent, and schema modes
+  to grow independently.
 - Avoids most tmux, SSH, and CI edge cases associated with full-screen terminal apps.
 - Keeps the dependency footprint small.
 - Lets the human review surface feel designed without turning Diffwarden into a terminal IDE.
@@ -89,10 +93,10 @@ Prefer small, testable presentation modules:
 - Snapshot or process tests that verify non-TTY output remains readable and machine output remains
   clean.
 
-The renderer must never write ANSI presentation, icons, spinners, or progress frames to JSON or NDJSON
-stdout contracts.
+The renderer must never write ANSI presentation, icons, spinners, or progress frames to `--agent`,
+`--json`, or `--ndjson` stdout contracts.
 
 ## Related Issues
 
-- AUR-537: Make JSON the default output and add a human review experience.
+- AUR-537: Make review modes explicit and add a human review experience.
 - AUR-567: Add host-aware reviewer discovery and setup flow.

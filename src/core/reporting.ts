@@ -15,7 +15,7 @@ import type {
 export type ReportingScope = "global" | "repo";
 export type ReportStorageScope = ReportingScope | "custom-dir";
 export type ReportingMode = "full" | "metadata";
-export type ReviewReportOutputFormat = "markdown" | "json" | "ndjson" | "human";
+export type ReviewReportOutputFormat = "human" | "agent" | "json" | "ndjson";
 
 export type ReportingCliOptions = {
   report?: boolean;

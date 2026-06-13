@@ -11,17 +11,22 @@ can request a code review and receive a structured review result.
 The public contract should stay boring:
 
 ```bash
-diffwarden --target base:main
-diffwarden --target uncommitted --reviewer cursor
-diffwarden --target base:main --reviewer claude
-diffwarden --target base:main --reviewer pi
-diffwarden --target commit:abc123
-diffwarden --target base:main --format json
-diffwarden --target base:main --reviewer-set 2
-diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
+diffwarden review --target base:main
+diffwarden review --target uncommitted --reviewer cursor
+diffwarden review --target base:main --reviewer claude
+diffwarden review --target base:main --reviewer pi
+diffwarden review --target commit:abc123
+diffwarden review --target base:main --agent
+diffwarden review --target base:main --json
+diffwarden review --target base:main --reviewer-set 2
+diffwarden review --target base:main --reviewer cursor --reviewer pi:openrouter-high
 ```
 
-Agents call the CLI. The CLI resolves the target diff, runs one or more reviewer agents through SDK or CLI transport adapters, validates the structured result, and prints readable Markdown or JSON.
+Agents call `diffwarden review --agent` when they want direct text they can act on, or
+`diffwarden review --json` when they need the stable artifact. Humans call
+`diffwarden review` and get a terminal display. The CLI resolves the target diff, runs one or
+more reviewer agents through SDK or CLI transport adapters, validates the structured result,
+and renders the selected output mode.
 
 ## 2. Goals
 
@@ -56,7 +61,7 @@ Deferred, but potentially useful later:
 A coding agent has edited files and wants a second opinion before reporting completion.
 
 ```bash
-diffwarden --target uncommitted
+diffwarden review --target uncommitted --agent
 ```
 
 Expected behavior:
@@ -64,14 +69,14 @@ Expected behavior:
 - The CLI finds the git repo root.
 - The CLI builds a diff for uncommitted changes.
 - The CLI asks the configured reviewer set to inspect the patch.
-- The CLI prints a concise Markdown review.
+- The CLI prints a concise agent-readable review.
 
 ### 4.2 Agent reviews branch against main
 
 A coding agent has completed a branch and wants review relative to `main`.
 
 ```bash
-diffwarden --target base:main
+diffwarden review --target base:main
 ```
 
 Expected behavior:
@@ -85,7 +90,7 @@ Expected behavior:
 A coding agent wants review for one completed commit without including unrelated local work.
 
 ```bash
-diffwarden --target commit:abc123
+diffwarden review --target commit:abc123
 ```
 
 Expected behavior:
@@ -100,12 +105,12 @@ Expected behavior:
 A script wants machine-readable findings.
 
 ```bash
-diffwarden --target base:main --format json --out review.json
+diffwarden review --target base:main --json --out review.json
 ```
 
 Expected behavior:
 
-- Stdout contains JSON if `--format json` is selected.
+- Stdout contains JSON if `--json` is selected.
 - `--out` writes the complete review artifact, including metadata and validation results.
 
 ## 5. CLI interface
@@ -113,8 +118,9 @@ Expected behavior:
 ### 5.1 Command
 
 ```bash
-diffwarden [options]
+diffwarden
 diffwarden review [options]
+diffwarden review show <path> [--agent|--json]
 diffwarden reviewers list [--cwd <path>] [--format markdown|json]
 ```
 
@@ -127,30 +133,35 @@ diffwarden reviewers list [--cwd <path>] [--format markdown|json]
 --cwd <path>                      Working directory. Default: process.cwd().
 --model <id>                      Model override for single-reviewer runs.
 --effort <level>                  Reasoning/effort override for single-reviewer runs.
---format markdown|json|ndjson      Output format. Default: json.
+--agent                           Emit plain text optimized for coding agents.
+--json                            Emit final ReviewArtifact JSON.
+--ndjson                          Emit newline-delimited review events.
 --out <path>                      Write full ReviewArtifact JSON to a file.
 --strict                          Fail if structured output cannot be parsed or validated.
 --readonly                        Read-only mode. Default and only supported mode.
 --timeout <seconds>               Reviewer timeout.
 --fail-on-findings <P0|P1|P2|P3>  Exit 1 when prioritized findings meet the threshold.
---verbose                         Include reviewer and validation details.
 --help                            Print usage.
 ```
 
-`diffwarden review` accepts the normal review target/reviewer/reporting options and renders a
-human-facing review display instead of a machine-readable stdout contract. It is presentation,
-not a parsing contract. It should avoid full-screen terminal behavior and degrade to plain text
-outside capable TTYs.
+`diffwarden review` accepts the review target/reviewer/reporting options and renders a
+human-facing review display by default. That display is presentation, not a parsing contract.
+It should avoid full-screen terminal behavior and degrade to plain text outside capable TTYs.
+`--agent`, `--json`, and `--ndjson` are mutually exclusive opt-in modes. `diffwarden review
+show <path>` renders an existing `ReviewArtifact` JSON file through the human display path;
+`review show --agent` and `review show --json` render saved artifacts through those final-output
+contracts. `review show` does not support `--ndjson` because there is no live event stream to
+replay.
 
 `--reviewer` is the primary reviewer selection primitive. A single `--reviewer` is a one-reviewer run; repeated `--reviewer` flags are a multi-reviewer run. If no reviewer is provided, the CLI uses `defaultReviewerSet` from config. Config is required for real SDK runs; do not silently run an unconfigured default.
 
 `--reviewer-set` expands to one or more reviewer specs from config. It supports ergonomic defaults for common cases:
 
 ```text
-diffwarden --reviewer-set 1      Use config reviewerSets["1"].
-diffwarden --reviewer-set 2      Use config reviewerSets["2"].
-diffwarden --reviewer-set 3      Use config reviewerSets["3"].
-diffwarden --reviewer-set deep   Use config reviewerSets["deep"].
+diffwarden review --reviewer-set 1      Use config reviewerSets["1"].
+diffwarden review --reviewer-set 2      Use config reviewerSets["2"].
+diffwarden review --reviewer-set 3      Use config reviewerSets["3"].
+diffwarden review --reviewer-set deep   Use config reviewerSets["deep"].
 ```
 
 `diffwarden reviewers list` loads the discovered config and lists `defaultReviewerSet`,
@@ -203,9 +214,9 @@ Configured reviewers use `transport: "native"` by default for SDK-backed familie
 Model selection is a first-class CLI concern:
 
 ```bash
-diffwarden --target base:main --reviewer claude --model sonnet
-diffwarden --target base:main --reviewer pi --model anthropic/claude-sonnet --effort high
-diffwarden --target base:main --reviewer pi:openrouter-high
+diffwarden review --target base:main --reviewer claude --model sonnet
+diffwarden review --target base:main --reviewer pi --model anthropic/claude-sonnet --effort high
+diffwarden review --target base:main --reviewer pi:openrouter-high
 ```
 
 Rules:
@@ -279,8 +290,8 @@ Error handling rules:
 - Invalid target syntax, invalid reviewer spec, invalid effort value, unknown configured profile, and locally invalid model values exit `2`.
 - Missing SDK package/runtime requirements, missing SDK-required executable, missing authentication, provider setup failure, timeout, and SDK execution failure exit `3`.
 - If an SDK/provider rejects a model that could not be validated locally, exit `3` and print a model-specific message.
-- In Markdown mode, errors should be concise human-readable text on stderr.
-- In JSON mode, errors should be a stable JSON error object on stdout or stderr. Choose one stream during implementation and document it in `--help`.
+- In human and agent modes, errors should be concise human-readable text on stderr.
+- In JSON modes, errors should be a stable JSON error object on stdout or stderr. Choose one stream during implementation and document it in `--help`.
 
 Suggested JSON error shape:
 
@@ -482,7 +493,7 @@ The rubric should preserve Codex's core semantics:
 - Use absolute file paths in structured output.
 - Make line ranges short and overlapping changed lines whenever possible.
 - Always produce the normalized structured result through the adapter when possible.
-- Let the CLI decide whether to render that result as Markdown or JSON.
+- Let the CLI decide whether to render that result for humans, agents, JSON, or NDJSON.
 
 Example target instruction:
 
@@ -619,14 +630,14 @@ Responsibilities:
 - Run reviewers concurrently up to a configurable limit.
 - Support multiple instances of the same SDK, such as two Pi reviewers with different provider profiles.
 - Preserve each reviewer result separately in `ReviewArtifact.reviewers`.
-- Produce a deterministic aggregate `ReviewResult` for JSON, Markdown, and human rendering.
+- Produce a deterministic aggregate `ReviewResult` for human, agent, JSON, and NDJSON rendering.
 
 Initial aggregation behavior should be conservative:
 
-- Human and Markdown renderers should sort findings by priority and location, with reviewer attribution on each finding.
-- Verbose Markdown and full JSON should preserve findings grouped by reviewer.
+- Human and agent renderers should sort findings by priority and location, with reviewer attribution on each finding.
+- Full JSON should preserve findings grouped by reviewer.
 - Deduplicate only when file path, line range, priority, and normalized title are the same. Do not merge fuzzy or merely related findings in v1.
-- If reviewers disagree, preserve the disagreement rather than pretending there is one consensus. Human and Markdown renderers should show lightweight attribution such as `Reported by: claude, pi-openrouter-high` or `Only reported by: cursor-fast`.
+- If reviewers disagree, preserve the disagreement rather than pretending there is one consensus. Human and agent renderers should show lightweight attribution such as `Reported by: claude, pi-openrouter-high` or `Only reported by: cursor-fast`.
 
 Failure behavior:
 
@@ -820,9 +831,9 @@ Findings:
 The current runner design should stay in v1 even if aggregation starts conservative. Single-reviewer, two-reviewer, and fully customized reviewer sets are the same runtime shape:
 
 ```bash
-diffwarden --target base:main
-diffwarden --target base:main --reviewer cursor --reviewer claude
-diffwarden --target base:main --reviewer cursor:fast --reviewer claude:sonnet-high --reviewer pi:openrouter-high
+diffwarden review --target base:main
+diffwarden review --target base:main --reviewer cursor --reviewer claude
+diffwarden review --target base:main --reviewer cursor:fast --reviewer claude:sonnet-high --reviewer pi:openrouter-high
 ```
 
 The runner should treat default review as a one-element reviewer set. This avoids special casing and keeps multi-reviewer behavior foundational rather than bolted on later.
@@ -914,69 +925,75 @@ Non-strict mode:
 
 - Render what can be rendered.
 - Include validation warnings in verbose mode or artifact JSON.
-- A review with useful text but bad location mapping should still be readable in Markdown.
+- A review with useful text but bad location mapping should still be readable in human and
+  agent output.
 
-## 14. Output formats
+## 14. Review output modes
 
-### 14.1 JSON default
+### 14.1 Human default
 
-By default, `diffwarden --target ...` prints the full `ReviewArtifact` JSON object to stdout.
-The full artifact is the stable automation contract because callers need reviewer, target,
-validation, and timing metadata. If a narrower payload becomes useful later, add an explicit
-`--json-result-only` option.
+By default, `diffwarden review --target ...` renders a frameworkless human display from
+`runReviewEvents` and the final `ReviewArtifact`. The display should show reviewer fan-out,
+preflight/run status, warnings, failed reviewers, verdict, confidence, and finding summaries.
+It must not write ANSI presentation, icons, spinners, or human-only layout state into JSON or
+NDJSON contracts.
 
-### 14.2 Markdown compatibility
+### 14.2 Agent output
+
+`diffwarden review --agent` emits plain text optimized for coding agents. It is not JSON and
+does not include ANSI, spinner text, full-screen state, or decorative framing. It should include
+the target, verdict, confidence, finding count, reviewer status, warnings, failed reviewers,
+file/line references, reviewer attribution, finding bodies, and overall explanation.
 
 Example:
 
-```markdown
-# Code Review
-
-Engine: cursor
+```text
+Diffwarden Review
 Target: base:main
 Verdict: patch is incorrect
 Confidence: 0.84
+Findings: 1 (P1 1)
+Reviewers: cursor
+Reviewer status: 1 passed, 0 failed
 
-## Findings
-
-### [P1] Null response can crash retry loop
-
-`src/client.ts:42-44`
-
-When the API returns 204, `response.body` is null, but this code unconditionally calls `response.body.getReader()`, causing retries to fail before the fallback path runs.
-
-## Overall explanation
-
-The patch is mostly sound, but the new streaming branch mishandles empty responses.
+Findings:
+1. P1 [P1] Null response can crash retry loop
+File: src/client.ts:42-44
+Confidence: 0.91
+Body:
+When the API returns 204, response.body is null, but this code unconditionally calls response.body.getReader().
 ```
 
-No-findings example:
+### 14.3 JSON artifact
 
-```markdown
-# Code Review
+Example:
 
-Engine: cursor
-Target: commit:abc123
-Verdict: patch is correct
-Confidence: 0.78
-
-No findings.
-
-## Overall explanation
-
-The reviewed patch does not appear to introduce correctness issues.
+```bash
+diffwarden review --target base:main --json --out review.json
 ```
 
-Markdown is preserved for explicit compatibility through `--format markdown`, but it is not the
-default human path.
+`--json` prints the full `ReviewArtifact` JSON object to stdout. The full artifact is the
+stable automation contract because callers need reviewer, target, validation, and timing
+metadata. `--out` writes the same artifact to a file regardless of display mode. If a narrower
+payload becomes useful later, add an explicit `--json-result-only` option.
 
-### 14.3 Human review display
+### 14.4 NDJSON event stream
 
-`diffwarden review` runs the same review pipeline and renders a frameworkless human display from
-`runReviewEvents` and the final `ReviewArtifact`. The initial display should show reviewer fan-out,
-preflight/run status, warnings, failed reviewers, verdict, confidence, and finding summaries. It
-must not write ANSI presentation, icons, spinners, or human-only layout state into JSON or NDJSON
-contracts.
+```bash
+diffwarden review --target base:main --ndjson
+```
+
+`--ndjson` streams typed `ReviewEvent` frames and terminates with exactly one `final_result` or
+`error` frame. Per-reviewer `reviewer_result` frames are provisional; only
+`final_result.artifact` is authoritative.
+
+### 14.5 Saved artifact view
+
+`diffwarden review show <path>` renders an existing `ReviewArtifact` JSON file through the
+human display path. `diffwarden review show <path> --agent` renders the same plain text as an
+agent-mode final summary, and `diffwarden review show <path> --json` normalizes and prints the
+artifact as JSON. `--ndjson` is rejected for saved artifacts because there are no live review
+events to replay.
 
 See `docs/adr/0001-human-review-experience.md` for the terminal framework decision.
 
@@ -1132,7 +1149,7 @@ Use fixtures for core behavior before live SDK calls.
 - JSON extraction from messy model output
 - schema validation
 - diff hunk overlap validation
-- Markdown rendering
+- human and agent rendering
 - reviewer config expansion
 - model and effort validation
 - adapter preflight error mapping
@@ -1193,7 +1210,7 @@ Deliverables:
 - `uncommitted`, `base:<branch>`, and `commit:<sha>` target resolution.
 - prompt builder.
 - output parser.
-- Markdown renderer.
+- human and agent renderers.
 - JSON ReviewArtifact output.
 - reviewer config expansion.
 - `diffwarden.config.json` project/user discovery and validation.
@@ -1233,8 +1250,8 @@ Deliverables:
 - concurrent reviewer execution with timeout handling.
 - support for multiple reviewer configs using the same SDK.
 - per-reviewer artifacts plus deterministic aggregate rendering.
-- human and Markdown output sorted by priority/location with reviewer attribution.
-- verbose Markdown grouped by reviewer.
+- human and agent output sorted by priority/location with reviewer attribution.
+- full JSON grouped by reviewer.
 
 ### Phase 4: Validation hardening
 
@@ -1254,15 +1271,15 @@ Deliverables:
 
 ## 19. Acceptance criteria for v1
 
-1. Running `diffwarden --target uncommitted` from a git repo uses the default reviewer set from config.
-2. Running `diffwarden --target uncommitted` without any project or user config exits `2` with a clear config-required message.
-3. Running `diffwarden --target base:main --reviewer pi` completes through the Pi Agent SDK and prints JSON.
-4. Running `diffwarden --target base:main --reviewer claude` completes through the Claude Agent SDK and prints JSON.
-5. Running `diffwarden --target base:main --reviewer cursor` completes through the Cursor Agent SDK and prints JSON.
-6. Running `diffwarden --target commit:<sha> --reviewer cursor` reviews only that commit.
-7. Running `diffwarden --target base:main --reviewer-set 2 --format json --out review.json` writes a valid multi-reviewer ReviewArtifact.
-8. Running `diffwarden --target base:main --reviewer cursor --reviewer claude --reviewer pi:openrouter-high --format json --out review.json` writes a valid explicit multi-reviewer ReviewArtifact.
-9. Human and explicit Markdown output sort findings by priority/location and include reviewer attribution; verbose Markdown can group by reviewer.
+1. Running `diffwarden review --target uncommitted` from a git repo uses the default reviewer set from config.
+2. Running `diffwarden review --target uncommitted` without any project or user config exits `2` with a clear config-required message.
+3. Running `diffwarden review --target base:main --reviewer pi --json` completes through the Pi Agent SDK and prints JSON.
+4. Running `diffwarden review --target base:main --reviewer claude --json` completes through the Claude Agent SDK and prints JSON.
+5. Running `diffwarden review --target base:main --reviewer cursor --json` completes through the Cursor Agent SDK and prints JSON.
+6. Running `diffwarden review --target commit:<sha> --reviewer cursor` reviews only that commit.
+7. Running `diffwarden review --target base:main --reviewer-set 2 --json --out review.json` writes a valid multi-reviewer ReviewArtifact.
+8. Running `diffwarden review --target base:main --reviewer cursor --reviewer claude --reviewer pi:openrouter-high --json --out review.json` writes a valid explicit multi-reviewer ReviewArtifact.
+9. Human and `--agent` output sort findings by priority/location and include reviewer attribution.
 10. Multi-reviewer runs render partial successful results with warnings unless all reviewers fail or `--strict` is set.
 11. The CLI exits `2` for invalid targets or non-git directories.
 12. The CLI exits `2` with a clear message for invalid effort values and locally invalid model values.
@@ -1300,12 +1317,12 @@ Resolved design decisions:
 Start with the smallest useful SDK-backed tool that proves the full shape and answers SDK uncertainty before broader implementation:
 
 ```bash
-diffwarden --target uncommitted
-diffwarden --target base:main --reviewer claude --format json
-diffwarden --target base:main --reviewer pi --format json
-diffwarden --target commit:abc123 --reviewer cursor
-diffwarden --target base:main --reviewer-set 2
-diffwarden --target base:main --reviewer cursor --reviewer claude --reviewer pi:openrouter-high
+diffwarden review --target uncommitted
+diffwarden review --target base:main --reviewer claude --json
+diffwarden review --target base:main --reviewer pi --json
+diffwarden review --target commit:abc123 --reviewer cursor
+diffwarden review --target base:main --reviewer-set 2
+diffwarden review --target base:main --reviewer cursor --reviewer claude --reviewer pi:openrouter-high
 ```
 
-Build the core around Codex's review schema and prompt, then implement fake adapters that return fixture `ReviewResult`s. Once the contract is proven, implement the Cursor text-capture spike first because it answers whether the CLI can get useful review output from Cursor with a thin adapter. Then implement Claude native structured output, Pi terminating-tool output, and Cursor's MCP `review_output` upgrade. Keep Markdown as the default renderer because humans and coding agents can both read it, and make full JSON available for automation.
+Build the core around Codex's review schema and prompt, then implement fake adapters that return fixture `ReviewResult`s. Once the contract is proven, implement the Cursor text-capture spike first because it answers whether the CLI can get useful review output from Cursor with a thin adapter. Then implement Claude native structured output, Pi terminating-tool output, and Cursor's MCP `review_output` upgrade. Keep `diffwarden review` human by default, make `--agent` the coding-agent text path, and keep full JSON available through `--json`.

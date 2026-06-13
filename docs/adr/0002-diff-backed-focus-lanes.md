@@ -49,12 +49,12 @@ Configuration may set the default overview behavior:
 The CLI remains the simplest agent-facing plan format:
 
 ```bash
-diffwarden --target base:main --reviewer-set 2 \
+diffwarden review --target base:main --reviewer-set 2 --agent \
   --focus "focus on state management" \
   --focus "focus on the store" \
   --focus "focus on localization"
 
-diffwarden --target base:main --reviewer-set 2 \
+diffwarden review --target base:main --reviewer-set 2 --agent \
   --no-overview \
   --focus "focus on localization"
 ```

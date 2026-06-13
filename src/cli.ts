@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { Command } from "commander";
 import { defaultReviewerModel, defaultReviewerTransport } from "./adapters/capabilities.js";
 import {
@@ -22,12 +23,14 @@ import {
 import { hasFindingAtOrAbovePriority, parseFindingFailureThreshold } from "./core/finding-gate.js";
 import { resolveGitTarget } from "./core/git.js";
 import {
+  renderAgentReviewSummary,
+  renderHumanReviewArtifact,
   renderHumanReviewEvent,
   renderHumanReviewSummary,
   shouldUseHumanColor,
 } from "./core/human-render.js";
 import { type MacosDoctorReport, runMacosDoctor } from "./core/macos.js";
-import { renderJson, renderMarkdown } from "./core/render.js";
+import { renderJson } from "./core/render.js";
 import {
   type ReviewReportOutputFormat,
   resolveReportingOptions,
@@ -39,7 +42,12 @@ import {
   runReviewEvents,
   runReviewerPreflightReport,
 } from "./core/runner.js";
-import type { ReviewArtifact, ReviewEvent, ReviewerError } from "./core/schema.js";
+import {
+  type ReviewArtifact,
+  type ReviewEvent,
+  type ReviewerError,
+  reviewArtifactSchema,
+} from "./core/schema.js";
 import { parseTargetSpec } from "./core/target.js";
 import { version } from "./version.js";
 
@@ -75,7 +83,8 @@ type OverrideSelection = {
   source: ReviewerOverrideSource;
 };
 
-type ReviewOutputFormat = "markdown" | "json" | "ndjson";
+type ReviewOutputMode = "human" | "agent" | "json" | "ndjson";
+type ReviewShowOutputMode = Exclude<ReviewOutputMode, "ndjson">;
 
 type ReviewCliOptions = {
   target: string;
@@ -86,9 +95,8 @@ type ReviewCliOptions = {
   timeout?: string;
   strict?: boolean;
   failOnFindings?: string;
-  verbose?: boolean;
   cwd: string;
-  format: ReviewOutputFormat | "human";
+  mode: ReviewOutputMode;
   out?: string;
   report?: boolean;
   reportDir?: string;
@@ -100,6 +108,14 @@ program
   .name("diffwarden")
   .description("A small CLI for agent-callable code review.")
   .version(version)
+  .showHelpAfterError()
+  .action(() => {
+    program.help();
+  });
+
+const reviewCommand = program
+  .command("review")
+  .description("Run a code review.")
   .option(
     "--target <target>",
     "review target, such as uncommitted, base:main, commit:abc123, or custom:Review auth",
@@ -116,9 +132,10 @@ program
   .option("--timeout <seconds>", "reviewer timeout in seconds")
   .option("--strict", "fail if any reviewer fails")
   .option("--fail-on-findings <priority>", "exit 1 when findings include P0, P1, P2, or P3")
-  .option("--verbose", "include per-reviewer details in Markdown output")
   .option("--cwd <path>", "working directory", process.cwd())
-  .option("--format <format>", "output format: markdown, json, or ndjson", "json")
+  .option("--agent", "emit plain text optimized for coding agents")
+  .option("--json", "emit the final ReviewArtifact JSON")
+  .option("--ndjson", "emit newline-delimited review events")
   .option("--out <path>", "write the full ReviewArtifact JSON to a file")
   .option("--report", "persist this review to report history")
   .option("--no-report", "disable configured report history")
@@ -135,9 +152,10 @@ program
       timeout?: string;
       strict?: boolean;
       failOnFindings?: string;
-      verbose?: boolean;
       cwd: string;
-      format: string;
+      agent?: boolean;
+      json?: boolean;
+      ndjson?: boolean;
       out?: string;
       report?: boolean;
       reportDir?: string;
@@ -145,76 +163,50 @@ program
       reportMode?: string;
     }) => {
       if (!options.target) {
-        program.help();
+        reviewCommand.help();
         return;
       }
 
       await runReviewCli({
         ...options,
         target: options.target,
-        format: parseReviewOutputFormat(options.format),
+        mode: resolveReviewOutputMode(options),
       });
     },
   );
 
-const reviewCommand = program
-  .command("review")
-  .description("Run a review with a human-facing terminal display.")
-  .option(
-    "--target <target>",
-    "review target, such as uncommitted, base:main, commit:abc123, or custom:Review auth",
-  )
-  .option(
-    "--reviewer <spec>",
-    "reviewer spec, such as fake, cursor, claude, pi, droid, codex, gemini, opencode, grok, antigravity, or pi:profile",
-    collectReviewers,
-    [],
-  )
-  .option("--reviewer-set <name>", "reviewer set name from config")
-  .option("--model <id>", "model override for the selected reviewer")
-  .option("--effort <level>", "effort override for the selected reviewer")
-  .option("--timeout <seconds>", "reviewer timeout in seconds")
-  .option("--strict", "fail if any reviewer fails")
-  .option("--fail-on-findings <priority>", "exit 1 when findings include P0, P1, P2, or P3")
+reviewCommand
+  .command("show <path>")
+  .description("Render a saved ReviewArtifact JSON file.")
   .option("--cwd <path>", "working directory", process.cwd())
-  .option("--out <path>", "write the full ReviewArtifact JSON to a file")
-  .option("--report", "persist this review to report history")
-  .option("--no-report", "disable configured report history")
-  .option("--report-dir <path>", "write report history under a custom directory")
-  .option("--report-scope <scope>", "report storage scope: global or repo")
-  .option("--report-mode <mode>", "report content mode: full or metadata")
+  .option("--agent", "emit plain text optimized for coding agents")
+  .option("--json", "emit normalized ReviewArtifact JSON")
   .action(
-    async (options: {
-      target?: string;
-      reviewer: string[];
-      reviewerSet?: string;
-      model?: string;
-      effort?: string;
-      timeout?: string;
-      strict?: boolean;
-      failOnFindings?: string;
-      cwd: string;
-      out?: string;
-      report?: boolean;
-      reportDir?: string;
-      reportScope?: string;
-      reportMode?: string;
-    }) => {
-      if (explicitGlobalOption<string>("format") !== undefined) {
-        throw invalidCli("--format is not compatible with diffwarden review");
-      }
-
-      const resolvedOptions = resolveHumanReviewOptions(options);
-      if (!resolvedOptions.target) {
-        reviewCommand.help();
+    async (
+      artifactPath: string,
+      options: { agent?: boolean; cwd: string; json?: boolean },
+      command,
+    ) => {
+      const mode = resolveReviewShowOutputMode(options);
+      const artifact = await readReviewArtifact(
+        artifactPath,
+        resolveReviewShowCwd(options, command),
+      );
+      if (mode === "json") {
+        process.stdout.write(renderJson(artifact));
         return;
       }
 
-      await runReviewCli({
-        ...resolvedOptions,
-        target: resolvedOptions.target,
-        format: "human",
-      });
+      if (mode === "agent") {
+        process.stdout.write(renderAgentReviewSummary(artifact));
+        return;
+      }
+
+      process.stdout.write(
+        renderHumanReviewArtifact(artifact, {
+          color: shouldUseHumanColor({ env: process.env, stream: process.stdout }),
+        }),
+      );
     },
   );
 
@@ -371,10 +363,6 @@ try {
 }
 
 async function runReviewCli(options: ReviewCliOptions): Promise<void> {
-  if (options.verbose === true && options.format !== "markdown") {
-    throw invalidCli("--verbose is only compatible with --format markdown");
-  }
-
   const failOnFindings =
     options.failOnFindings === undefined
       ? undefined
@@ -412,9 +400,10 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
     },
     ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
   });
-  const ndjson = options.format === "ndjson";
-  const human = options.format === "human";
-  const showProgress = !ndjson && !human && process.stderr.isTTY === true;
+  const ndjson = options.mode === "ndjson";
+  const human = options.mode === "human";
+  const agent = options.mode === "agent";
+  const showProgress = options.mode === "json" && process.stderr.isTTY === true;
   const humanColor = human
     ? shouldUseHumanColor({ env: process.env, stream: process.stdout })
     : false;
@@ -477,15 +466,13 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
 
   if (human) {
     process.stdout.write(renderHumanReviewSummary(artifact, { color: humanColor }));
+  } else if (agent) {
+    process.stdout.write(renderAgentReviewSummary(artifact));
   } else if (!ndjson) {
-    process.stdout.write(
-      options.format === "json"
-        ? renderJson(artifact)
-        : renderMarkdown(artifact, { verbose: options.verbose === true }),
-    );
+    process.stdout.write(renderJson(artifact));
   }
 
-  const provenanceFormat: ReviewReportOutputFormat = options.format;
+  const provenanceFormat: ReviewReportOutputFormat = options.mode;
   await writeReviewReport({
     artifact,
     reporting: reportingOptions,
@@ -513,13 +500,6 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
   ) {
     process.exitCode = 1;
   }
-}
-
-function parseReviewOutputFormat(value: string): ReviewOutputFormat {
-  if (value === "markdown" || value === "json" || value === "ndjson") {
-    return value;
-  }
-  throw invalidCli(`Invalid --format value: ${value}`);
 }
 
 function writeHumanBlock(value: string | undefined): void {
@@ -782,107 +762,6 @@ function resolveDoctorOptions(options: {
   };
 }
 
-function resolveHumanReviewOptions(options: {
-  target?: string;
-  reviewer: string[];
-  reviewerSet?: string;
-  model?: string;
-  effort?: string;
-  timeout?: string;
-  strict?: boolean;
-  failOnFindings?: string;
-  cwd: string;
-  out?: string;
-  report?: boolean;
-  reportDir?: string;
-  reportScope?: string;
-  reportMode?: string;
-}): Omit<ReviewCliOptions, "format" | "target"> & { target?: string } {
-  const globalOptions = program.opts<{
-    reviewer?: string[];
-    reviewerSet?: string;
-    model?: string;
-    effort?: string;
-    timeout?: string;
-    target?: string;
-    cwd?: string;
-    strict?: boolean;
-    failOnFindings?: string;
-    out?: string;
-    report?: boolean;
-    reportDir?: string;
-    reportScope?: string;
-    reportMode?: string;
-  }>();
-  const globalReport = explicitGlobalOption<boolean>("report");
-
-  return {
-    reviewer:
-      options.reviewer.length > 0 ? options.reviewer : (globalOptions.reviewer ?? options.reviewer),
-    ...(options.reviewerSet !== undefined
-      ? { reviewerSet: options.reviewerSet }
-      : globalOptions.reviewerSet !== undefined
-        ? { reviewerSet: globalOptions.reviewerSet }
-        : {}),
-    ...(options.model !== undefined
-      ? { model: options.model }
-      : globalOptions.model !== undefined
-        ? { model: globalOptions.model }
-        : {}),
-    ...(options.effort !== undefined
-      ? { effort: options.effort }
-      : globalOptions.effort !== undefined
-        ? { effort: globalOptions.effort }
-        : {}),
-    ...(options.timeout !== undefined
-      ? { timeout: options.timeout }
-      : globalOptions.timeout !== undefined
-        ? { timeout: globalOptions.timeout }
-        : {}),
-    ...(options.target !== undefined
-      ? { target: options.target }
-      : globalOptions.target !== undefined
-        ? { target: globalOptions.target }
-        : {}),
-    cwd: globalOptions.cwd ?? options.cwd,
-    ...(options.strict !== undefined
-      ? { strict: options.strict }
-      : globalOptions.strict !== undefined
-        ? { strict: globalOptions.strict }
-        : {}),
-    ...(options.failOnFindings !== undefined
-      ? { failOnFindings: options.failOnFindings }
-      : globalOptions.failOnFindings !== undefined
-        ? { failOnFindings: globalOptions.failOnFindings }
-        : {}),
-    ...(options.out !== undefined
-      ? { out: options.out }
-      : globalOptions.out !== undefined
-        ? { out: globalOptions.out }
-        : {}),
-    ...(options.report !== undefined
-      ? { report: options.report }
-      : globalReport !== undefined
-        ? { report: globalReport }
-        : {}),
-    ...(options.reportDir !== undefined
-      ? { reportDir: options.reportDir }
-      : globalOptions.reportDir !== undefined
-        ? { reportDir: globalOptions.reportDir }
-        : {}),
-    ...(options.reportScope !== undefined
-      ? { reportScope: options.reportScope }
-      : globalOptions.reportScope !== undefined
-        ? { reportScope: globalOptions.reportScope }
-        : {}),
-    ...(options.reportMode !== undefined
-      ? { reportMode: options.reportMode }
-      : globalOptions.reportMode !== undefined
-        ? { reportMode: globalOptions.reportMode }
-        : {}),
-  };
-}
-
 function explicitGlobalOption<T>(name: string): T | undefined {
   return program.getOptionValueSource(name) === "default"
     ? undefined
@@ -900,6 +779,81 @@ function overrideSelection(
     return { value: envValue, source: "env" };
   }
   return undefined;
+}
+
+function resolveReviewOutputMode(options: {
+  agent?: boolean;
+  json?: boolean;
+  ndjson?: boolean;
+}): ReviewOutputMode {
+  const selected = [
+    options.agent === true ? "agent" : undefined,
+    options.json === true ? "json" : undefined,
+    options.ndjson === true ? "ndjson" : undefined,
+  ].filter((mode): mode is ReviewOutputMode => mode !== undefined);
+
+  if (selected.length > 1) {
+    throw invalidCli("Choose only one review output mode: --agent, --json, or --ndjson");
+  }
+
+  return selected[0] ?? "human";
+}
+
+function resolveReviewShowOutputMode(options: {
+  agent?: boolean;
+  json?: boolean;
+}): ReviewShowOutputMode {
+  const parentOptions = reviewCommand.opts<{ agent?: boolean; json?: boolean; ndjson?: boolean }>();
+  if (parentOptions.ndjson === true) {
+    throw invalidCli("--ndjson is not compatible with diffwarden review show");
+  }
+
+  const selected = new Set<ReviewShowOutputMode>();
+  if (options.agent === true || parentOptions.agent === true) {
+    selected.add("agent");
+  }
+  if (options.json === true || parentOptions.json === true) {
+    selected.add("json");
+  }
+
+  if (selected.size > 1) {
+    throw invalidCli("Choose only one review show output mode: --agent or --json");
+  }
+
+  return [...selected][0] ?? "human";
+}
+
+function resolveReviewShowCwd(options: { cwd: string }, command: Command): string {
+  if (command.getOptionValueSource("cwd") !== "default") {
+    return options.cwd;
+  }
+
+  return reviewCommand.opts<{ cwd?: string }>().cwd ?? options.cwd;
+}
+
+async function readReviewArtifact(artifactPath: string, cwd: string): Promise<ReviewArtifact> {
+  let raw: string;
+  try {
+    raw = await readFile(path.resolve(cwd, artifactPath), "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "read failed";
+    throw invalidCli(`Unable to read ReviewArtifact JSON: ${message}`);
+  }
+
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid JSON";
+    throw invalidCli(`Invalid ReviewArtifact JSON: ${message}`);
+  }
+
+  const result = reviewArtifactSchema.safeParse(parsedJson);
+  if (!result.success) {
+    throw invalidCli(`Invalid ReviewArtifact JSON: ${result.error.message}`);
+  }
+
+  return result.data;
 }
 
 function normalizeArgv(argv: string[]): string[] {

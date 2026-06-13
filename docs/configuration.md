@@ -24,16 +24,16 @@ diffwarden init
 Use explicit reviewers:
 
 ```bash
-diffwarden --target base:main --reviewer cursor
-diffwarden --target base:main --reviewer claude
-diffwarden --target base:main --reviewer pi:openrouter-high
-diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
+diffwarden review --target base:main --reviewer cursor
+diffwarden review --target base:main --reviewer claude
+diffwarden review --target base:main --reviewer pi:openrouter-high
+diffwarden review --target base:main --reviewer cursor --reviewer pi:openrouter-high
 ```
 
 Use a configured reviewer set:
 
 ```bash
-diffwarden --target base:main --reviewer-set 2
+diffwarden review --target base:main --reviewer-set 2
 ```
 
 When no `--reviewer` or `--reviewer-set` is provided, config must define
@@ -103,19 +103,19 @@ explanations, file paths, and other source-adjacent review content.
 Enable reports for one run:
 
 ```bash
-diffwarden --target base:main --reviewer-set 2 --report
+diffwarden review --target base:main --reviewer-set 2 --report
 ```
 
 Use repo-local history:
 
 ```bash
-diffwarden --target base:main --reviewer-set 2 --report --report-scope repo
+diffwarden review --target base:main --reviewer-set 2 --report --report-scope repo
 ```
 
 Use a custom directory:
 
 ```bash
-diffwarden --target base:main --reviewer-set 2 --report --report-dir ./reports
+diffwarden review --target base:main --reviewer-set 2 --report --report-dir ./reports
 ```
 
 Config can opt in globally or per project:
@@ -518,7 +518,7 @@ primary Codex config:
 Run the configured Droid CLI profile through the normal CLI:
 
 ```bash
-diffwarden --target base:main --reviewer droid-cli --model claude-opus-4-7 --effort high
+diffwarden review --target base:main --reviewer droid-cli --model claude-opus-4-7 --effort high
 ```
 
 ## Claude Auth Mode

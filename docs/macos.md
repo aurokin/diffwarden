@@ -97,9 +97,9 @@ When a run causes machine-wide slowdown, first identify whether the spike is tie
 or to a multi-reviewer burst:
 
 ```bash
-diffwarden --target base:main --reviewer claude
-diffwarden --target base:main --reviewer droid-cli
-diffwarden --target base:main --reviewer-set 2
+diffwarden review --target base:main --reviewer claude
+diffwarden review --target base:main --reviewer droid-cli
+diffwarden review --target base:main --reviewer-set 2
 ```
 
 Then inspect the involved executables:

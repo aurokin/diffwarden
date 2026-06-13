@@ -1,14 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,18 +29,28 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("reviews uncommitted changes with the fake reviewer in JSON by default", async () => {
+  it("shows command help when no command is selected", async () => {
+    const result = await runDiffwarden(process.cwd(), []);
+
+    expect(result.stdout).toContain("Usage: diffwarden");
+    expect(result.stdout).toContain("review");
+    expect(result.stderr).toBe("");
+  });
+
+  it("reviews uncommitted changes with the fake reviewer in JSON mode", async () => {
     const repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
     writeFileSync(path.join(repo, "new.txt"), "new\n");
 
     const result = await runDiffwarden(repo, [
+      "review",
       "--target",
       "uncommitted",
       "--reviewer",
       "fake",
       "--cwd",
       repo,
+      "--json",
     ]);
     const artifact = JSON.parse(result.stdout);
 
@@ -72,25 +74,26 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("preserves explicit Markdown review output", async () => {
+  it("emits plain agent-readable review output", async () => {
     const repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
 
     const result = await runDiffwarden(repo, [
+      "review",
       "--target",
       "uncommitted",
       "--reviewer",
       "fake",
       "--cwd",
       repo,
-      "--format",
-      "markdown",
+      "--agent",
     ]);
 
-    expect(result.stdout).toContain("# Code Review");
-    expect(result.stdout).toContain("Engine: fake");
+    expect(result.stdout).toContain("Diffwarden Review");
     expect(result.stdout).toContain("Target: uncommitted");
+    expect(result.stdout).toContain("Verdict: patch is correct");
     expect(result.stdout).toContain("Fake reviewer inspected 1 changed file(s).");
+    expect(result.stdout).not.toContain("\u001B[");
     expect(result.stderr).toBe("");
   });
 
@@ -98,14 +101,14 @@ describe("diffwarden CLI e2e", () => {
     const repo = createRepo();
 
     const result = await runDiffwarden(repo, [
+      "review",
       "--target",
       "custom:Review auth paths",
       "--reviewer",
       "fake",
       "--cwd",
       repo,
-      "--format",
-      "json",
+      "--json",
     ]);
     const artifact = JSON.parse(result.stdout);
 
@@ -125,14 +128,14 @@ describe("diffwarden CLI e2e", () => {
       await runDiffwarden(
         repo,
         [
+          "review",
           "--target",
           "uncommitted",
           "--reviewer",
           "fake",
           "--cwd",
           repo,
-          "--format",
-          "json",
+          "--json",
           "--out",
           outputPath,
           "--fail-on-findings",
@@ -171,14 +174,14 @@ describe("diffwarden CLI e2e", () => {
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
 
     const result = await runDiffwarden(repo, [
+      "review",
       "--target",
       "uncommitted",
       "--reviewer",
       "fake",
       "--cwd",
       repo,
-      "--format",
-      "ndjson",
+      "--ndjson",
     ]);
 
     const events = parseNdjson(result.stdout);
@@ -195,27 +198,22 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("rejects --verbose unless Markdown output is selected", async () => {
+  it("rejects multiple review output modes", async () => {
     await expect(
       runDiffwarden(process.cwd(), [
+        "review",
         "--target",
         "uncommitted",
         "--reviewer",
         "fake",
-        "--format",
-        "ndjson",
-        "--verbose",
+        "--json",
+        "--ndjson",
       ]),
     ).rejects.toMatchObject({
       code: 2,
-      stderr: expect.stringContaining("--verbose is only compatible with --format markdown"),
-    });
-
-    await expect(
-      runDiffwarden(process.cwd(), ["--target", "uncommitted", "--reviewer", "fake", "--verbose"]),
-    ).rejects.toMatchObject({
-      code: 2,
-      stderr: expect.stringContaining("--verbose is only compatible with --format markdown"),
+      stderr: expect.stringContaining(
+        "Choose only one review output mode: --agent, --json, or --ndjson",
+      ),
     });
   });
 
@@ -227,14 +225,14 @@ describe("diffwarden CLI e2e", () => {
     const expectedDiff = git(repo, ["diff"]);
 
     const result = await runDiffwarden(repo, [
+      "review",
       "--target",
       "uncommitted",
       "--reviewer",
       "fake",
       "--cwd",
       repo,
-      "--format",
-      "json",
+      "--json",
       "--strict",
       "--fail-on-findings",
       "P2",
@@ -304,12 +302,14 @@ describe("diffwarden CLI e2e", () => {
 
     try {
       await runDiffwarden(repo, [
+        "review",
         "--target",
         "uncommitted",
         "--reviewer",
         "fake",
         "--cwd",
         repo,
+        "--json",
         "--report",
         "--report-dir",
         reportDir,
@@ -329,13 +329,13 @@ describe("diffwarden CLI e2e", () => {
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
 
     const result = await runDiffwarden(repo, [
+      "review",
       "--target",
       "uncommitted",
       "--reviewer",
       "fake",
       "--cwd",
       repo,
-      "review",
       "--out",
       outputPath,
     ]);
@@ -355,6 +355,95 @@ describe("diffwarden CLI e2e", () => {
       schema_version: 2,
       engine: "fake",
       target: { kind: "uncommitted" },
+    });
+  });
+
+  it("renders a saved review artifact", async () => {
+    const repo = createRepo();
+    const outputPath = path.join(repo, "review.json");
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    await runDiffwarden(repo, [
+      "review",
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--json",
+      "--out",
+      outputPath,
+    ]);
+
+    const result = await runDiffwarden(repo, ["review", "show", outputPath]);
+
+    expect(result.stdout).toContain("diffwarden review");
+    expect(result.stdout).toContain("Target: uncommitted");
+    expect(result.stdout).toContain("Reviewers: fake");
+    expect(result.stdout).toContain("Verdict: patch is correct");
+    expect(result.stdout).toContain("No findings.");
+    expect(result.stderr).toBe("");
+
+    const parentJsonResult = await runDiffwarden(repo, ["review", "--json", "show", outputPath]);
+    const artifact = JSON.parse(parentJsonResult.stdout);
+    expect(artifact).toMatchObject({
+      schema_version: 2,
+      target: { kind: "uncommitted" },
+    });
+
+    const agentResult = await runDiffwarden(repo, ["review", "show", outputPath, "--agent"]);
+    expect(agentResult.stdout).toContain("Diffwarden Review");
+    expect(agentResult.stdout).toContain("Verdict: patch is correct");
+    expect(agentResult.stdout).not.toContain("\u001B[");
+  });
+
+  it("resolves review show artifact paths relative to review --cwd", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    await runDiffwarden(repo, [
+      "review",
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--json",
+      "--out",
+      "review.json",
+    ]);
+
+    const result = await runDiffwarden(process.cwd(), [
+      "review",
+      "--cwd",
+      repo,
+      "show",
+      "review.json",
+    ]);
+
+    expect(result.stdout).toContain("diffwarden review");
+    expect(result.stdout).toContain("Target: uncommitted");
+    expect(result.stdout).toContain("Reviewers: fake");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects event-stream mode for saved review artifacts", async () => {
+    await expect(
+      runDiffwarden(process.cwd(), ["review", "--ndjson", "show", "missing-review.json"]),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("--ndjson is not compatible with diffwarden review show"),
+    });
+  });
+
+  it("reports missing saved review artifacts as CLI input errors", async () => {
+    await expect(
+      runDiffwarden(process.cwd(), ["review", "show", "missing-review.json"]),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("Unable to read ReviewArtifact JSON"),
     });
   });
 
@@ -589,7 +678,7 @@ function writeDiffwardenConfig(repo: string): void {
 }
 
 function expectedConfigPath(repo: string): string {
-  return path.join(realpathSync(repo), "diffwarden.config.json");
+  return path.join(repo, "diffwarden.config.json");
 }
 
 function isolatedEnv(): NodeJS.ProcessEnv {

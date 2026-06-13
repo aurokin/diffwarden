@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  renderAgentReviewSummary,
+  renderHumanReviewArtifact,
   renderHumanReviewEvent,
   renderHumanReviewSummary,
   shouldUseHumanColor,
@@ -224,6 +226,34 @@ describe("human review rendering", () => {
     expect(summary).toContain("Warnings");
     expect(summary).toContain("Failed reviewers");
     expect(summary).toContain("[P2] Human finding");
+  });
+
+  it("renders a complete saved artifact view", () => {
+    const output = renderHumanReviewArtifact(artifact);
+
+    expect(output).toContain("diffwarden review");
+    expect(output).toContain("Target: uncommitted");
+    expect(output).toContain("Reviewers: fake");
+    expect(output).toContain("Result");
+    expect(output).toContain("Verdict: patch is correct");
+  });
+
+  it("renders plain agent output without ANSI", () => {
+    const output = renderAgentReviewSummary({
+      ...artifact,
+      result: {
+        ...artifact.result,
+        findings: [finding("[P2] Agent finding", 2, "/repo/src/client.ts", 10)],
+        overall_correctness: "patch is incorrect",
+      },
+    });
+
+    expect(output).toContain("Diffwarden Review");
+    expect(output).toContain("Verdict: patch is incorrect");
+    expect(output).toContain("Findings: 1 (P2 1)");
+    expect(output).toContain("1. P2 [P2] Agent finding");
+    expect(output).toContain("File: /repo/src/client.ts:10-10");
+    expect(output).not.toContain("\u001B[");
   });
 
   it("disables human color outside capable TTYs", () => {
