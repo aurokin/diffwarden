@@ -1,6 +1,14 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +37,7 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("reviews uncommitted changes with the fake reviewer in Markdown", async () => {
+  it("reviews uncommitted changes with the fake reviewer in JSON by default", async () => {
     const repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
     writeFileSync(path.join(repo, "new.txt"), "new\n");
@@ -42,11 +50,47 @@ describe("diffwarden CLI e2e", () => {
       "--cwd",
       repo,
     ]);
+    const artifact = JSON.parse(result.stdout);
+
+    expect(artifact).toMatchObject({
+      schema_version: 2,
+      engine: "fake",
+      target: {
+        kind: "uncommitted",
+      },
+      result: {
+        overall_correctness: "patch is correct",
+      },
+    });
+    expect(artifact.target.changed_files).toEqual(
+      expect.arrayContaining(["new.txt", "tracked.txt"]),
+    );
+    expect(artifact.target.changed_files).toHaveLength(2);
+    expect(artifact.result.overall_explanation).toContain(
+      "Fake reviewer inspected 2 changed file(s).",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  it("preserves explicit Markdown review output", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    const result = await runDiffwarden(repo, [
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--format",
+      "markdown",
+    ]);
 
     expect(result.stdout).toContain("# Code Review");
     expect(result.stdout).toContain("Engine: fake");
     expect(result.stdout).toContain("Target: uncommitted");
-    expect(result.stdout).toContain("Fake reviewer inspected 2 changed file(s).");
+    expect(result.stdout).toContain("Fake reviewer inspected 1 changed file(s).");
     expect(result.stderr).toBe("");
   });
 
@@ -151,7 +195,7 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("rejects --format ndjson combined with --verbose", async () => {
+  it("rejects --verbose unless Markdown output is selected", async () => {
     await expect(
       runDiffwarden(process.cwd(), [
         "--target",
@@ -164,7 +208,14 @@ describe("diffwarden CLI e2e", () => {
       ]),
     ).rejects.toMatchObject({
       code: 2,
-      stderr: expect.stringContaining("--verbose is not compatible with --format ndjson"),
+      stderr: expect.stringContaining("--verbose is only compatible with --format markdown"),
+    });
+
+    await expect(
+      runDiffwarden(process.cwd(), ["--target", "uncommitted", "--reviewer", "fake", "--verbose"]),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("--verbose is only compatible with --format markdown"),
     });
   });
 
@@ -267,9 +318,69 @@ describe("diffwarden CLI e2e", () => {
     } catch (error) {
       expect(error).toMatchObject({
         code: 1,
-        stdout: expect.stringContaining("# Code Review"),
+        stdout: expect.stringContaining('"schema_version": 2'),
       });
     }
+  });
+
+  it("runs the explicit human review display and can write JSON with --out", async () => {
+    const repo = createRepo();
+    const outputPath = path.join(repo, "review.json");
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    const result = await runDiffwarden(repo, [
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "review",
+      "--out",
+      outputPath,
+    ]);
+
+    expect(result.stdout).toContain("diffwarden review");
+    expect(result.stdout).toContain("Target: uncommitted");
+    expect(result.stdout).toContain("Reviewers: fake");
+    expect(result.stdout).toContain("fake preflight");
+    expect(result.stdout).toContain("fake reviewing");
+    expect(result.stdout).toContain("Result");
+    expect(result.stdout).toContain("Verdict: patch is correct");
+    expect(result.stdout).toContain("No findings.");
+    expect(result.stderr).toBe("");
+
+    const artifact = JSON.parse(readFileSync(outputPath, "utf8"));
+    expect(artifact).toMatchObject({
+      schema_version: 2,
+      engine: "fake",
+      target: { kind: "uncommitted" },
+    });
+  });
+
+  it("runs the human review display with local review options after the subcommand", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    const result = await runDiffwarden(repo, [
+      "review",
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+    ]);
+
+    expect(result.stdout).toContain("diffwarden review");
+    expect(result.stdout).toContain("Target: uncommitted");
+    expect(result.stdout).toContain("Reviewers: fake");
+    expect(result.stdout).toContain("fake preflight");
+    expect(result.stdout).toContain("fake reviewing");
+    expect(result.stdout).toContain("Result");
+    expect(result.stdout).toContain("Verdict: patch is correct");
+    expect(result.stdout).toContain("No findings.");
+    expect(result.stderr).toBe("");
   });
 
   it("runs doctor preflight checks without requiring a target", async () => {
@@ -307,7 +418,7 @@ describe("diffwarden CLI e2e", () => {
     const result = await runDiffwarden(repo, ["reviewers", "list", "--cwd", repo]);
 
     expect(result.stdout).toContain("# Diffwarden Reviewers");
-    expect(result.stdout).toContain(`Config: ${path.join(repo, "diffwarden.config.json")}`);
+    expect(result.stdout).toContain(`Config: ${expectedConfigPath(repo)}`);
     expect(result.stdout).toContain("Default reviewer set: 2");
     expect(result.stdout).toContain("| 2 | cursor-fast, pi-openrouter-high | yes |");
     expect(result.stdout).toContain(
@@ -338,7 +449,7 @@ describe("diffwarden CLI e2e", () => {
     expect(summary).toMatchObject({
       schema_version: 2,
       config: {
-        path: path.join(repo, "diffwarden.config.json"),
+        path: expectedConfigPath(repo),
         sha256: expect.any(String),
       },
       defaultReviewerSet: "2",
@@ -475,6 +586,10 @@ function writeDiffwardenConfig(repo: string): void {
       2,
     )}\n`,
   );
+}
+
+function expectedConfigPath(repo: string): string {
+  return path.join(realpathSync(repo), "diffwarden.config.json");
 }
 
 function isolatedEnv(): NodeJS.ProcessEnv {

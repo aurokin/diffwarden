@@ -15,6 +15,7 @@ import type {
 export type ReportingScope = "global" | "repo";
 export type ReportStorageScope = ReportingScope | "custom-dir";
 export type ReportingMode = "full" | "metadata";
+export type ReviewReportOutputFormat = "markdown" | "json" | "ndjson" | "human";
 
 export type ReportingCliOptions = {
   report?: boolean;
@@ -94,7 +95,7 @@ export type ReviewReportProvenance = {
     timeout_seconds?: number;
     strict: boolean;
     fail_on_findings?: string;
-    format?: "markdown" | "json" | "ndjson";
+    format?: ReviewReportOutputFormat;
   };
   config?: {
     path: string;
@@ -149,7 +150,7 @@ export type ReviewReportProvenanceInput = {
   timeoutSeconds?: number;
   strict?: boolean;
   failOnFindings?: string;
-  format?: "markdown" | "json" | "ndjson";
+  format?: ReviewReportOutputFormat;
   config?: {
     path: string;
     sha256: string;

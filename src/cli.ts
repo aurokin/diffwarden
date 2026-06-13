@@ -21,9 +21,18 @@ import {
 } from "./core/errors.js";
 import { hasFindingAtOrAbovePriority, parseFindingFailureThreshold } from "./core/finding-gate.js";
 import { resolveGitTarget } from "./core/git.js";
+import {
+  renderHumanReviewEvent,
+  renderHumanReviewSummary,
+  shouldUseHumanColor,
+} from "./core/human-render.js";
 import { type MacosDoctorReport, runMacosDoctor } from "./core/macos.js";
 import { renderJson, renderMarkdown } from "./core/render.js";
-import { resolveReportingOptions, writeReviewReport } from "./core/reporting.js";
+import {
+  type ReviewReportOutputFormat,
+  resolveReportingOptions,
+  writeReviewReport,
+} from "./core/reporting.js";
 import type { ReviewerOverrideSource } from "./core/reviewer.js";
 import {
   type ReviewerPreflightReport,
@@ -35,6 +44,7 @@ import { parseTargetSpec } from "./core/target.js";
 import { version } from "./version.js";
 
 const program = new Command();
+program.enablePositionalOptions();
 const collectReviewers = (value: string, previous: string[]): string[] => [...previous, value];
 const collectValues = (value: string, previous: string[]): string[] => [...previous, value];
 
@@ -65,6 +75,27 @@ type OverrideSelection = {
   source: ReviewerOverrideSource;
 };
 
+type ReviewOutputFormat = "markdown" | "json" | "ndjson";
+
+type ReviewCliOptions = {
+  target: string;
+  reviewer: string[];
+  reviewerSet?: string;
+  model?: string;
+  effort?: string;
+  timeout?: string;
+  strict?: boolean;
+  failOnFindings?: string;
+  verbose?: boolean;
+  cwd: string;
+  format: ReviewOutputFormat | "human";
+  out?: string;
+  report?: boolean;
+  reportDir?: string;
+  reportScope?: string;
+  reportMode?: string;
+};
+
 program
   .name("diffwarden")
   .description("A small CLI for agent-callable code review.")
@@ -87,7 +118,7 @@ program
   .option("--fail-on-findings <priority>", "exit 1 when findings include P0, P1, P2, or P3")
   .option("--verbose", "include per-reviewer details in Markdown output")
   .option("--cwd <path>", "working directory", process.cwd())
-  .option("--format <format>", "output format: markdown, json, or ndjson", "markdown")
+  .option("--format <format>", "output format: markdown, json, or ndjson", "json")
   .option("--out <path>", "write the full ReviewArtifact JSON to a file")
   .option("--report", "persist this review to report history")
   .option("--no-report", "disable configured report history")
@@ -113,157 +144,77 @@ program
       reportScope?: string;
       reportMode?: string;
     }) => {
-      if (
-        options.format !== "markdown" &&
-        options.format !== "json" &&
-        options.format !== "ndjson"
-      ) {
-        throw invalidCli(`Invalid --format value: ${options.format}`);
-      }
-
-      if (options.format === "ndjson" && options.verbose === true) {
-        throw invalidCli("--verbose is not compatible with --format ndjson");
-      }
-
       if (!options.target) {
         program.help();
         return;
       }
 
-      const failOnFindings =
-        options.failOnFindings === undefined
-          ? undefined
-          : parseFindingFailureThreshold(options.failOnFindings);
-      const targetSpec = parseTargetSpec(options.target);
-      const resolved = await resolveGitTarget(options.cwd, targetSpec);
-      const loadedConfig = await loadDiffwardenConfig({
-        cwd: options.cwd,
-        repoRoot: resolved.target.repo_root,
+      await runReviewCli({
+        ...options,
+        target: options.target,
+        format: parseReviewOutputFormat(options.format),
       });
-      const cliTimeoutSeconds = parseTimeoutSeconds("--timeout", options.timeout);
-      const envOptions = resolveReviewEnvOptionsWithSettings(process.env, {
-        includeTimeout: cliTimeoutSeconds === undefined,
-      });
-      const reviewerOptions = resolveReviewerSelectionWithEnv({
-        reviewers: options.reviewer,
-        reviewerSet: options.reviewerSet,
-        envOptions,
-        allowEnvReviewerSelection: loadedConfig !== undefined,
-      });
-      const provenanceReviewerSet =
-        reviewerOptions.reviewerSet ??
-        (reviewerOptions.reviewers === undefined
-          ? loadedConfig?.config.defaultReviewerSet
-          : undefined);
-      const model = overrideSelection(options.model, envOptions.model);
-      const effort = overrideSelection(options.effort, envOptions.effort);
-      const timeoutSeconds = cliTimeoutSeconds ?? envOptions.timeoutSeconds;
-      const reportingOptions = resolveReportingOptions({
-        cwd: options.cwd,
-        repoRoot: resolved.target.repo_root,
-        cli: {
-          ...(options.report !== undefined ? { report: options.report } : {}),
-          ...(options.reportDir !== undefined ? { reportDir: options.reportDir } : {}),
-          ...(options.reportScope !== undefined ? { reportScope: options.reportScope } : {}),
-          ...(options.reportMode !== undefined ? { reportMode: options.reportMode } : {}),
-        },
-        ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
-      });
-      const ndjson = options.format === "ndjson";
-      const showProgress = !ndjson && process.stderr.isTTY === true;
-      const events = runReviewEvents({
-        cwd: options.cwd,
-        resolved,
-        ...reviewerOptions,
-        ...(model !== undefined ? { model: model.value, modelSource: model.source } : {}),
-        ...(effort !== undefined ? { effort: effort.value, effortSource: effort.source } : {}),
-        ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
-        ...(options.strict === true ? { strict: true } : {}),
-        ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
-      });
+    },
+  );
 
-      let artifact: ReviewArtifact | undefined;
-      let terminalError: ReviewerError | undefined;
-      let next = await events.next();
-      while (next.done !== true) {
-        const reviewEvent = next.value;
-        if (ndjson) {
-          process.stdout.write(`${JSON.stringify(reviewEvent)}\n`);
-        } else if (showProgress) {
-          const line = formatReviewProgressLine(reviewEvent);
-          if (line !== undefined) {
-            process.stderr.write(`${line}\n`);
-          }
-        }
-        if (reviewEvent.type === "final_result") {
-          artifact = reviewEvent.artifact;
-        } else if (reviewEvent.type === "error") {
-          terminalError = reviewEvent.error;
-        }
-        next = await events.next();
+const reviewCommand = program
+  .command("review")
+  .description("Run a review with a human-facing terminal display.")
+  .option(
+    "--target <target>",
+    "review target, such as uncommitted, base:main, commit:abc123, or custom:Review auth",
+  )
+  .option(
+    "--reviewer <spec>",
+    "reviewer spec, such as fake, cursor, claude, pi, droid, codex, gemini, opencode, grok, antigravity, or pi:profile",
+    collectReviewers,
+    [],
+  )
+  .option("--reviewer-set <name>", "reviewer set name from config")
+  .option("--model <id>", "model override for the selected reviewer")
+  .option("--effort <level>", "effort override for the selected reviewer")
+  .option("--timeout <seconds>", "reviewer timeout in seconds")
+  .option("--strict", "fail if any reviewer fails")
+  .option("--fail-on-findings <priority>", "exit 1 when findings include P0, P1, P2, or P3")
+  .option("--cwd <path>", "working directory", process.cwd())
+  .option("--out <path>", "write the full ReviewArtifact JSON to a file")
+  .option("--report", "persist this review to report history")
+  .option("--no-report", "disable configured report history")
+  .option("--report-dir <path>", "write report history under a custom directory")
+  .option("--report-scope <scope>", "report storage scope: global or repo")
+  .option("--report-mode <mode>", "report content mode: full or metadata")
+  .action(
+    async (options: {
+      target?: string;
+      reviewer: string[];
+      reviewerSet?: string;
+      model?: string;
+      effort?: string;
+      timeout?: string;
+      strict?: boolean;
+      failOnFindings?: string;
+      cwd: string;
+      out?: string;
+      report?: boolean;
+      reportDir?: string;
+      reportScope?: string;
+      reportMode?: string;
+    }) => {
+      if (explicitGlobalOption<string>("format") !== undefined) {
+        throw invalidCli("--format is not compatible with diffwarden review");
       }
 
-      if (terminalError !== undefined) {
-        // The terminal `error` frame already conveyed the failure. In NDJSON
-        // mode we set the exit code without throwing so the stream stays a
-        // clean sequence of frames; otherwise we throw to reuse the standard
-        // stderr error path.
-        if (ndjson) {
-          process.exitCode = terminalError.exit_code ?? 3;
-          return;
-        }
-        throw new DiffwardenError(
-          terminalError.code as ReviewErrorCode,
-          terminalError.message,
-          terminalError.exit_code ?? 3,
-        );
+      const resolvedOptions = resolveHumanReviewOptions(options);
+      if (!resolvedOptions.target) {
+        reviewCommand.help();
+        return;
       }
 
-      if (artifact === undefined) {
-        throw reviewerFailed("Review produced no result");
-      }
-
-      if (options.out) {
-        await writeFile(options.out, renderJson(artifact));
-      }
-
-      if (!ndjson) {
-        process.stdout.write(
-          options.format === "json"
-            ? renderJson(artifact)
-            : renderMarkdown(artifact, { verbose: options.verbose === true }),
-        );
-      }
-
-      await writeReviewReport({
-        artifact,
-        reporting: reportingOptions,
-        provenance: {
-          diffwardenVersion: version,
-          targetSpec: options.target,
-          ...reviewerOptions,
-          ...(provenanceReviewerSet !== undefined ? { reviewerSet: provenanceReviewerSet } : {}),
-          ...(model !== undefined ? { model: model.value } : {}),
-          ...(effort !== undefined ? { effort: effort.value } : {}),
-          ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
-          strict: options.strict === true,
-          ...(options.failOnFindings !== undefined
-            ? { failOnFindings: options.failOnFindings }
-            : {}),
-          format: options.format,
-          ...(loadedConfig !== undefined
-            ? { config: { path: loadedConfig.path, sha256: loadedConfig.sha256 } }
-            : {}),
-          diff: resolved.diff,
-        },
+      await runReviewCli({
+        ...resolvedOptions,
+        target: resolvedOptions.target,
+        format: "human",
       });
-
-      if (
-        failOnFindings !== undefined &&
-        hasFindingAtOrAbovePriority(artifact.result, failOnFindings)
-      ) {
-        process.exitCode = 1;
-      }
     },
   );
 
@@ -417,6 +368,165 @@ try {
 
   process.stderr.write("Unknown error\n");
   process.exit(1);
+}
+
+async function runReviewCli(options: ReviewCliOptions): Promise<void> {
+  if (options.verbose === true && options.format !== "markdown") {
+    throw invalidCli("--verbose is only compatible with --format markdown");
+  }
+
+  const failOnFindings =
+    options.failOnFindings === undefined
+      ? undefined
+      : parseFindingFailureThreshold(options.failOnFindings);
+  const targetSpec = parseTargetSpec(options.target);
+  const resolved = await resolveGitTarget(options.cwd, targetSpec);
+  const loadedConfig = await loadDiffwardenConfig({
+    cwd: options.cwd,
+    repoRoot: resolved.target.repo_root,
+  });
+  const cliTimeoutSeconds = parseTimeoutSeconds("--timeout", options.timeout);
+  const envOptions = resolveReviewEnvOptionsWithSettings(process.env, {
+    includeTimeout: cliTimeoutSeconds === undefined,
+  });
+  const reviewerOptions = resolveReviewerSelectionWithEnv({
+    reviewers: options.reviewer,
+    reviewerSet: options.reviewerSet,
+    envOptions,
+    allowEnvReviewerSelection: loadedConfig !== undefined,
+  });
+  const provenanceReviewerSet =
+    reviewerOptions.reviewerSet ??
+    (reviewerOptions.reviewers === undefined ? loadedConfig?.config.defaultReviewerSet : undefined);
+  const model = overrideSelection(options.model, envOptions.model);
+  const effort = overrideSelection(options.effort, envOptions.effort);
+  const timeoutSeconds = cliTimeoutSeconds ?? envOptions.timeoutSeconds;
+  const reportingOptions = resolveReportingOptions({
+    cwd: options.cwd,
+    repoRoot: resolved.target.repo_root,
+    cli: {
+      ...(options.report !== undefined ? { report: options.report } : {}),
+      ...(options.reportDir !== undefined ? { reportDir: options.reportDir } : {}),
+      ...(options.reportScope !== undefined ? { reportScope: options.reportScope } : {}),
+      ...(options.reportMode !== undefined ? { reportMode: options.reportMode } : {}),
+    },
+    ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
+  });
+  const ndjson = options.format === "ndjson";
+  const human = options.format === "human";
+  const showProgress = !ndjson && !human && process.stderr.isTTY === true;
+  const humanColor = human
+    ? shouldUseHumanColor({ env: process.env, stream: process.stdout })
+    : false;
+  const events = runReviewEvents({
+    cwd: options.cwd,
+    resolved,
+    ...reviewerOptions,
+    ...(model !== undefined ? { model: model.value, modelSource: model.source } : {}),
+    ...(effort !== undefined ? { effort: effort.value, effortSource: effort.source } : {}),
+    ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    ...(options.strict === true ? { strict: true } : {}),
+    ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
+  });
+
+  let artifact: ReviewArtifact | undefined;
+  let terminalError: ReviewerError | undefined;
+  let next = await events.next();
+  while (next.done !== true) {
+    const reviewEvent = next.value;
+    if (ndjson) {
+      process.stdout.write(`${JSON.stringify(reviewEvent)}\n`);
+    } else if (human) {
+      writeHumanBlock(renderHumanReviewEvent(reviewEvent, { color: humanColor }));
+    } else if (showProgress) {
+      const line = formatReviewProgressLine(reviewEvent);
+      if (line !== undefined) {
+        process.stderr.write(`${line}\n`);
+      }
+    }
+    if (reviewEvent.type === "final_result") {
+      artifact = reviewEvent.artifact;
+    } else if (reviewEvent.type === "error") {
+      terminalError = reviewEvent.error;
+    }
+    next = await events.next();
+  }
+
+  if (terminalError !== undefined) {
+    // The terminal `error` frame already conveyed the failure. In NDJSON mode we
+    // set the exit code without throwing so the stream stays a clean sequence of
+    // frames; otherwise we throw to reuse the standard stderr error path.
+    if (ndjson) {
+      process.exitCode = terminalError.exit_code ?? 3;
+      return;
+    }
+    throw new DiffwardenError(
+      terminalError.code as ReviewErrorCode,
+      terminalError.message,
+      terminalError.exit_code ?? 3,
+    );
+  }
+
+  if (artifact === undefined) {
+    throw reviewerFailed("Review produced no result");
+  }
+
+  if (options.out) {
+    await writeFile(options.out, renderJson(artifact));
+  }
+
+  if (human) {
+    process.stdout.write(renderHumanReviewSummary(artifact, { color: humanColor }));
+  } else if (!ndjson) {
+    process.stdout.write(
+      options.format === "json"
+        ? renderJson(artifact)
+        : renderMarkdown(artifact, { verbose: options.verbose === true }),
+    );
+  }
+
+  const provenanceFormat: ReviewReportOutputFormat = options.format;
+  await writeReviewReport({
+    artifact,
+    reporting: reportingOptions,
+    provenance: {
+      diffwardenVersion: version,
+      targetSpec: options.target,
+      ...reviewerOptions,
+      ...(provenanceReviewerSet !== undefined ? { reviewerSet: provenanceReviewerSet } : {}),
+      ...(model !== undefined ? { model: model.value } : {}),
+      ...(effort !== undefined ? { effort: effort.value } : {}),
+      ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+      strict: options.strict === true,
+      ...(options.failOnFindings !== undefined ? { failOnFindings: options.failOnFindings } : {}),
+      format: provenanceFormat,
+      ...(loadedConfig !== undefined
+        ? { config: { path: loadedConfig.path, sha256: loadedConfig.sha256 } }
+        : {}),
+      diff: resolved.diff,
+    },
+  });
+
+  if (
+    failOnFindings !== undefined &&
+    hasFindingAtOrAbovePriority(artifact.result, failOnFindings)
+  ) {
+    process.exitCode = 1;
+  }
+}
+
+function parseReviewOutputFormat(value: string): ReviewOutputFormat {
+  if (value === "markdown" || value === "json" || value === "ndjson") {
+    return value;
+  }
+  throw invalidCli(`Invalid --format value: ${value}`);
+}
+
+function writeHumanBlock(value: string | undefined): void {
+  if (value === undefined) {
+    return;
+  }
+  process.stdout.write(value.endsWith("\n") ? value : `${value}\n`);
 }
 
 function formatReviewProgressLine(reviewEvent: ReviewEvent): string | undefined {
@@ -608,12 +718,12 @@ function resolveReviewerListOptions(options: { cwd: string; format: string }): {
 } {
   const globalOptions = program.opts<{
     cwd?: string;
-    format?: string;
   }>();
+  const globalFormat = explicitGlobalOption<string>("format");
 
   return {
     cwd: globalOptions.cwd ?? options.cwd,
-    format: globalOptions.format ?? options.format,
+    format: globalFormat ?? options.format,
   };
 }
 
@@ -641,8 +751,8 @@ function resolveDoctorOptions(options: {
     effort?: string;
     timeout?: string;
     cwd?: string;
-    format?: string;
   }>();
+  const globalFormat = explicitGlobalOption<string>("format");
 
   return {
     reviewer:
@@ -668,8 +778,115 @@ function resolveDoctorOptions(options: {
         ? { timeout: globalOptions.timeout }
         : {}),
     cwd: globalOptions.cwd ?? options.cwd,
-    format: globalOptions.format ?? options.format,
+    format: globalFormat ?? options.format,
   };
+}
+
+function resolveHumanReviewOptions(options: {
+  target?: string;
+  reviewer: string[];
+  reviewerSet?: string;
+  model?: string;
+  effort?: string;
+  timeout?: string;
+  strict?: boolean;
+  failOnFindings?: string;
+  cwd: string;
+  out?: string;
+  report?: boolean;
+  reportDir?: string;
+  reportScope?: string;
+  reportMode?: string;
+}): Omit<ReviewCliOptions, "format" | "target"> & { target?: string } {
+  const globalOptions = program.opts<{
+    reviewer?: string[];
+    reviewerSet?: string;
+    model?: string;
+    effort?: string;
+    timeout?: string;
+    target?: string;
+    cwd?: string;
+    strict?: boolean;
+    failOnFindings?: string;
+    out?: string;
+    report?: boolean;
+    reportDir?: string;
+    reportScope?: string;
+    reportMode?: string;
+  }>();
+  const globalReport = explicitGlobalOption<boolean>("report");
+
+  return {
+    reviewer:
+      options.reviewer.length > 0 ? options.reviewer : (globalOptions.reviewer ?? options.reviewer),
+    ...(options.reviewerSet !== undefined
+      ? { reviewerSet: options.reviewerSet }
+      : globalOptions.reviewerSet !== undefined
+        ? { reviewerSet: globalOptions.reviewerSet }
+        : {}),
+    ...(options.model !== undefined
+      ? { model: options.model }
+      : globalOptions.model !== undefined
+        ? { model: globalOptions.model }
+        : {}),
+    ...(options.effort !== undefined
+      ? { effort: options.effort }
+      : globalOptions.effort !== undefined
+        ? { effort: globalOptions.effort }
+        : {}),
+    ...(options.timeout !== undefined
+      ? { timeout: options.timeout }
+      : globalOptions.timeout !== undefined
+        ? { timeout: globalOptions.timeout }
+        : {}),
+    ...(options.target !== undefined
+      ? { target: options.target }
+      : globalOptions.target !== undefined
+        ? { target: globalOptions.target }
+        : {}),
+    cwd: globalOptions.cwd ?? options.cwd,
+    ...(options.strict !== undefined
+      ? { strict: options.strict }
+      : globalOptions.strict !== undefined
+        ? { strict: globalOptions.strict }
+        : {}),
+    ...(options.failOnFindings !== undefined
+      ? { failOnFindings: options.failOnFindings }
+      : globalOptions.failOnFindings !== undefined
+        ? { failOnFindings: globalOptions.failOnFindings }
+        : {}),
+    ...(options.out !== undefined
+      ? { out: options.out }
+      : globalOptions.out !== undefined
+        ? { out: globalOptions.out }
+        : {}),
+    ...(options.report !== undefined
+      ? { report: options.report }
+      : globalReport !== undefined
+        ? { report: globalReport }
+        : {}),
+    ...(options.reportDir !== undefined
+      ? { reportDir: options.reportDir }
+      : globalOptions.reportDir !== undefined
+        ? { reportDir: globalOptions.reportDir }
+        : {}),
+    ...(options.reportScope !== undefined
+      ? { reportScope: options.reportScope }
+      : globalOptions.reportScope !== undefined
+        ? { reportScope: globalOptions.reportScope }
+        : {}),
+    ...(options.reportMode !== undefined
+      ? { reportMode: options.reportMode }
+      : globalOptions.reportMode !== undefined
+        ? { reportMode: globalOptions.reportMode }
+        : {}),
+  };
+}
+
+function explicitGlobalOption<T>(name: string): T | undefined {
+  return program.getOptionValueSource(name) === "default"
+    ? undefined
+    : (program.getOptionValue(name) as T | undefined);
 }
 
 function overrideSelection(

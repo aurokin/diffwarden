@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  renderHumanReviewEvent,
+  renderHumanReviewSummary,
+  shouldUseHumanColor,
+} from "../src/core/human-render.js";
 import { renderMarkdown } from "../src/core/render.js";
 import type { ReviewArtifact, ReviewArtifactFinding } from "../src/core/schema.js";
 
@@ -162,6 +167,70 @@ describe("renderMarkdown", () => {
     expect(markdown.indexOf(p2LaterFinding.title)).toBeLessThan(
       markdown.indexOf(unknownPriorityFinding.title),
     );
+  });
+});
+
+describe("human review rendering", () => {
+  it("renders run events without ANSI by default", () => {
+    const output = renderHumanReviewEvent({
+      schema_version: 2,
+      type: "run_started",
+      cwd: "/repo",
+      target: artifact.target,
+      reviewers: [{ id: "fake", engine: "fake" }],
+    });
+
+    expect(output).toContain("diffwarden review");
+    expect(output).toContain("Target: uncommitted");
+    expect(output).toContain("Reviewers: fake");
+    expect(output).not.toContain("\u001B[");
+  });
+
+  it("renders findings, warnings, and failed reviewers in the summary", () => {
+    const summary = renderHumanReviewSummary({
+      ...artifact,
+      warnings: ["Reviewer claude failed: missing auth"],
+      reviewers: [
+        {
+          id: "fake",
+          engine: "fake",
+          transport: "native",
+          status: "success",
+          result: artifact.result,
+          validation: artifact.validation,
+        },
+        {
+          id: "claude",
+          engine: "claude",
+          transport: "native",
+          status: "failed",
+          error: {
+            code: "missing_auth",
+            message: "missing auth",
+            exit_code: 3,
+          },
+        },
+      ],
+      result: {
+        ...artifact.result,
+        findings: [finding("[P2] Human finding", 2, "/repo/src/client.ts", 10)],
+        overall_correctness: "patch is incorrect",
+      },
+    });
+
+    expect(summary).toContain("Result");
+    expect(summary).toContain("Verdict: patch is incorrect");
+    expect(summary).toContain("Findings: 1 (P2 1)");
+    expect(summary).toContain("Warnings");
+    expect(summary).toContain("Failed reviewers");
+    expect(summary).toContain("[P2] Human finding");
+  });
+
+  it("disables human color outside capable TTYs", () => {
+    expect(shouldUseHumanColor({ env: {}, stream: { isTTY: false } })).toBe(false);
+    expect(shouldUseHumanColor({ env: { TERM: "dumb" }, stream: { isTTY: true } })).toBe(false);
+    expect(shouldUseHumanColor({ env: { NO_COLOR: "1" }, stream: { isTTY: true } })).toBe(false);
+    expect(shouldUseHumanColor({ env: {}, stream: { isTTY: true } })).toBe(true);
   });
 });
 

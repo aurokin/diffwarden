@@ -114,6 +114,7 @@ Expected behavior:
 
 ```bash
 diffwarden [options]
+diffwarden review [options]
 diffwarden reviewers list [--cwd <path>] [--format markdown|json]
 ```
 
@@ -126,7 +127,7 @@ diffwarden reviewers list [--cwd <path>] [--format markdown|json]
 --cwd <path>                      Working directory. Default: process.cwd().
 --model <id>                      Model override for single-reviewer runs.
 --effort <level>                  Reasoning/effort override for single-reviewer runs.
---format markdown|json            Output format. Default: markdown.
+--format markdown|json|ndjson      Output format. Default: json.
 --out <path>                      Write full ReviewArtifact JSON to a file.
 --strict                          Fail if structured output cannot be parsed or validated.
 --readonly                        Read-only mode. Default and only supported mode.
@@ -135,6 +136,11 @@ diffwarden reviewers list [--cwd <path>] [--format markdown|json]
 --verbose                         Include reviewer and validation details.
 --help                            Print usage.
 ```
+
+`diffwarden review` accepts the normal review target/reviewer/reporting options and renders a
+human-facing review display instead of a machine-readable stdout contract. It is presentation,
+not a parsing contract. It should avoid full-screen terminal behavior and degrade to plain text
+outside capable TTYs.
 
 `--reviewer` is the primary reviewer selection primitive. A single `--reviewer` is a one-reviewer run; repeated `--reviewer` flags are a multi-reviewer run. If no reviewer is provided, the CLI uses `defaultReviewerSet` from config. Config is required for real SDK runs; do not silently run an unconfigured default.
 
@@ -613,14 +619,14 @@ Responsibilities:
 - Run reviewers concurrently up to a configurable limit.
 - Support multiple instances of the same SDK, such as two Pi reviewers with different provider profiles.
 - Preserve each reviewer result separately in `ReviewArtifact.reviewers`.
-- Produce a deterministic aggregate `ReviewResult` for default Markdown rendering.
+- Produce a deterministic aggregate `ReviewResult` for JSON, Markdown, and human rendering.
 
 Initial aggregation behavior should be conservative:
 
-- Default Markdown should sort findings by priority and location, with reviewer attribution on each finding.
+- Human and Markdown renderers should sort findings by priority and location, with reviewer attribution on each finding.
 - Verbose Markdown and full JSON should preserve findings grouped by reviewer.
 - Deduplicate only when file path, line range, priority, and normalized title are the same. Do not merge fuzzy or merely related findings in v1.
-- If reviewers disagree, preserve the disagreement rather than pretending there is one consensus. Default Markdown should show lightweight attribution such as `Reported by: claude, pi-openrouter-high` or `Only reported by: cursor-fast`.
+- If reviewers disagree, preserve the disagreement rather than pretending there is one consensus. Human and Markdown renderers should show lightweight attribution such as `Reported by: claude, pi-openrouter-high` or `Only reported by: cursor-fast`.
 
 Failure behavior:
 
@@ -912,7 +918,14 @@ Non-strict mode:
 
 ## 14. Output formats
 
-### 14.1 Markdown default
+### 14.1 JSON default
+
+By default, `diffwarden --target ...` prints the full `ReviewArtifact` JSON object to stdout.
+The full artifact is the stable automation contract because callers need reviewer, target,
+validation, and timing metadata. If a narrower payload becomes useful later, add an explicit
+`--json-result-only` option.
+
+### 14.2 Markdown compatibility
 
 Example:
 
@@ -954,9 +967,18 @@ No findings.
 The reviewed patch does not appear to introduce correctness issues.
 ```
 
-### 14.2 JSON output
+Markdown is preserved for explicit compatibility through `--format markdown`, but it is not the
+default human path.
 
-`--format json` prints the full `ReviewArtifact`. The full artifact is the stable automation contract because callers need reviewer, target, validation, and timing metadata. If a narrower payload becomes useful later, add an explicit `--json-result-only` option.
+### 14.3 Human review display
+
+`diffwarden review` runs the same review pipeline and renders a frameworkless human display from
+`runReviewEvents` and the final `ReviewArtifact`. The initial display should show reviewer fan-out,
+preflight/run status, warnings, failed reviewers, verdict, confidence, and finding summaries. It
+must not write ANSI presentation, icons, spinners, or human-only layout state into JSON or NDJSON
+contracts.
+
+See `docs/adr/0001-human-review-experience.md` for the terminal framework decision.
 
 ## 15. Configuration
 
@@ -1211,7 +1233,7 @@ Deliverables:
 - concurrent reviewer execution with timeout handling.
 - support for multiple reviewer configs using the same SDK.
 - per-reviewer artifacts plus deterministic aggregate rendering.
-- default Markdown sorted by priority/location with reviewer attribution.
+- human and Markdown output sorted by priority/location with reviewer attribution.
 - verbose Markdown grouped by reviewer.
 
 ### Phase 4: Validation hardening
@@ -1234,13 +1256,13 @@ Deliverables:
 
 1. Running `diffwarden --target uncommitted` from a git repo uses the default reviewer set from config.
 2. Running `diffwarden --target uncommitted` without any project or user config exits `2` with a clear config-required message.
-3. Running `diffwarden --target base:main --reviewer pi` completes through the Pi Agent SDK and prints Markdown.
-4. Running `diffwarden --target base:main --reviewer claude` completes through the Claude Agent SDK and prints Markdown.
-5. Running `diffwarden --target base:main --reviewer cursor` completes through the Cursor Agent SDK and prints Markdown.
+3. Running `diffwarden --target base:main --reviewer pi` completes through the Pi Agent SDK and prints JSON.
+4. Running `diffwarden --target base:main --reviewer claude` completes through the Claude Agent SDK and prints JSON.
+5. Running `diffwarden --target base:main --reviewer cursor` completes through the Cursor Agent SDK and prints JSON.
 6. Running `diffwarden --target commit:<sha> --reviewer cursor` reviews only that commit.
 7. Running `diffwarden --target base:main --reviewer-set 2 --format json --out review.json` writes a valid multi-reviewer ReviewArtifact.
 8. Running `diffwarden --target base:main --reviewer cursor --reviewer claude --reviewer pi:openrouter-high --format json --out review.json` writes a valid explicit multi-reviewer ReviewArtifact.
-9. Default multi-reviewer Markdown sorts findings by priority/location and includes reviewer attribution; verbose Markdown can group by reviewer.
+9. Human and explicit Markdown output sort findings by priority/location and include reviewer attribution; verbose Markdown can group by reviewer.
 10. Multi-reviewer runs render partial successful results with warnings unless all reviewers fail or `--strict` is set.
 11. The CLI exits `2` for invalid targets or non-git directories.
 12. The CLI exits `2` with a clear message for invalid effort values and locally invalid model values.

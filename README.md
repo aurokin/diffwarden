@@ -34,6 +34,13 @@ From any Git checkout, run a credential-free smoke review:
 diffwarden --target uncommitted --reviewer fake
 ```
 
+That command writes the stable JSON artifact by default. For a human-facing display while
+the review runs, use the explicit review surface:
+
+```bash
+diffwarden review --target uncommitted --reviewer fake
+```
+
 For real reviews, use an installed and authenticated reviewer. Replace `pi` with the
 reviewer you want to use:
 
@@ -72,6 +79,7 @@ diffwarden --target base:main --reviewer droid-cli --model claude-opus-4-7
 diffwarden --target base:main --reviewer-set 2
 diffwarden --target base:main --reviewer cursor --reviewer pi:openrouter-high
 diffwarden --target commit:abc123 --format json
+diffwarden review --target base:main --reviewer-set 2
 diffwarden --target base:main --reviewer-set 2 --report
 diffwarden --target base:main --reviewer-set 2 --fail-on-findings P2
 ```
@@ -120,9 +128,9 @@ diffwarden init
 
 | Format | Stable machine contract? | What stdout receives |
 | --- | --- | --- |
-| `markdown` (default) | Human-readable, not a parsing contract | One rendered report after every reviewer finishes |
-| `json` | Yes | One final `ReviewArtifact` JSON object after every reviewer finishes |
+| `json` (default) | Yes | One final `ReviewArtifact` JSON object after every reviewer finishes |
 | `ndjson` | Yes (versioned event stream) | Newline-delimited review events as work progresses |
+| `markdown` | Human-readable, not a parsing contract | One compatibility report after every reviewer finishes |
 
 `markdown` and `json` are final-result-only and unchanged: stdout stays empty until
 aggregation completes. They remain the right choice when you only need the finished
@@ -157,12 +165,30 @@ Event-stream guarantees:
 - `--out`, `--report`, and `--fail-on-findings` operate on the final artifact and behave
   identically across formats. In `ndjson` mode a terminal `error` frame is emitted and the
   process exits non-zero without throwing, so the stream stays a clean sequence of frames.
-- `--verbose` only shapes `markdown` and is rejected together with `--format ndjson`.
+- `--verbose` only shapes `markdown` and is rejected with all other formats.
 
 Human progress (not a contract): when stdout is `markdown` or `json` **and stderr is a
 TTY**, diffwarden prints per-reviewer progress lines to **stderr** so long multi-reviewer
 runs are not silent. This is purely informational, is suppressed when stderr is not a TTY
 (pipes, CI), and never appears in `ndjson` mode. Only stdout carries the stable contracts.
+
+## Human Review Display
+
+Use `diffwarden review` when a person wants to watch or inspect a run:
+
+```bash
+diffwarden review --target base:main --reviewer-set 2
+diffwarden review --target uncommitted --reviewer fake --out review.json
+```
+
+The review display is intentionally not a stable parsing contract. It renders reviewer
+fan-out, preflight/run status, warnings, failed reviewers, verdict, confidence, and finding
+summaries for humans. It avoids full-screen terminal behavior and falls back to plain text
+outside capable TTYs. Use the default JSON output, `--format json`, `--format ndjson`, or
+`--out` when an agent or script needs data.
+
+Markdown remains available with `--format markdown` for compatibility, but it is no longer
+the default human path.
 
 ## Review History Reports
 
