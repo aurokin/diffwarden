@@ -269,20 +269,22 @@ Not implemented:
 Read from top to bottom until you have enough detail:
 
 1. `README.md` - quickstart, current status, and common commands.
-2. [`docs/agent-workflows.md`](./docs/agent-workflows.md) - prompt patterns and raw
+2. [`docs/consumer-context.md`](./docs/consumer-context.md) - consumer audience, docs
+   boundaries, and where setup guidance belongs.
+3. [`docs/agent-workflows.md`](./docs/agent-workflows.md) - prompt patterns and raw
    examples for using Diffwarden as an agent review gate.
-3. [`docs/comparisons.md`](./docs/comparisons.md) - Codex review comparison and SDK vs CLI
+4. [`docs/comparisons.md`](./docs/comparisons.md) - Codex review comparison and SDK vs CLI
    transport tradeoffs.
-4. [`docs/features.md`](./docs/features.md) - supported reviewer feature matrix.
-5. [`docs/configuration.md`](./docs/configuration.md) - config files, reviewer sets, and
+5. [`docs/features.md`](./docs/features.md) - supported reviewer feature matrix.
+6. [`docs/configuration.md`](./docs/configuration.md) - config files, reviewer sets, and
    environment defaults.
-6. [`docs/adapters.md`](./docs/adapters.md) - SDK and CLI reviewer adapter behavior.
-7. [`docs/macos.md`](./docs/macos.md) - macOS executable trust and performance triage.
-8. [`docs/release.md`](./docs/release.md) - GitHub and npm release process.
-9. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
+7. [`docs/adapters.md`](./docs/adapters.md) - SDK and CLI reviewer adapter behavior.
+8. [`docs/macos.md`](./docs/macos.md) - macOS executable trust and performance triage.
+9. [`docs/release.md`](./docs/release.md) - GitHub and npm release process.
+10. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
    commands.
-10. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
-11. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
+11. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
+12. [`REFERENCES.md`](./REFERENCES.md) - upstream documentation and source-of-truth links.
 
 ## Design Principles
 

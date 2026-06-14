@@ -6,7 +6,8 @@ description: Use when an agent should run the diffwarden CLI to request read-onl
 # Diffwarden
 
 Use `diffwarden` as a read-only review tool from the repository being reviewed. This skill is
-for agents using Diffwarden.
+for agents using Diffwarden, not for agents developing Diffwarden itself. See
+`docs/consumer-context.md` in the Diffwarden repo for the consumer/contributor boundary.
 
 If the user needs to install this skill, prefer the Skills CLI so agent-specific skill
 directories and lockfiles stay consistent:

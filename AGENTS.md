@@ -30,6 +30,7 @@
 | Need | File |
 | --- | --- |
 | Overview and current status | `README.md` |
+| Consumer audience and docs boundaries | `docs/consumer-context.md` |
 | Configuration and reviewer sets | `docs/configuration.md` |
 | Reviewer adapter behavior | `docs/adapters.md` |
 | Quality commands | `QUALITY.md` |
@@ -38,7 +39,11 @@
 
 ## Key Conventions
 
-- Keep the public UX simple: agents call `diffwarden` and receive Markdown or JSON.
+- Keep the public UX simple: humans call `diffwarden review`; agents call
+  `diffwarden review --agent`; scripts and CI use `diffwarden review --json` or
+  `diffwarden review --ndjson`.
+- Treat consumers as people, scripts, CI jobs, and agents configuring and running
+  Diffwarden from another repository. They are not developing Diffwarden itself.
 - Keep SDK differences behind adapters.
 - Core CLI logic owns target resolution, prompt assembly, parsing, validation, and rendering.
 - Adapters only run their engine and return text or structured output.
