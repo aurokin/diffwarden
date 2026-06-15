@@ -232,7 +232,7 @@ program
   .option("--effort <level>", "effort override for the selected reviewer")
   .option("--timeout <seconds>", "reviewer timeout in seconds")
   .option("--cwd <path>", "working directory", process.cwd())
-  .option("--format <format>", "output format: markdown or json", "markdown")
+  .option("--json", "output machine-readable JSON")
   .action(
     async (options: {
       reviewer: string[];
@@ -241,28 +241,25 @@ program
       effort?: string;
       timeout?: string;
       cwd: string;
-      format: string;
+      json?: boolean;
     }) => {
-      const resolvedOptions = resolveDoctorOptions(options);
-      if (resolvedOptions.format !== "markdown" && resolvedOptions.format !== "json") {
-        throw invalidCli(`Invalid --format value: ${resolvedOptions.format}`);
-      }
-
-      const loadedConfig = await loadDiffwardenConfig({ cwd: resolvedOptions.cwd });
-      const cliTimeoutSeconds = parseTimeoutSeconds("--timeout", resolvedOptions.timeout);
+      // Non-review commands intentionally use command-local options only.
+      // The old root/global merge path was tied to the removed --format surface.
+      const loadedConfig = await loadDiffwardenConfig({ cwd: options.cwd });
+      const cliTimeoutSeconds = parseTimeoutSeconds("--timeout", options.timeout);
       const envOptions = resolveReviewEnvOptionsWithSettings(process.env, {
         includeTimeout: cliTimeoutSeconds === undefined,
       });
       const reviewerOptions = resolveReviewerSelectionWithEnv({
-        reviewers: resolvedOptions.reviewer,
-        reviewerSet: resolvedOptions.reviewerSet,
+        reviewers: options.reviewer,
+        reviewerSet: options.reviewerSet,
         envOptions,
         allowEnvReviewerSelection: loadedConfig !== undefined,
       });
-      const model = overrideSelection(resolvedOptions.model, envOptions.model);
-      const effort = overrideSelection(resolvedOptions.effort, envOptions.effort);
+      const model = overrideSelection(options.model, envOptions.model);
+      const effort = overrideSelection(options.effort, envOptions.effort);
       const report = await runReviewerPreflightReport({
-        cwd: resolvedOptions.cwd,
+        cwd: options.cwd,
         ...reviewerOptions,
         ...(model !== undefined ? { model: model.value, modelSource: model.source } : {}),
         ...(effort !== undefined ? { effort: effort.value, effortSource: effort.source } : {}),
@@ -275,9 +272,9 @@ program
       });
 
       process.stdout.write(
-        resolvedOptions.format === "json"
+        options.json === true
           ? `${JSON.stringify(report, null, 2)}\n`
-          : renderPreflightMarkdown(report),
+          : renderPreflightText(report),
       );
 
       if (report.reviewers.some((reviewer) => reviewer.status === "failed")) {
@@ -292,14 +289,10 @@ reviewers
   .command("list")
   .description("List configured reviewers and reviewer sets without running preflight checks.")
   .option("--cwd <path>", "working directory", process.cwd())
-  .option("--format <format>", "output format: markdown or json", "markdown")
-  .action(async (options: { cwd: string; format: string }) => {
-    const resolvedOptions = resolveReviewerListOptions(options);
-    if (resolvedOptions.format !== "markdown" && resolvedOptions.format !== "json") {
-      throw invalidCli(`Invalid --format value: ${resolvedOptions.format}`);
-    }
-
-    const loadedConfig = await loadDiffwardenConfig({ cwd: resolvedOptions.cwd });
+  .option("--json", "output machine-readable JSON")
+  .action(async (options: { cwd: string; json?: boolean }) => {
+    // Keep reviewer inspection local to this command; root-level aliases are not supported.
+    const loadedConfig = await loadDiffwardenConfig({ cwd: options.cwd });
     if (loadedConfig === undefined) {
       throw invalidConfig(
         "No diffwarden config found; run diffwarden init to create a config or pass --cwd to a configured repository",
@@ -308,9 +301,9 @@ reviewers
 
     const summary = summarizeReviewers(loadedConfig);
     process.stdout.write(
-      resolvedOptions.format === "json"
+      options.json === true
         ? `${JSON.stringify(summary, null, 2)}\n`
-        : renderReviewerListMarkdown(summary),
+        : renderReviewerListText(summary),
     );
   });
 
@@ -538,7 +531,7 @@ function formatProgressTiming(timingMs: number | undefined): string {
   return timingMs === undefined ? "" : ` (${(timingMs / 1000).toFixed(1)}s)`;
 }
 
-function renderPreflightMarkdown(report: ReviewerPreflightReport): string {
+function renderPreflightText(report: ReviewerPreflightReport): string {
   const lines = ["# Diffwarden Doctor", "", `CWD: ${report.cwd}`, ""];
 
   for (const reviewer of report.reviewers) {
@@ -630,7 +623,7 @@ function summarizeReviewers(loadedConfig: LoadedDiffwardenConfig): ReviewerListS
   };
 }
 
-function renderReviewerListMarkdown(summary: ReviewerListSummary): string {
+function renderReviewerListText(summary: ReviewerListSummary): string {
   const lines = [
     "# Diffwarden Reviewers",
     "",
@@ -690,82 +683,6 @@ function publicTransport(transport: "sdk" | "cli" | "app-server"): "native" | "c
 
 function escapeMarkdownTable(value: string): string {
   return value.replaceAll("|", "\\|").replaceAll("\n", " ");
-}
-
-function resolveReviewerListOptions(options: { cwd: string; format: string }): {
-  cwd: string;
-  format: string;
-} {
-  const globalOptions = program.opts<{
-    cwd?: string;
-  }>();
-  const globalFormat = explicitGlobalOption<string>("format");
-
-  return {
-    cwd: globalOptions.cwd ?? options.cwd,
-    format: globalFormat ?? options.format,
-  };
-}
-
-function resolveDoctorOptions(options: {
-  reviewer: string[];
-  reviewerSet?: string;
-  model?: string;
-  effort?: string;
-  timeout?: string;
-  cwd: string;
-  format: string;
-}): {
-  reviewer: string[];
-  reviewerSet?: string;
-  model?: string;
-  effort?: string;
-  timeout?: string;
-  cwd: string;
-  format: string;
-} {
-  const globalOptions = program.opts<{
-    reviewer?: string[];
-    reviewerSet?: string;
-    model?: string;
-    effort?: string;
-    timeout?: string;
-    cwd?: string;
-  }>();
-  const globalFormat = explicitGlobalOption<string>("format");
-
-  return {
-    reviewer:
-      options.reviewer.length > 0 ? options.reviewer : (globalOptions.reviewer ?? options.reviewer),
-    ...(options.reviewerSet !== undefined
-      ? { reviewerSet: options.reviewerSet }
-      : globalOptions.reviewerSet !== undefined
-        ? { reviewerSet: globalOptions.reviewerSet }
-        : {}),
-    ...(options.model !== undefined
-      ? { model: options.model }
-      : globalOptions.model !== undefined
-        ? { model: globalOptions.model }
-        : {}),
-    ...(options.effort !== undefined
-      ? { effort: options.effort }
-      : globalOptions.effort !== undefined
-        ? { effort: globalOptions.effort }
-        : {}),
-    ...(options.timeout !== undefined
-      ? { timeout: options.timeout }
-      : globalOptions.timeout !== undefined
-        ? { timeout: globalOptions.timeout }
-        : {}),
-    cwd: globalOptions.cwd ?? options.cwd,
-    format: globalFormat ?? options.format,
-  };
-}
-
-function explicitGlobalOption<T>(name: string): T | undefined {
-  return program.getOptionValueSource(name) === "default"
-    ? undefined
-    : (program.getOptionValue(name) as T | undefined);
 }
 
 function overrideSelection(

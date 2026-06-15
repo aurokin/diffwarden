@@ -37,6 +37,22 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("rejects command-local options at the root", async () => {
+    await expect(
+      runDiffwarden(process.cwd(), ["--cwd", process.cwd(), "reviewers", "list"]),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("unknown option '--cwd'"),
+    });
+
+    await expect(
+      runDiffwarden(process.cwd(), ["--reviewer", "fake", "doctor"]),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("unknown option '--reviewer'"),
+    });
+  });
+
   it("reviews uncommitted changes with the fake reviewer in JSON mode", async () => {
     const repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
@@ -481,8 +497,7 @@ describe("diffwarden CLI e2e", () => {
       "fake",
       "--cwd",
       repo,
-      "--format",
-      "json",
+      "--json",
     ]);
     const report = JSON.parse(result.stdout);
 
@@ -500,7 +515,7 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("lists configured reviewers in Markdown without running preflight", async () => {
+  it("lists configured reviewers in human text without running preflight", async () => {
     const repo = createRepo();
     writeDiffwardenConfig(repo);
 
@@ -525,14 +540,7 @@ describe("diffwarden CLI e2e", () => {
     const repo = createRepo();
     writeDiffwardenConfig(repo);
 
-    const result = await runDiffwarden(repo, [
-      "reviewers",
-      "list",
-      "--cwd",
-      repo,
-      "--format",
-      "json",
-    ]);
+    const result = await runDiffwarden(repo, ["reviewers", "list", "--cwd", repo, "--json"]);
     const summary = JSON.parse(result.stdout);
 
     expect(summary).toMatchObject({
@@ -651,7 +659,7 @@ function writeDiffwardenConfig(repo: string): void {
             id: "cursor-fast",
             engine: "cursor",
             profile: "fast",
-            transport: "native",
+            transport: "sdk",
             enabled: false,
             model: "composer-2.5",
           },

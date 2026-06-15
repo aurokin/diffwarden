@@ -1,4 +1,4 @@
 interface:
   display_name: "Diffwarden"
   short_description: "Run Diffwarden code reviews"
-  default_prompt: "Use $diffwarden to review the current diff and return concise Markdown findings."
+  default_prompt: "Use $diffwarden to review the current diff and return concise agent-readable findings."

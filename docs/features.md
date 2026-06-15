@@ -4,7 +4,7 @@ This matrix summarizes currently supported reviewer capabilities in Diffwarden. 
 code-owned source of truth is `src/adapters/capabilities.ts`; this page describes
 Diffwarden's adapter behavior, not every feature exposed by the underlying vendor tool.
 All adapter paths are expected to preserve Diffwarden's shared Codex-derived review
-rubric, parsing behavior, validation path, and Markdown/JSON output contract.
+rubric, parsing behavior, validation path, and human/agent/JSON/NDJSON output contract.
 
 Legend:
 
@@ -106,8 +106,10 @@ These features apply across adapter paths:
 | `custom:<text>` targets | yes |
 | Multiple reviewers in one run | yes |
 | Reviewer sets from config | yes |
-| Markdown output | yes |
+| Human review output | yes |
+| Agent text output | yes |
 | JSON output | yes |
+| NDJSON event output | yes |
 | Opt-in review history reports | yes |
 | Finding validation | yes |
 | Finding deduplication and attribution | yes |
@@ -122,13 +124,13 @@ against the changed files and changed-line ranges.
 
 `custom:<text>` targets use the provided text as repository-scoped review instructions.
 They still use the normal reviewer selection, preflight, output parsing, schema validation,
-path validation, aggregation, Markdown rendering, and JSON artifact path. They skip diff
+path validation, aggregation, human/agent rendering, and JSON artifact path. They skip diff
 collection, patch embedding, `changed_files` population, and changed-line overlap
 validation because there is no single target patch.
 
 ## CI Gating
 
-`--fail-on-findings <P0|P1|P2|P3>` keeps the normal Markdown or JSON output, then exits `1`
+`--fail-on-findings <P0|P1|P2|P3>` keeps the selected output mode, then exits `1`
 when the final aggregated findings include a prioritized finding at or above the threshold.
 For example, `--fail-on-findings P2` fails for P0, P1, and P2 findings but not P3 findings.
 Findings without a `priority` do not trigger the gate.

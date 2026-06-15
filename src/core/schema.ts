@@ -218,58 +218,41 @@ export const reviewerErrorSchema = z.object({
 });
 
 const artifactTransportSchema = z.enum(["native", "cli", "app-server"]);
-const legacyArtifactTransportSchema = z.enum(["sdk", "cli"]);
 
-const reviewReviewerArtifactBaseSchema = z.object({
-  id: z.string(),
-  status: z.enum(["success", "failed"]).optional(),
-  profile: z.string().optional(),
-  provider: z.string().optional(),
-  model: z.string().optional(),
-  effort: z.string().optional(),
-  result: reviewArtifactResultSchema.optional(),
-  raw_text: z.string().optional(),
-  preflight: adapterPreflightResultSchema.optional(),
-  usage: z.unknown().optional(),
-  adapter_metadata: z
-    .record(z.string(), z.unknown())
-    .and(
-      z.object({
-        captureMode: z.enum(["native-structured", "tool-call", "text"]).optional(),
-        readonlyCapability: z.enum(["enforced", "tool-restricted", "prompt-only"]).optional(),
-      }),
-    )
-    .optional(),
-  validation: reviewValidationSchema.optional(),
-  error: reviewerErrorSchema.optional(),
-  timing_ms: z.number().nonnegative().optional(),
-});
+const reviewReviewerArtifactBaseSchema = z
+  .object({
+    id: z.string(),
+    status: z.enum(["success", "failed"]).optional(),
+    profile: z.string().optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    effort: z.string().optional(),
+    result: reviewArtifactResultSchema.optional(),
+    raw_text: z.string().optional(),
+    preflight: adapterPreflightResultSchema.optional(),
+    usage: z.unknown().optional(),
+    adapter_metadata: z
+      .record(z.string(), z.unknown())
+      .and(
+        z.object({
+          captureMode: z.enum(["native-structured", "tool-call", "text"]).optional(),
+          readonlyCapability: z.enum(["enforced", "tool-restricted", "prompt-only"]).optional(),
+        }),
+      )
+      .optional(),
+    validation: reviewValidationSchema.optional(),
+    error: reviewerErrorSchema.optional(),
+    timing_ms: z.number().nonnegative().optional(),
+  })
+  .strict();
 
 const reviewReviewerArtifactV2Schema = reviewReviewerArtifactBaseSchema.extend({
   engine: reviewerSdkSchema,
   transport: artifactTransportSchema.optional(),
 });
 
-const reviewReviewerArtifactV1Schema = reviewReviewerArtifactBaseSchema.extend({
-  sdk: reviewerSdkSchema,
-  transport: legacyArtifactTransportSchema.optional(),
-});
-
-export const reviewReviewerArtifactSchema = z
-  .union([reviewReviewerArtifactV2Schema, reviewReviewerArtifactV1Schema])
-  .transform((artifact) => {
-    if ("engine" in artifact) {
-      return artifact;
-    }
-
-    const { sdk, transport, ...rest } = artifact;
-    return {
-      ...rest,
-      engine: sdk,
-      ...(transport !== undefined ? { transport: artifactTransport(transport) } : {}),
-    };
-  })
-  .superRefine((artifact, context) => {
+export const reviewReviewerArtifactSchema = reviewReviewerArtifactV2Schema.superRefine(
+  (artifact, context) => {
     if (artifact.status === "failed") {
       if (artifact.error === undefined) {
         context.addIssue({
@@ -296,54 +279,23 @@ export const reviewReviewerArtifactSchema = z
         path: ["validation"],
       });
     }
-  });
-
-const reviewArtifactV2Schema = z.object({
-  schema_version: z.literal(2),
-  engine: reviewerSdkSchema.optional(),
-  reviewers: z.array(reviewReviewerArtifactSchema).optional(),
-  cwd: z.string(),
-  target: reviewTargetResolvedSchema,
-  result: reviewArtifactResultSchema,
-  raw_text: z.string().optional(),
-  validation: reviewValidationSchema,
-  warnings: z.array(z.string()).optional(),
-  timing_ms: z.number().nonnegative().optional(),
-});
-
-const reviewArtifactV1Schema = z.object({
-  schema_version: z.literal(1),
-  sdk: reviewerSdkSchema.optional(),
-  reviewers: z.array(reviewReviewerArtifactSchema).optional(),
-  cwd: z.string(),
-  target: reviewTargetResolvedSchema,
-  result: reviewArtifactResultSchema,
-  raw_text: z.string().optional(),
-  validation: reviewValidationSchema,
-  warnings: z.array(z.string()).optional(),
-  timing_ms: z.number().nonnegative().optional(),
-});
+  },
+);
 
 export const reviewArtifactSchema = z
-  .union([reviewArtifactV2Schema, reviewArtifactV1Schema])
-  .transform((artifact) => {
-    if ("engine" in artifact || artifact.schema_version === 2) {
-      return artifact;
-    }
-
-    const { sdk, ...rest } = artifact;
-    return {
-      ...rest,
-      schema_version: 2 as const,
-      ...(sdk !== undefined ? { engine: sdk } : {}),
-    };
-  });
-
-function artifactTransport(
-  transport: z.infer<typeof legacyArtifactTransportSchema>,
-): "native" | "cli" | "app-server" {
-  return transport === "sdk" ? "native" : transport;
-}
+  .object({
+    schema_version: z.literal(2),
+    engine: reviewerSdkSchema.optional(),
+    reviewers: z.array(reviewReviewerArtifactSchema).optional(),
+    cwd: z.string(),
+    target: reviewTargetResolvedSchema,
+    result: reviewArtifactResultSchema,
+    raw_text: z.string().optional(),
+    validation: reviewValidationSchema,
+    warnings: z.array(z.string()).optional(),
+    timing_ms: z.number().nonnegative().optional(),
+  })
+  .strict();
 
 export type ReviewPriority = z.infer<typeof reviewPrioritySchema>;
 export type OverallCorrectness = z.infer<typeof overallCorrectnessSchema>;

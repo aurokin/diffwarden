@@ -96,7 +96,7 @@ List configured reviewers and reviewer sets without running preflight checks:
 
 ```bash
 diffwarden reviewers list
-diffwarden reviewers list --format json
+diffwarden reviewers list --json
 ```
 
 Supported v1 targets:

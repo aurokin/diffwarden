@@ -20,7 +20,7 @@ describe("loadDiffwardenConfig", () => {
     const nested = path.join(root, "packages", "app");
     mkdirSync(nested, { recursive: true });
     writeConfig(root, {
-      reviewers: [{ id: "pi-openrouter-high", sdk: "pi", profile: "openrouter-high" }],
+      reviewers: [{ id: "pi-openrouter-high", engine: "pi", profile: "openrouter-high" }],
     });
 
     const loaded = await loadDiffwardenConfig({ cwd: nested, repoRoot: root });
@@ -42,7 +42,7 @@ describe("loadDiffwardenConfig", () => {
     const configDir = path.join(xdg, "diffwarden");
     mkdirSync(configDir, { recursive: true });
     writeConfig(configDir, {
-      reviewers: [{ id: "claude-deep", sdk: "claude", model: "sonnet" }],
+      reviewers: [{ id: "claude-deep", engine: "claude", model: "sonnet" }],
     });
 
     const loaded = await loadDiffwardenConfig({
@@ -58,7 +58,7 @@ describe("loadDiffwardenConfig", () => {
   it("rejects invalid config clearly", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {
-      reviewers: [{ id: "bad", sdk: "unknown" }],
+      reviewers: [{ id: "bad", engine: "unknown" }],
     });
 
     await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toMatchObject({
@@ -73,17 +73,18 @@ describe("loadDiffwardenConfig", () => {
       reviewers: [{ id: "bad" }],
     });
 
-    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toThrow(
-      "Reviewer must define engine",
-    );
+    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+    });
   });
 
-  it("rejects duplicate sdk/profile reviewer entries", async () => {
+  it("rejects duplicate engine/profile reviewer entries", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {
       reviewers: [
-        { id: "pi-openrouter-a", sdk: "pi", profile: "openrouter-high" },
-        { id: "pi-openrouter-b", sdk: "pi", profile: "openrouter-high" },
+        { id: "pi-openrouter-a", engine: "pi", profile: "openrouter-high" },
+        { id: "pi-openrouter-b", engine: "pi", profile: "openrouter-high" },
       ],
     });
 
@@ -95,7 +96,7 @@ describe("loadDiffwardenConfig", () => {
   it("rejects unsupported configured effort values", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {
-      reviewers: [{ id: "pi", sdk: "pi", effort: "max" }],
+      reviewers: [{ id: "pi", engine: "pi", effort: "max" }],
     });
 
     await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toMatchObject({
@@ -110,7 +111,7 @@ describe("loadDiffwardenConfig", () => {
       reviewers: [
         {
           id: "codex-cli",
-          sdk: "codex",
+          engine: "codex",
           transport: "cli",
           cliOptions: {
             executable: "/opt/homebrew/bin/codex",
@@ -161,7 +162,7 @@ describe("loadDiffwardenConfig", () => {
       reviewers: [
         {
           id: "codex-app-server",
-          sdk: "codex",
+          engine: "codex",
           transport: "app-server",
           cliOptions: {
             executable: "/opt/homebrew/bin/codex",
@@ -232,14 +233,14 @@ describe("loadDiffwardenConfig", () => {
     );
   });
 
-  it("loads canonical engine and native transport configuration", async () => {
+  it("loads canonical engine and SDK transport configuration", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {
       reviewers: [
         {
-          id: "claude-native",
+          id: "claude-sdk",
           engine: "claude",
-          transport: "native",
+          transport: "sdk",
         },
       ],
     });
@@ -247,9 +248,33 @@ describe("loadDiffwardenConfig", () => {
     const loaded = await loadDiffwardenConfig({ cwd: root, repoRoot: root });
 
     expect(loaded?.config.reviewers?.[0]).toEqual({
-      id: "claude-native",
+      id: "claude-sdk",
       sdk: "claude",
       transport: "sdk",
+    });
+  });
+
+  it("rejects removed legacy reviewer config fields", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [{ id: "pi-default", sdk: "pi" }],
+    });
+
+    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+    });
+  });
+
+  it("rejects removed native transport alias", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [{ id: "claude-native", engine: "claude", transport: "native" }],
+    });
+
+    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
     });
   });
 
@@ -292,7 +317,7 @@ describe("loadDiffwardenConfig", () => {
   it("rejects SDK transport for CLI-only reviewers", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {
-      reviewers: [{ id: "codex-sdk", sdk: "codex", transport: "sdk" }],
+      reviewers: [{ id: "codex-sdk", engine: "codex", transport: "sdk" }],
     });
 
     await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toThrow(

@@ -121,7 +121,7 @@ Expected behavior:
 diffwarden
 diffwarden review [options]
 diffwarden review show <path> [--agent|--json]
-diffwarden reviewers list [--cwd <path>] [--format markdown|json]
+diffwarden reviewers list [--cwd <path>] [--json]
 ```
 
 ### 5.2 Options
@@ -207,7 +207,7 @@ Model, effort, provider, and SDK-specific options should be handled in two layer
 
 Avoid turning the main CLI into a generic SDK option transport. Provider API keys, base URLs, OpenRouter/OpenCode-style provider selection, effort mappings, executable paths, and SDK-specific options should live in config profiles and be passed to adapters as structured reviewer config.
 
-Configured reviewers use `transport: "native"` by default for SDK-backed families and may set `transport: "cli"` to opt into the direct executable adapter. CLI-only families default to `transport: "cli"`. `cliOptions.executable` can point at non-standard installs without changing the public reviewer spec.
+Configured reviewers use SDK transport by default for SDK-backed families and may set `transport: "cli"` to opt into the direct executable adapter. CLI-only families default to `transport: "cli"`. `cliOptions.executable` can point at non-standard installs without changing the public reviewer spec.
 
 ### 5.3 Model and effort selection
 
@@ -401,7 +401,7 @@ export type ReviewReviewerArtifact = {
 
 ### 7.4 ReviewReviewerConfig
 
-Reviewer config is the internal representation produced from CLI flags, environment variables, and config files. Public config files use `engine`; legacy `sdk` is accepted and normalized internally for compatibility.
+Reviewer config is the internal representation produced from CLI flags, environment variables, and config files. Public config files use `engine`.
 
 ```ts
 export type ReviewReviewerConfig = {
@@ -1307,7 +1307,7 @@ Resolved design decisions:
 - Config file name is `diffwarden.config.json`.
 - Config is required for real SDK runs and should be discovered through project config, then XDG user config.
 - `diffwarden init` creates the user-level config.
-- `ReviewArtifact.schema_version` is `2`; v1 `sdk` and `transport: "sdk"` artifacts are normalized to `engine` and `transport: "native"` when parsed.
+- `ReviewArtifact.schema_version` is `2`; saved artifacts must use `engine` and v2 transport names.
 - Live integration tests are gated by `INTEGRATION_TEST_ON` with `INTEGRATION_DISABLE` as an SDK/CLI denylist.
 - License: MIT.
 - Package manager/tooling: `pnpm`, `tsx`, `vitest`, `zod`, strict TypeScript, formatting, linting, and complexity enforcement from the first scaffold.

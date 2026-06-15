@@ -56,15 +56,71 @@ describe("reviewResultJsonSchema", () => {
 });
 
 describe("reviewArtifactSchema", () => {
-  it("normalizes v1 sdk artifacts to v2 engine artifacts", () => {
+  it("rejects removed v1 sdk artifacts", () => {
+    expect(() =>
+      reviewArtifactSchema.parse({
+        schema_version: 1,
+        sdk: "pi",
+        reviewers: [
+          {
+            id: "pi-default",
+            sdk: "pi",
+            transport: "sdk",
+            result: reviewResult(),
+            validation: validation(),
+          },
+        ],
+        cwd: "/repo",
+        target: target(),
+        result: reviewResult(),
+        validation: validation(),
+      }),
+    ).toThrow();
+  });
+
+  it("rejects removed reviewer sdk artifacts", () => {
+    expect(() =>
+      reviewArtifactSchema.parse({
+        schema_version: 2,
+        reviewers: [
+          {
+            id: "pi-default",
+            sdk: "pi",
+            transport: "sdk",
+            result: reviewResult(),
+            validation: validation(),
+          },
+        ],
+        cwd: "/repo",
+        target: target(),
+        result: reviewResult(),
+        validation: validation(),
+      }),
+    ).toThrow();
+  });
+
+  it("rejects removed top-level sdk artifacts", () => {
+    expect(() =>
+      reviewArtifactSchema.parse({
+        schema_version: 2,
+        sdk: "pi",
+        cwd: "/repo",
+        target: target(),
+        result: reviewResult(),
+        validation: validation(),
+      }),
+    ).toThrow();
+  });
+
+  it("accepts v2 engine artifacts", () => {
     const parsed = reviewArtifactSchema.parse({
-      schema_version: 1,
-      sdk: "pi",
+      schema_version: 2,
+      engine: "pi",
       reviewers: [
         {
           id: "pi-default",
-          sdk: "pi",
-          transport: "sdk",
+          engine: "pi",
+          transport: "native",
           result: reviewResult(),
           validation: validation(),
         },

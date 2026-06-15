@@ -81,7 +81,7 @@ diffwarden review --target base:main --reviewer-set <name> --ndjson
 diffwarden review --target 'custom:Review auth flow and permission checks' --reviewer-set <name> --agent
 diffwarden review --target base:main --reviewer-set <name> --fail-on-findings P2 --agent
 diffwarden reviewers list
-diffwarden reviewers list --format json
+diffwarden reviewers list --json
 diffwarden init
 ```
 

@@ -59,7 +59,7 @@ needs orchestration that Codex review does not own:
 - A single CLI contract for Codex, Claude, Cursor, Pi, Droid, Gemini, OpenCode, Grok,
   Antigravity, and fake reviewers.
 - Multi-reviewer runs through repeated `--reviewer` flags or configured reviewer sets.
-- Aggregation, attribution, validation, deduplication, Markdown rendering, and JSON output
+- Aggregation, attribution, validation, deduplication, human/agent rendering, and JSON output
   owned by Diffwarden core instead of by any one reviewer engine.
 - Repo and user config for reviewer profiles, provider wiring, executable overrides,
   model defaults, effort defaults, timeouts, and reviewer sets.
@@ -81,7 +81,7 @@ the Codex app/session model.
 | Structured output | Review mode asks for JSON in the prompt, then parses the final message as `ReviewOutputEvent` | Uses the shared `ReviewResult` schema with native schema output, tool-call capture, or text parsing depending on adapter support |
 | JSON parsing | Parses exact JSON, then extracts a JSON object substring, then falls back to plain text | Parses exact JSON, scans balanced JSON candidates, then falls back to plain text; this is intentionally more robust for CLI/SDK output with logs or echoed prompts |
 | Priority field | Codex prompt says priority may be omitted/null, but the protocol struct requires an integer priority | Normalized schema accepts optional priority for compatibility; strict structured-output paths require priority |
-| Review lifecycle | Emits `EnteredReviewMode`/`ExitedReviewMode`, records a synthetic review action, and writes a final assistant review into Codex history | Emits Diffwarden run/reviewer/final events, returns Markdown/JSON/NDJSON artifacts, and does not mutate a Codex thread |
+| Review lifecycle | Emits `EnteredReviewMode`/`ExitedReviewMode`, records a synthetic review action, and writes a final assistant review into Codex history | Emits Diffwarden run/reviewer/final events, returns human display, agent text, JSON, or NDJSON, and does not mutate a Codex thread |
 | Read-only posture | Uses a constrained review child with approval policy never and selected features disabled | Reports per-adapter capability as enforced, tool-restricted, or prompt-only; Codex CLI uses `codex exec --sandbox read-only --ephemeral` and Codex app-server uses ephemeral read-only threads with denied approval/tool requests |
 
 Diffwarden's current Codex-specific implementation keeps two paths: the default CLI and
@@ -107,7 +107,7 @@ structured output.
 | Structured output | `ReviewOutputEvent` parsed from reviewer text | Shared ReviewResult schema, structured SDK/CLI paths, fallback parsing |
 | Schema validation | Deserializes review JSON or falls back to explanation text | Zod schema validation, strict mode, location validation, parse-mode metadata |
 | Finding aggregation | Single reviewer output | Multi-reviewer aggregation, deduplication, reviewer attribution |
-| Machine-readable artifact | Review events and rendered text in Codex protocol/session | Stable Markdown or full JSON artifact, plus optional `--out` JSON |
+| Machine-readable artifact | Review events and rendered text in Codex protocol/session | Full JSON artifact through `--json` or `--out`, plus NDJSON event stream through `--ndjson` |
 | Model defaults | `review_model` config override, otherwise parent session model | Per-reviewer defaults and config overrides; `doctor` can verify SDK model IDs |
 | Effort controls | Inherits Codex session/config behavior | Per-reviewer effort where supported, with adapter-specific mapping |
 | Read-only controls | Review child disables selected features and uses `AskForApproval::Never` | Per-adapter read-only/sandbox/tool restriction metadata and validation |

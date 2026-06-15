@@ -43,15 +43,13 @@ List configured reviewers and reviewer sets without invoking adapters or running
 
 ```bash
 diffwarden reviewers list
-diffwarden reviewers list --format json
+diffwarden reviewers list --json
 ```
 
-Configured reviewers use `engine` for the reviewer family (`claude`, `pi`, `codex`, etc.).
-Legacy configs that still use `sdk` continue to load and are normalized internally.
-Use `transport: "sdk"` for the SDK-backed path when you want to be explicit, or
-`transport: "cli"` for executable-backed runs. Legacy `transport: "native"` values are
-accepted as an alias for `sdk`. Codex also supports a `transport: "app-server"` path for
-ephemeral `codex app-server` reviews.
+Configured reviewers must use `engine` for the reviewer family (`claude`, `pi`, `codex`,
+etc.). Use `transport: "sdk"` for the SDK-backed path when you want to be explicit, or
+`transport: "cli"` for executable-backed runs. Codex also supports a `transport: "app-server"`
+path for ephemeral `codex app-server` reviews.
 
 ## Disabling Configured Reviewers
 
@@ -152,7 +150,7 @@ intended to make a run reproducible without persisting more patch content than n
 
 - `diffwarden.version`: the Diffwarden CLI version that wrote the report.
 - `invocation`: the requested target, reviewers or reviewer set, model, effort, timeout,
-  strict mode, finding gate, and output format when those options were supplied.
+  strict mode, finding gate, and output mode when those options were supplied.
 - `config`: the loaded config path and SHA-256 of the config file contents when a config file
   was used. The report does not embed config contents.
 - `reviewer_selection`: the requested reviewer specs or reviewer set plus the resolved reviewer
@@ -416,9 +414,9 @@ Diffwarden does not inject the generated agent config.
       }
     },
     {
-      "id": "droid-native-local-computer",
+      "id": "droid-sdk-local-computer",
       "engine": "droid",
-      "transport": "native",
+      "transport": "sdk",
       "sdkOptions": {
         "executable": "/Users/auro/.local/bin/droid",
         "machineId": "YOUR_DROID_COMPUTER_ID"

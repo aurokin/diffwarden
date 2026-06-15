@@ -11,7 +11,7 @@ import { reviewerSdkSchema } from "./schema.js";
 const configFileName = "diffwarden.config.json";
 const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 const effortSchema = z.enum(effortValues);
-const transportSchema = z.enum(["native", "sdk", "cli", "app-server"]);
+const transportSchema = z.enum(["sdk", "cli", "app-server"]);
 const reportingScopeSchema = z.enum(["global", "repo"]);
 const reportingModeSchema = z.enum(["full", "metadata"]);
 const configuredReviewerEngineSchema = reviewerSdkSchema.exclude(["fake"]);
@@ -30,8 +30,7 @@ const appServerOptionsSchema = z
 const reviewerConfigSchema = z
   .object({
     id: z.string().min(1),
-    engine: configuredReviewerEngineSchema.optional(),
-    sdk: configuredReviewerEngineSchema.optional(),
+    engine: configuredReviewerEngineSchema,
     transport: transportSchema.optional(),
     profile: z.string().min(1).optional(),
     provider: z.string().min(1).optional(),
@@ -48,34 +47,12 @@ const reviewerConfigSchema = z
     sdkOptions: z.record(z.string(), z.unknown()).optional(),
   })
   .strict()
-  .superRefine((reviewer, ctx) => {
-    if (reviewer.engine === undefined && reviewer.sdk === undefined) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Reviewer must define engine",
-        path: ["engine"],
-      });
-    }
-
-    if (
-      reviewer.engine !== undefined &&
-      reviewer.sdk !== undefined &&
-      reviewer.engine !== reviewer.sdk
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Reviewer engine and legacy sdk must match when both are provided",
-        path: ["engine"],
-      });
-    }
-  })
   .transform((reviewer) => {
-    const { engine, sdk, transport, ...rest } = reviewer;
-    const normalizedSdk = engine ?? sdk ?? "pi";
+    const { engine, transport, ...rest } = reviewer;
     return {
       ...rest,
-      sdk: normalizedSdk,
-      ...(transport !== undefined ? { transport: normalizeTransport(transport) } : {}),
+      sdk: engine,
+      ...(transport !== undefined ? { transport } : {}),
     };
   });
 
@@ -304,12 +281,6 @@ function isCliOnlyReviewerSdk(sdk: string): boolean {
     sdk === "grok" ||
     sdk === "antigravity"
   );
-}
-
-function normalizeTransport(
-  transport: z.infer<typeof transportSchema>,
-): "sdk" | "cli" | "app-server" {
-  return transport === "native" ? "sdk" : transport;
 }
 
 function sha256(value: string): string {
