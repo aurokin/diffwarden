@@ -66,16 +66,28 @@ Adapters should not need focus-specific behavior. The focus-plan orchestration s
 existing reviewer runner: resolve the target once, build lanes, then run the existing review pipeline
 for each lane with lane-specific prompt instructions.
 
+Lane execution should fan out concurrently. Diffwarden does not offer user-facing sequential
+orchestration; any staggering should be limited to adapter trust-policy or process-safety needs. A
+reviewer timeout is per reviewer per lane, not a shared batch budget.
+
 ## Output Contract
 
 When no focus lanes are supplied, preserve the existing single `ReviewArtifact` contract.
 
-When focus lanes are supplied, return a batch artifact that contains:
+When focus lanes are supplied, return a `ReviewBatchArtifact`. A batch artifact is the public shape
+for multi-lane review plans; normal multi-reviewer runs still use the existing `ReviewArtifact`
+because reviewer fan-out is already represented by `artifact.reviewers`.
+
+A `ReviewBatchArtifact` contains:
 
 - The shared resolved target.
 - The resolved review plan, including `overview` and `focus-*` lane metadata.
 - A top-level merged result for CI and `--fail-on-findings`.
 - Per-lane artifacts so agents can inspect exactly which overview or focus pass produced a result.
+
+The per-lane artifact should be the normal `ReviewArtifact` shape. This keeps the existing reviewer
+aggregation, validation, and renderer behavior reusable inside each lane while giving batch-aware
+surfaces the extra plan/lane structure.
 
 Lane identifiers should be deterministic:
 
@@ -85,10 +97,25 @@ Lane identifiers should be deterministic:
 - `focus-3`
 
 The batch output must not overload `reviewer_ids` to represent lane attribution. Reviewer
-attribution and lane attribution are separate concepts.
+attribution and lane attribution are separate concepts. Top-level merged findings should retain
+reviewer attribution and add lane attribution, while each lane artifact remains inspectable for the
+exact lane-local reviewer results.
 
-NDJSON batch runs should remain machine-readable and versioned. Lane events must identify the lane
-they belong to, and the terminal result should carry the batch artifact.
+`--json` prints the full `ReviewBatchArtifact` when focus lanes are supplied, and `--out` writes the
+same full-information artifact regardless of display mode. `diffwarden review show <path>` should
+accept both saved `ReviewArtifact` and saved `ReviewBatchArtifact` files and render them through the
+human, `--agent`, or `--json` paths.
+
+NDJSON batch runs should remain machine-readable and versioned. Prefer a flat lane-aware stream over
+nested event wrappers:
+
+- Emit a `batch_started` frame with the shared target, resolved reviewers, and lane plan.
+- Emit the existing lifecycle event vocabulary for lane-scoped work with a required `lane_id`.
+- Emit lane completion/failure frames when a lane reaches its local artifact or error.
+- Emit exactly one terminal `final_result` frame carrying the full `ReviewBatchArtifact`, or one
+  terminal `error` frame if the batch cannot produce an artifact.
+
+For non-batch runs, keep the existing event stream unchanged.
 
 ## Consequences
 
