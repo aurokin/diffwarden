@@ -446,6 +446,131 @@ describe("createReviewReport", () => {
     expect(report.lanes).toHaveLength(2);
     expect(report.reviewers).toHaveLength(3);
   });
+
+  it("aggregates top-level batch reviewer summaries across lanes", () => {
+    const artifact = reviewBatchArtifact();
+    const firstLane = artifact.lanes[0];
+    if (firstLane?.status !== "success") {
+      throw new Error("missing successful lane fixture");
+    }
+
+    const firstPiReviewer = firstLane.artifact.reviewers?.find(
+      (reviewer) => reviewer.id === "pi-default",
+    );
+    if (firstPiReviewer?.result === undefined) {
+      throw new Error("missing pi reviewer fixture");
+    }
+    firstPiReviewer.result = {
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation: "No first-lane findings.",
+      overall_confidence_score: 0.72,
+    };
+    firstPiReviewer.usage = {
+      inputTokens: 1,
+      outputTokens: 1,
+    };
+
+    const secondLaneArtifact = reviewArtifact();
+    secondLaneArtifact.target = artifact.target;
+    const secondPiReviewer = secondLaneArtifact.reviewers?.find(
+      (reviewer) => reviewer.id === "pi-default",
+    );
+    const secondFinding = secondPiReviewer?.result?.findings[0];
+    if (secondPiReviewer?.result === undefined || secondFinding === undefined) {
+      throw new Error("missing second pi reviewer fixture");
+    }
+    secondPiReviewer.timing_ms = 321;
+    secondPiReviewer.usage = {
+      inputTokens: 20,
+      outputTokens: 5,
+    };
+    secondLaneArtifact.reviewers = [secondPiReviewer];
+    secondLaneArtifact.result = {
+      findings: [
+        {
+          ...secondFinding,
+          reviewer_ids: ["pi-default"],
+        },
+      ],
+      overall_correctness: "patch is incorrect",
+      overall_explanation: "Second lane found an auth issue.",
+      overall_confidence_score: 0.91,
+    };
+
+    artifact.plan.focus.push("focus on auth");
+    artifact.plan.lanes.push({ id: "focus-2", kind: "focus", focus: "focus on auth" });
+    artifact.lanes.push({
+      id: "focus-2",
+      kind: "focus",
+      focus: "focus on auth",
+      status: "success",
+      artifact: secondLaneArtifact,
+      timing_ms: 321,
+    });
+    artifact.result = {
+      ...artifact.result,
+      findings: [
+        {
+          ...secondFinding,
+          reviewer_ids: ["pi-default"],
+          lane_ids: ["focus-2"],
+        },
+      ],
+    };
+
+    const report = createReviewReport({
+      artifact,
+      reporting: {
+        scope: "global",
+        mode: "metadata",
+      },
+      runId: "run-batch-reviewer-aggregation",
+    });
+
+    const piReport = report.reviewers.find((reviewer) => reviewer.id === "pi-default");
+    expect(report.reviewers).toHaveLength(3);
+    expect(piReport).toMatchObject({
+      id: "pi-default",
+      status: "success",
+      elapsed_ms: 1021,
+      finding_count: 1,
+      finding_counts_by_priority: {
+        p1: 1,
+      },
+      usage: {
+        lanes: [
+          {
+            lane_id: "focus-1",
+            usage: {
+              inputTokens: 1,
+              outputTokens: 1,
+            },
+          },
+          {
+            lane_id: "focus-2",
+            usage: {
+              inputTokens: 20,
+              outputTokens: 5,
+            },
+          },
+        ],
+      },
+    });
+    expect(piReport?.findings).toEqual([
+      {
+        title: "Auth bypass",
+        confidence_score: 0.91,
+        priority: 1,
+        code_location: secondFinding.code_location,
+        lane_ids: ["focus-2"],
+      },
+    ]);
+    expect(piReport?.adapter_metadata).toMatchObject({
+      sdkVersion: "pi-sdk-test",
+      lane_metadata: [{ lane_id: "focus-1" }, { lane_id: "focus-2" }],
+    });
+  });
 });
 
 describe("writeReviewReport", () => {

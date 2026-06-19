@@ -380,21 +380,201 @@ function createReviewerReport(
 
 function artifactReviewers(artifact: ReviewRunArtifact): ReviewReviewerArtifact[] {
   if (isBatchArtifact(artifact)) {
-    const reviewersById = new Map<string, ReviewReviewerArtifact>();
+    const reviewersById = new Map<string, BatchReviewerAccumulator>();
     for (const lane of artifact.lanes) {
       if (lane.status === "failed") {
         continue;
       }
       for (const reviewer of lane.artifact.reviewers ?? []) {
-        if (!reviewersById.has(reviewer.id)) {
-          reviewersById.set(reviewer.id, reviewer);
-        }
+        addBatchReviewer(reviewersById, lane.id, reviewer);
       }
     }
-    return [...reviewersById.values()];
+    return [...reviewersById.values()].map(materializeBatchReviewer);
   }
 
   return artifact.reviewers ?? [];
+}
+
+type BatchReviewerAccumulator = {
+  first: ReviewReviewerArtifact;
+  findings: ReviewArtifactFinding[];
+  explanations: string[];
+  confidenceScores: number[];
+  hasIncorrectResult: boolean;
+  sawResult: boolean;
+  sawFailure: boolean;
+  errors: Array<{
+    lane_id: string;
+    error: NonNullable<ReviewReviewerArtifact["error"]>;
+  }>;
+  timingMs: number;
+  hasTiming: boolean;
+  usageByLane: Array<{
+    lane_id: string;
+    usage: unknown;
+  }>;
+  adapterMetadataByLane: Array<{
+    lane_id: string;
+    adapter_metadata: NonNullable<ReviewReviewerArtifact["adapter_metadata"]>;
+  }>;
+  preflightMetadataByLane: Array<{
+    lane_id: string;
+    metadata: NonNullable<NonNullable<ReviewReviewerArtifact["preflight"]>["metadata"]>;
+  }>;
+};
+
+function addBatchReviewer(
+  reviewersById: Map<string, BatchReviewerAccumulator>,
+  laneId: string,
+  reviewer: ReviewReviewerArtifact,
+): void {
+  let accumulator = reviewersById.get(reviewer.id);
+  if (accumulator === undefined) {
+    accumulator = {
+      first: reviewer,
+      findings: [],
+      explanations: [],
+      confidenceScores: [],
+      hasIncorrectResult: false,
+      sawResult: false,
+      sawFailure: false,
+      errors: [],
+      timingMs: 0,
+      hasTiming: false,
+      usageByLane: [],
+      adapterMetadataByLane: [],
+      preflightMetadataByLane: [],
+    };
+    reviewersById.set(reviewer.id, accumulator);
+  }
+
+  if (reviewer.status === "failed") {
+    accumulator.sawFailure = true;
+  }
+  if (reviewer.error !== undefined) {
+    accumulator.errors.push({ lane_id: laneId, error: reviewer.error });
+  }
+  if (reviewer.timing_ms !== undefined) {
+    accumulator.timingMs += reviewer.timing_ms;
+    accumulator.hasTiming = true;
+  }
+  if (reviewer.usage !== undefined) {
+    accumulator.usageByLane.push({ lane_id: laneId, usage: reviewer.usage });
+  }
+  if (reviewer.adapter_metadata !== undefined) {
+    accumulator.adapterMetadataByLane.push({
+      lane_id: laneId,
+      adapter_metadata: reviewer.adapter_metadata,
+    });
+  }
+  if (reviewer.preflight?.metadata !== undefined) {
+    accumulator.preflightMetadataByLane.push({
+      lane_id: laneId,
+      metadata: reviewer.preflight.metadata,
+    });
+  }
+
+  const result = reviewer.result;
+  if (result === undefined) {
+    return;
+  }
+
+  accumulator.sawResult = true;
+  accumulator.findings.push(...result.findings.map((finding) => findingWithLane(finding, laneId)));
+  accumulator.explanations.push(`${laneId}: ${result.overall_explanation}`);
+  accumulator.confidenceScores.push(result.overall_confidence_score);
+  if (result.overall_correctness === "patch is incorrect") {
+    accumulator.hasIncorrectResult = true;
+  }
+}
+
+function materializeBatchReviewer(accumulator: BatchReviewerAccumulator): ReviewReviewerArtifact {
+  const first = accumulator.first;
+  return {
+    ...first,
+    status: accumulator.sawFailure ? "failed" : "success",
+    ...(accumulator.sawResult
+      ? {
+          result: {
+            findings: accumulator.findings,
+            overall_correctness: accumulator.hasIncorrectResult
+              ? "patch is incorrect"
+              : "patch is correct",
+            overall_explanation: accumulator.explanations.join("\n\n"),
+            overall_confidence_score:
+              accumulator.confidenceScores.length > 0
+                ? Math.max(...accumulator.confidenceScores)
+                : 0,
+          },
+        }
+      : {}),
+    ...(accumulator.hasTiming ? { timing_ms: accumulator.timingMs } : {}),
+    ...(accumulator.usageByLane.length > 0 ? { usage: { lanes: accumulator.usageByLane } } : {}),
+    ...(accumulator.adapterMetadataByLane.length > 0
+      ? { adapter_metadata: batchAdapterMetadata(first, accumulator.adapterMetadataByLane) }
+      : {}),
+    ...(first.preflight !== undefined || accumulator.preflightMetadataByLane.length > 0
+      ? { preflight: batchPreflight(first, accumulator.preflightMetadataByLane) }
+      : {}),
+    ...(accumulator.errors.length > 0
+      ? { error: batchReviewerError(first, accumulator.errors) }
+      : {}),
+  };
+}
+
+function findingWithLane(
+  finding: ReviewArtifactFinding,
+  laneId: string,
+): ReviewArtifactFinding & { lane_ids: string[] } {
+  const existingLaneIds =
+    "lane_ids" in finding && Array.isArray(finding.lane_ids)
+      ? finding.lane_ids.filter((id): id is string => typeof id === "string")
+      : [];
+  return {
+    ...finding,
+    lane_ids: [...new Set([...existingLaneIds, laneId])],
+  };
+}
+
+function batchAdapterMetadata(
+  first: ReviewReviewerArtifact,
+  laneMetadata: BatchReviewerAccumulator["adapterMetadataByLane"],
+): NonNullable<ReviewReviewerArtifact["adapter_metadata"]> {
+  return {
+    ...(first.adapter_metadata ?? {}),
+    lane_metadata: laneMetadata,
+  } as NonNullable<ReviewReviewerArtifact["adapter_metadata"]>;
+}
+
+function batchPreflight(
+  first: ReviewReviewerArtifact,
+  laneMetadata: BatchReviewerAccumulator["preflightMetadataByLane"],
+): NonNullable<ReviewReviewerArtifact["preflight"]> {
+  return {
+    checks: first.preflight?.checks ?? [],
+    ...(first.preflight?.metadata !== undefined || laneMetadata.length > 0
+      ? {
+          metadata: {
+            ...(first.preflight?.metadata ?? {}),
+            ...(laneMetadata.length > 0 ? { lane_metadata: laneMetadata } : {}),
+          } as NonNullable<NonNullable<ReviewReviewerArtifact["preflight"]>["metadata"]>,
+        }
+      : {}),
+  };
+}
+
+function batchReviewerError(
+  first: ReviewReviewerArtifact,
+  errors: BatchReviewerAccumulator["errors"],
+): NonNullable<ReviewReviewerArtifact["error"]> {
+  const firstError = errors[0];
+  if (errors.length === 1 && firstError !== undefined) {
+    return firstError.error;
+  }
+  return {
+    code: "reviewer_failed",
+    message: `${first.id} failed in ${errors.length} lanes`,
+  };
 }
 
 function batchSummaryCounts(
