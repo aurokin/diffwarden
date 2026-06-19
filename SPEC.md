@@ -20,6 +20,8 @@ diffwarden review --target base:main --agent
 diffwarden review --target base:main --json
 diffwarden review --target base:main --reviewer-set 2
 diffwarden review --target base:main --reviewer cursor --reviewer pi:openrouter-high
+diffwarden review --target base:main --reviewer-set 2 --focus "focus on state" --focus "focus on localization"
+diffwarden review --target base:main --reviewer-set 2 --no-overview --focus "focus on state"
 ```
 
 Agents call `diffwarden review --agent` when they want direct text they can act on, or
@@ -134,13 +136,16 @@ diffwarden reviewers list [--cwd <path>] [--json]
 --model <id>                      Model override for single-reviewer runs.
 --effort <level>                  Reasoning/effort override for single-reviewer runs.
 --agent                           Emit plain text optimized for coding agents.
---json                            Emit final ReviewArtifact JSON.
+--json                            Emit final review artifact JSON.
 --ndjson                          Emit newline-delimited review events.
---out <path>                      Write full ReviewArtifact JSON to a file.
+--out <path>                      Write full review artifact JSON to a file.
 --strict                          Fail if structured output cannot be parsed or validated.
 --readonly                        Read-only mode. Default and only supported mode.
 --timeout <seconds>               Reviewer timeout.
 --fail-on-findings <P0|P1|P2|P3>  Exit 1 when prioritized findings meet the threshold.
+--focus <text>                    Repeatable focused diff-backed review lane.
+--overview                        Include overview lane for focus runs, overriding config.
+--no-overview                     Suppress overview lane for focus runs, overriding config.
 --help                            Print usage.
 ```
 
@@ -148,10 +153,16 @@ diffwarden reviewers list [--cwd <path>] [--json]
 human-facing review display by default. That display is presentation, not a parsing contract.
 It should avoid full-screen terminal behavior and degrade to plain text outside capable TTYs.
 `--agent`, `--json`, and `--ndjson` are mutually exclusive opt-in modes. `diffwarden review
-show <path>` renders an existing `ReviewArtifact` JSON file through the human display path;
-`review show --agent` and `review show --json` render saved artifacts through those final-output
-contracts. `review show` does not support `--ndjson` because there is no live event stream to
-replay.
+show <path>` renders an existing review artifact JSON file through the human display path;
+`review show --agent` and `review show --json` render saved `ReviewArtifact` and
+`ReviewBatchArtifact` files through those final-output contracts. `review show` does not
+support `--ndjson` because there is no live event stream to replay.
+
+`--focus <text>` is an instruction layer on normal diff-backed targets. Repeated focus flags
+create ordered lanes `focus-1`, `focus-2`, etc. When at least one focus lane is present, the
+normal full-diff overview lane runs by default as `overview`; `--no-overview` suppresses it
+and `--overview` overrides config that disables it. `--overview` and `--no-overview` are
+invalid without `--focus` and invalid together.
 
 `--reviewer` is the primary reviewer selection primitive. A single `--reviewer` is a one-reviewer run; repeated `--reviewer` flags are a multi-reviewer run. If no reviewer is provided, the CLI uses `defaultReviewerSet` from config. Config is required for real SDK runs; do not silently run an unconfigured default.
 
@@ -260,6 +271,10 @@ and custom instructions, then uses the same reviewer preflight, prompt assembly,
 schema validation, path validation, aggregation, rendering, and artifact output as other
 targets. Because no patch is collected, custom targets do not populate `changed_files`,
 embed a patch in the prompt, or validate findings against changed-line overlap.
+
+Focus lanes are not custom targets. They reuse one resolved diff-backed target, keep the
+patch fence and provenance in every lane prompt, and still validate findings against changed
+files and changed-line ranges. Reject `--focus` with `custom:<text>`.
 
 ### 5.5 Initial v1 targets
 
@@ -398,6 +413,71 @@ export type ReviewReviewerArtifact = {
   timing_ms?: number;
 };
 ```
+
+### 7.3.1 ReviewBatchArtifact
+
+When no focus lanes are supplied, keep returning the existing `ReviewArtifact`. When one or
+more focus lanes are supplied, return a `ReviewBatchArtifact`:
+
+```ts
+export type ReviewRunArtifact = ReviewArtifact | ReviewBatchArtifact;
+
+export type ReviewLane = {
+  id: "overview" | `focus-${number}`;
+  kind: "overview" | "focus";
+  focus?: string;
+};
+
+export type ReviewPlan = {
+  include_overview: boolean;
+  focus: string[];
+  lanes: ReviewLane[];
+};
+
+export type ReviewBatchArtifact = {
+  schema_version: 2;
+  kind: "batch";
+  cwd: string;
+  target: ReviewTargetResolved;
+  plan: ReviewPlan;
+  result: ReviewBatchResult;
+  validation: ReviewValidation;
+  warnings?: string[];
+  timing_ms?: number;
+  lanes: ReviewBatchLaneArtifact[];
+};
+
+export type ReviewBatchLaneArtifact =
+  | (ReviewLane & {
+      status: "success";
+      artifact: ReviewArtifact;
+      timing_ms?: number;
+    })
+  | (ReviewLane & {
+      status: "failed";
+      error: ReviewerError;
+      timing_ms?: number;
+    });
+
+export type ReviewBatchFinding = ReviewArtifactFinding & {
+  lane_ids: string[];
+};
+
+export type ReviewBatchResult = Omit<ReviewArtifact["result"], "findings"> & {
+  findings: ReviewBatchFinding[];
+};
+```
+
+The batch top-level `result` is for gates and CI. It deduplicates findings across
+successful lanes with the same finding key used for reviewer aggregation, unions
+`reviewer_ids`, and adds separate `lane_ids` attribution. Per-lane artifacts remain normal
+`ReviewArtifact` objects so reviewer attribution, validation, warnings, and adapter metadata
+stay inspectable without overloading reviewer IDs.
+
+If at least one lane succeeds and strict mode is off, failed lanes are represented in
+`lanes[]` with `status: "failed"` and summarized as top-level warnings. If all lanes fail,
+or if strict mode sees any failed lane or strict validation failure, the run emits one
+terminal error and no batch artifact.
 
 ### 7.4 ReviewReviewerConfig
 
@@ -933,10 +1013,11 @@ Non-strict mode:
 ### 14.1 Human default
 
 By default, `diffwarden review --target ...` renders a frameworkless human display from
-`runReviewEvents` and the final `ReviewArtifact`. The display should show reviewer fan-out,
-preflight/run status, warnings, failed reviewers, verdict, confidence, and finding summaries.
-It must not write ANSI presentation, icons, spinners, or human-only layout state into JSON or
-NDJSON contracts.
+`runReviewEvents` or `runReviewBatchEvents` and the final review artifact. The display should
+show reviewer fan-out, preflight/run status, warnings, failed reviewers, verdict, confidence,
+and finding summaries. Batch focus output should announce lanes, show a top-level merged
+summary, and keep each lane separately inspectable. It must not write ANSI presentation,
+icons, spinners, or human-only layout state into JSON or NDJSON contracts.
 
 ### 14.2 Agent output
 
@@ -944,6 +1025,9 @@ NDJSON contracts.
 does not include ANSI, spinner text, full-screen state, or decorative framing. It should include
 the target, verdict, confidence, finding count, reviewer status, warnings, failed reviewers,
 file/line references, reviewer attribution, finding bodies, and overall explanation.
+For focus batch runs, agent output should name the overview and focus lanes, show the
+top-level merged result, and include lane-specific summaries without ANSI or terminal
+presentation.
 
 Example:
 
@@ -972,8 +1056,9 @@ Example:
 diffwarden review --target base:main --json --out review.json
 ```
 
-`--json` prints the full `ReviewArtifact` JSON object to stdout. The full artifact is the
-stable automation contract because callers need reviewer, target, validation, and timing
+`--json` prints the full review artifact JSON object to stdout. No-focus reviews emit
+`ReviewArtifact`; focus reviews emit `ReviewBatchArtifact`. The full artifact is the stable
+automation contract because callers need reviewer, target, validation, lane, and timing
 metadata. `--out` writes the same artifact to a file regardless of display mode. If a narrower
 payload becomes useful later, add an explicit `--json-result-only` option.
 
@@ -987,13 +1072,21 @@ diffwarden review --target base:main --ndjson
 `error` frame. Per-reviewer `reviewer_result` frames are provisional; only
 `final_result.artifact` is authoritative.
 
+For batch runs, the stream starts with `batch_started`, then emits lane-scoped lifecycle
+events carrying `lane_id`. The existing lifecycle vocabulary is reused for lane work:
+`run_started`, `preflight_started`, `preflight_finished`, `reviewer_started`,
+`reviewer_result`, and `reviewer_failed`. A lane emits `lane_finished` with its lane artifact
+or `lane_failed` with its error. The stream still has exactly one terminal frame:
+`final_result` carrying the full `ReviewBatchArtifact`, or `error` when no valid batch
+artifact can be produced.
+
 ### 14.5 Saved artifact view
 
-`diffwarden review show <path>` renders an existing `ReviewArtifact` JSON file through the
-human display path. `diffwarden review show <path> --agent` renders the same plain text as an
-agent-mode final summary, and `diffwarden review show <path> --json` normalizes and prints the
-artifact as JSON. `--ndjson` is rejected for saved artifacts because there are no live review
-events to replay.
+`diffwarden review show <path>` renders an existing `ReviewArtifact` or `ReviewBatchArtifact`
+JSON file through the human display path. `diffwarden review show <path> --agent` renders the
+same plain text as an agent-mode final summary, and `diffwarden review show <path> --json`
+normalizes and prints the artifact as JSON. `--ndjson` is rejected for saved artifacts because
+there are no live review events to replay.
 
 See `docs/adr/0001-human-review-experience.md` for the terminal framework decision.
 
@@ -1077,7 +1170,10 @@ If no config exists, exit `2` with a message explaining where to create one. The
     }
   ],
   "readonly": true,
-  "timeoutSeconds": 300
+  "timeoutSeconds": 300,
+  "reviewPlan": {
+    "includeOverview": true
+  }
 }
 ```
 
@@ -1087,6 +1183,8 @@ Rules:
 - `--reviewer-set <name|count>` must resolve to a configured set.
 - `--reviewer <spec>` may reference a built-in SDK id (`pi`, `claude`, `cursor`, `droid`) or a named profile.
 - Config validation is part of CLI startup. Unknown reviewer profiles, malformed reviewer sets, invalid model catalogs, and invalid effort catalogs exit `2`.
+- `reviewPlan.includeOverview` controls whether focus runs include the overview lane by
+  default. CLI `--overview` and `--no-overview` override it for one run.
 - Secrets in config must be env var references only. Do not support literal API keys in committed or user config.
 - Pi is the recommended default reviewer profile because it supports the broadest provider surface. Claude subscription users should configure a Claude profile, Cursor subscription users should configure a Cursor profile, and other provider routes should generally use Pi profiles.
 

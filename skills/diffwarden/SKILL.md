@@ -29,6 +29,11 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
    finding paths, but they do not collect a diff, populate `changed_files`, embed a patch in
    the prompt, or validate findings against changed-line overlap.
 
+   Use repeatable `--focus <text>` when the user wants scoped passes over one diff-backed
+   target, such as state management, storage, localization, or migration risk. Focus lanes
+   work with `uncommitted`, `base:<branch>`, and `commit:<sha>` targets. They remain
+   diff-backed and changed-line validated; do not use them with `custom:<text>`.
+
 2. Pick reviewers:
    - Use `diffwarden reviewers list` when you need to see configured reviewer IDs or reviewer
      sets before choosing.
@@ -78,6 +83,8 @@ diffwarden review --target base:main --reviewer droid-cli --model claude-opus-4-
 diffwarden review --target base:main --reviewer cursor --json --out review.json
 diffwarden review show review.json --agent
 diffwarden review --target base:main --reviewer-set <name> --ndjson
+diffwarden review --target base:main --reviewer-set <name> --agent --focus "focus on state management" --focus "focus on localization"
+diffwarden review --target base:main --reviewer-set <name> --agent --no-overview --focus "focus on state management"
 diffwarden review --target 'custom:Review auth flow and permission checks' --reviewer-set <name> --agent
 diffwarden review --target base:main --reviewer-set <name> --fail-on-findings P2 --agent
 diffwarden reviewers list
@@ -95,9 +102,13 @@ diffwarden review --target uncommitted --reviewer fake --agent
 
 - `--agent` output can be read directly and summarized to the user.
 - JSON artifacts use `schema_version: 2` and include target, result, validation, warnings,
-  and per-reviewer artifacts.
+  and per-reviewer artifacts. Focus runs return a `ReviewBatchArtifact` with `kind: "batch"`,
+  a resolved lane plan, a top-level merged result for gates, and per-lane artifacts.
 - NDJSON events use `schema_version: 2`. Parse each stdout line as one event. After
   `run_started`, the stream ends with exactly one terminal event: `final_result` or `error`.
+  Focus batch streams start with `batch_started`, include lane-scoped events carrying
+  `lane_id`, emit `lane_finished`/`lane_failed`, and still terminate with exactly one
+  `final_result` or `error`.
 - Treat `reviewer_result` NDJSON events as provisional. Only `final_result.artifact` is the
   authoritative aggregated review artifact.
 - Findings include title, body, confidence, optional priority, file path, and line range.

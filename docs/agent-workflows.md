@@ -36,11 +36,22 @@ diffwarden review --target uncommitted --agent
 diffwarden review --target uncommitted --reviewer-set 2 --agent
 diffwarden review --target uncommitted --reviewer cursor --reviewer claude --agent
 diffwarden review --target base:main --reviewer-set 2 --agent
+diffwarden review --target base:main --reviewer-set 2 --agent \
+  --focus "focus on state management" \
+  --focus "focus on localization"
+diffwarden review --target base:main --reviewer-set 2 --agent \
+  --no-overview \
+  --focus "focus on state management"
 ```
 
 If the repo or user config does not define `defaultReviewerSet`, pass an explicit
 `--reviewer` or `--reviewer-set`. Use `--reviewer fake` only for local development
 and credential-free tests, not as a real review gate.
+
+Use `--focus` when the user wants several passes over the same diff, such as state,
+storage, localization, security, or migration risk. Focus lanes are still diff-backed:
+findings must come from the reviewed patch and overlap changed lines. Use
+`custom:<text>` only for repository-scoped audits that are not tied to one patch.
 
 ## Complete Linear Issues
 

@@ -104,6 +104,7 @@ These features apply across adapter paths:
 | `base:<branch>` targets | yes |
 | `commit:<sha>` targets | yes |
 | `custom:<text>` targets | yes |
+| Diff-backed focus lanes | yes |
 | Multiple reviewers in one run | yes |
 | Reviewer sets from config | yes |
 | Human review output | yes |
@@ -122,11 +123,17 @@ Diff-backed targets (`uncommitted`, `base:<branch>`, and `commit:<sha>`) collect
 populate `changed_files`, embed the patch in the reviewer prompt, and validate findings
 against the changed files and changed-line ranges.
 
+Focused reviews add repeatable `--focus <text>` instruction lanes on top of one diff-backed
+target. Diffwarden resolves the target once, reuses the same patch and changed-file metadata
+for every lane, and keeps changed-line validation enabled. The normal overview lane runs by
+default when focus lanes are present unless `--no-overview` or config disables it.
+
 `custom:<text>` targets use the provided text as repository-scoped review instructions.
 They still use the normal reviewer selection, preflight, output parsing, schema validation,
 path validation, aggregation, human/agent rendering, and JSON artifact path. They skip diff
 collection, patch embedding, `changed_files` population, and changed-line overlap
-validation because there is no single target patch.
+validation because there is no single target patch. Use `custom:<text>` for repository
+audits; use `--focus` for scoped reviews of a specific diff.
 
 ## CI Gating
 

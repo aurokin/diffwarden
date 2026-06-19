@@ -93,6 +93,30 @@ DIFFWARDEN_TIMEOUT_SECONDS=1800
 Reviewer selector environment defaults are only applied after a config file is discovered.
 Without config, pass `--reviewer` or `--reviewer-set` explicitly.
 
+## Focus Review Defaults
+
+Focused diff-backed reviews include the normal overview lane by default when one or more
+`--focus` flags are present. Configure the default with `reviewPlan.includeOverview`:
+
+```json
+{
+  "reviewPlan": {
+    "includeOverview": false
+  }
+}
+```
+
+CLI flags override config for one run:
+
+```bash
+diffwarden review --target base:main --reviewer-set 2 --focus "focus on state" --overview
+diffwarden review --target base:main --reviewer-set 2 --focus "focus on state" --no-overview
+```
+
+`--overview` and `--no-overview` only apply when at least one focus lane is requested.
+Focus lanes are diff-backed instruction layers over `uncommitted`, `base:<branch>`, and
+`commit:<sha>` targets; they are not compatible with repository-scoped `custom:<text>`.
+
 ## Reporting
 
 Review history reports are off by default because they can contain finding bodies, reviewer
@@ -140,7 +164,7 @@ Reporting options:
   metadata, and counts.
 
 CLI flags take precedence over config, including `--no-report` for disabling a configured
-report on one run. `--out` writes one explicit `ReviewArtifact` file; `--report` writes
+report on one run. `--out` writes one explicit review artifact file; `--report` writes
 date-partitioned history records for later external analysis.
 
 ### Report Provenance
@@ -157,6 +181,11 @@ intended to make a run reproducible without persisting more patch content than n
   ids that actually ran.
 - `target`: for diff-backed targets, SHA-256 and byte count of the reviewed patch. Reports do
   not persist the patch text as provenance, so `patch_persisted` is currently always `false`.
+
+Focus batch reports also record `focus`, `include_overview`, and the resolved `review_plan`
+under invocation provenance. These fields are persisted in metadata mode because they are
+needed to reproduce the review plan. The shared diff hash and byte count are stored once for
+the batch target, not once per lane.
 
 Reviewer entries preserve adapter output metadata, preflight metadata, and adapter usage data
 when the adapter provides them. Adapter and executable version data are therefore best-effort:
@@ -201,9 +230,10 @@ Reports also promote these fields into each reviewer summary as `model_resolutio
 when run metadata is unavailable.
 
 Privacy mode affects review content, not run provenance. `full` reports include the full
-`ReviewArtifact`, which can contain source-adjacent review text. `metadata` reports omit the
-artifact and finding bodies while retaining titles, locations, priorities, confidence scores,
-counts, provenance, usage data, and adapter/preflight metadata.
+review artifact, which can contain source-adjacent review text. For focus runs this is the
+full `ReviewBatchArtifact`. `metadata` reports omit the artifact and finding bodies while
+retaining titles, locations, priorities, confidence scores, counts, lane summaries,
+provenance, usage data, and adapter/preflight metadata.
 
 ## Model And Effort
 

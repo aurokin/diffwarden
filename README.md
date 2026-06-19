@@ -79,6 +79,8 @@ diffwarden review --target base:main --reviewer-set 2
 diffwarden review --target base:main --reviewer cursor --reviewer pi:openrouter-high
 diffwarden review --target commit:abc123 --json
 diffwarden review --target base:main --reviewer-set 2 --agent
+diffwarden review --target base:main --reviewer-set 2 --agent --focus "focus on state management" --focus "focus on localization"
+diffwarden review --target base:main --reviewer-set 2 --agent --no-overview --focus "focus on state management"
 diffwarden review --target base:main --reviewer-set 2 --report
 diffwarden review --target base:main --reviewer-set 2 --fail-on-findings P2
 diffwarden review show review.json
@@ -112,6 +114,26 @@ path validation, aggregation, and rendering, but it does not collect a diff, pop
 `changed_files`, embed a patch fence in the prompt, or validate findings against
 changed-line overlap.
 
+Use repeatable `--focus <text>` when you want scoped lanes over the same diff-backed
+target:
+
+```bash
+diffwarden review --target base:main --reviewer-set 2 --agent \
+  --focus "focus on state management" \
+  --focus "focus on localization"
+
+diffwarden review --target base:main --reviewer-set 2 --agent \
+  --no-overview \
+  --focus "focus on state management"
+```
+
+Focus lanes are still diff-backed reviews. They reuse one resolved target diff, embed the
+same patch provenance, and validate findings against changed lines. When focus lanes are
+present, Diffwarden includes the normal overview lane by default; use `--no-overview` for
+focus-only runs or `--overview` to override config that disables the overview lane.
+`custom:<text>` remains the repository-scoped audit target and is not compatible with
+`--focus`.
+
 When no `--reviewer` or `--reviewer-set` is provided, config must define
 `defaultReviewerSet`; otherwise the CLI exits with a config-required error. For local
 development and credential-free tests, pass `--reviewer fake` explicitly.
@@ -130,7 +152,7 @@ diffwarden init
 | --- | --- | --- |
 | default | No | Human review display with progress and final summary |
 | `--agent` | Human-readable, agent-oriented | Plain text final summary optimized for coding agents |
-| `--json` | Yes | One final `ReviewArtifact` JSON object after every reviewer finishes |
+| `--json` | Yes | One final review artifact JSON object after every reviewer finishes |
 | `--ndjson` | Yes (versioned event stream) | Newline-delimited review events as work progresses |
 
 `--agent` and `--json` are final-result-only: stdout stays quiet until aggregation
@@ -153,7 +175,7 @@ diffwarden review --target base:main --reviewer-set 2 --ndjson
 {"schema_version":2,"type":"final_result","artifact":{…}}
 ```
 
-Event-stream guarantees:
+No-focus event-stream guarantees:
 
 - Once `run_started` is emitted, the stream always ends with **exactly one** terminal
   frame: `final_result` (authoritative aggregated `ReviewArtifact`) or `error` (an expected
@@ -166,6 +188,11 @@ Event-stream guarantees:
 - `--out`, `--report`, and `--fail-on-findings` operate on the final artifact and behave
   identically across formats. In `ndjson` mode a terminal `error` frame is emitted and the
   process exits non-zero without throwing, so the stream stays a clean sequence of frames.
+
+For focus runs, stdout carries a `ReviewBatchArtifact` instead. Batch NDJSON starts with
+`batch_started`, emits lane-scoped lifecycle events with `lane_id`, emits `lane_finished` or
+`lane_failed`, and still terminates with exactly one `final_result` carrying the full batch
+artifact or one `error`. Normal no-focus NDJSON remains unchanged.
 
 Human progress (not a contract): in `--json` mode, when stderr is a TTY, diffwarden prints
 per-reviewer progress lines to **stderr** so long multi-reviewer runs are not silent. This
@@ -210,7 +237,12 @@ for the reviewed patch; the patch text itself is not persisted in report provena
 The default global store is under the user state directory; repo-scoped reports go under
 `.diffwarden/reports/`. Reports may contain review text that echoes source or diff content,
 so they are never written unless explicitly enabled by CLI or config. `--out` still writes one
-requested `ReviewArtifact`; `--report` appends durable history.
+requested review artifact; `--report` appends durable history.
+
+For focus runs, full reports include the full `ReviewBatchArtifact`. Metadata reports record
+the requested focus strings, overview inclusion, resolved lane plan, shared diff hash/byte
+provenance, and per-lane status/count summaries without embedding finding bodies or patch
+text.
 
 ## Agent Skill
 
@@ -250,6 +282,7 @@ Implemented:
 - Custom instruction targets for repository-scoped reviews.
 - Fake reviewer for credential-free development.
 - Review parsing, rendering, validation, and aggregation.
+- Diff-backed focus lanes with optional overview and batch artifacts.
 - Opt-in review history reports.
 - Project/user `diffwarden.config.json` discovery.
 - Reviewer sets and `engine[:profile]` reviewer specs.
