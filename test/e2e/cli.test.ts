@@ -135,6 +135,160 @@ describe("diffwarden CLI e2e", () => {
     expect(artifact.validation.findings_overlap_diff).toBe(true);
   });
 
+  it("runs one focused diff-backed lane in JSON mode", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    const result = await runDiffwarden(repo, [
+      "review",
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--no-overview",
+      "--focus",
+      "focus on state management",
+      "--json",
+    ]);
+    const artifact = JSON.parse(result.stdout);
+
+    expect(artifact).toMatchObject({
+      schema_version: 2,
+      kind: "batch",
+      plan: {
+        include_overview: false,
+        focus: ["focus on state management"],
+        lanes: [{ id: "focus-1", kind: "focus", focus: "focus on state management" }],
+      },
+      lanes: [
+        {
+          id: "focus-1",
+          kind: "focus",
+          focus: "focus on state management",
+          status: "success",
+        },
+      ],
+    });
+    expect(artifact.lanes[0].artifact.target.changed_files).toEqual(["tracked.txt"]);
+  });
+
+  it("rejects focus lanes for custom targets", async () => {
+    const repo = createRepo();
+
+    await expect(
+      runDiffwarden(repo, [
+        "review",
+        "--target",
+        "custom:Review auth paths",
+        "--reviewer",
+        "fake",
+        "--cwd",
+        repo,
+        "--focus",
+        "focus on auth",
+        "--json",
+      ]),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("--focus is only supported for diff-backed targets"),
+    });
+  });
+
+  it("applies reviewPlan.includeOverview and lets --overview override it", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+    writeFileSync(
+      path.join(repo, "diffwarden.config.json"),
+      `${JSON.stringify({ reviewPlan: { includeOverview: false } }, null, 2)}\n`,
+    );
+
+    const configResult = await runDiffwarden(repo, [
+      "review",
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--focus",
+      "focus on state",
+      "--json",
+    ]);
+    expect(
+      JSON.parse(configResult.stdout).plan.lanes.map((lane: { id: string }) => lane.id),
+    ).toEqual(["focus-1"]);
+
+    const cliResult = await runDiffwarden(repo, [
+      "review",
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--overview",
+      "--focus",
+      "focus on state",
+      "--json",
+    ]);
+    expect(JSON.parse(cliResult.stdout).plan.lanes.map((lane: { id: string }) => lane.id)).toEqual([
+      "overview",
+      "focus-1",
+    ]);
+  });
+
+  it("allows focus text that looks like an overview flag", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    const result = await runDiffwarden(repo, [
+      "review",
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--no-overview",
+      "--focus",
+      "--overview",
+      "--json",
+    ]);
+
+    expect(JSON.parse(result.stdout).plan).toMatchObject({
+      include_overview: false,
+      focus: ["--overview"],
+      lanes: [{ id: "focus-1", kind: "focus", focus: "--overview" }],
+    });
+  });
+
+  it("rejects conflicting overview controls", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    await expect(
+      runDiffwarden(repo, [
+        "review",
+        "--target",
+        "uncommitted",
+        "--reviewer",
+        "fake",
+        "--cwd",
+        repo,
+        "--overview",
+        "--no-overview",
+        "--focus",
+        "focus on state",
+        "--json",
+      ]),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("Choose only one overview control"),
+    });
+  });
+
   it("exits 1 after writing output when findings meet the fail-on-findings threshold", async () => {
     const repo = createRepo();
     const outputPath = path.join(repo, "review.json");
@@ -185,6 +339,63 @@ describe("diffwarden CLI e2e", () => {
     }
   });
 
+  it("exits 1 for focus batch findings that meet the fail-on-findings threshold", async () => {
+    const repo = createRepo();
+    const outputPath = path.join(repo, "review-batch.json");
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    try {
+      await runDiffwarden(
+        repo,
+        [
+          "review",
+          "--target",
+          "uncommitted",
+          "--reviewer",
+          "fake",
+          "--cwd",
+          repo,
+          "--no-overview",
+          "--focus",
+          "focus on state",
+          "--json",
+          "--out",
+          outputPath,
+          "--fail-on-findings",
+          "P2",
+        ],
+        {
+          DIFFWARDEN_FAKE_FINDING_PATH: path.join(repo, "tracked.txt"),
+        },
+      );
+      throw new Error("Expected diffwarden to exit 1");
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 1,
+        stderr: "",
+      });
+      if (!isExecError(error)) {
+        throw error;
+      }
+
+      const stdoutArtifact = JSON.parse(error.stdout);
+      const outArtifact = JSON.parse(readFileSync(outputPath, "utf8"));
+      expect(stdoutArtifact).toMatchObject({
+        kind: "batch",
+        result: {
+          findings: [
+            expect.objectContaining({
+              title: "[P2] Fake finding",
+              priority: 2,
+              lane_ids: ["focus-1"],
+            }),
+          ],
+        },
+      });
+      expect(outArtifact.kind).toBe("batch");
+    }
+  });
+
   it("streams NDJSON events to stdout ending with the final result", async () => {
     const repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
@@ -208,6 +419,41 @@ describe("diffwarden CLI e2e", () => {
     const artifact = (terminal as { artifact?: { engine?: string } }).artifact;
     expect(artifact?.engine).toBe("fake");
     // No second terminal frame, and progress stays off stdout/stderr in NDJSON mode.
+    expect(
+      events.filter((event) => event.type === "final_result" || event.type === "error"),
+    ).toHaveLength(1);
+    expect(result.stderr).toBe("");
+  });
+
+  it("streams focus batch NDJSON events with lane ids", async () => {
+    const repo = createRepo();
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    const result = await runDiffwarden(repo, [
+      "review",
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--no-overview",
+      "--focus",
+      "focus on state",
+      "--ndjson",
+    ]);
+
+    const events = parseNdjson(result.stdout);
+    expect(events[0]?.type).toBe("batch_started");
+    expect(
+      events.some((event) => event.type === "run_started" && event.lane_id === "focus-1"),
+    ).toBe(true);
+    expect(
+      events.some((event) => event.type === "lane_finished" && event.lane_id === "focus-1"),
+    ).toBe(true);
+    const terminal = events.at(-1);
+    expect(terminal?.type).toBe("final_result");
+    expect((terminal as { artifact?: { kind?: string } }).artifact?.kind).toBe("batch");
     expect(
       events.filter((event) => event.type === "final_result" || event.type === "error"),
     ).toHaveLength(1);
@@ -414,6 +660,42 @@ describe("diffwarden CLI e2e", () => {
     expect(agentResult.stdout).not.toContain("\u001B[");
   });
 
+  it("renders a saved focus batch artifact", async () => {
+    const repo = createRepo();
+    const outputPath = path.join(repo, "review-batch.json");
+    writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
+
+    await runDiffwarden(repo, [
+      "review",
+      "--target",
+      "uncommitted",
+      "--reviewer",
+      "fake",
+      "--cwd",
+      repo,
+      "--no-overview",
+      "--focus",
+      "focus on state",
+      "--json",
+      "--out",
+      outputPath,
+    ]);
+
+    const human = await runDiffwarden(repo, ["review", "show", outputPath]);
+    expect(human.stdout).toContain("diffwarden review batch");
+    expect(human.stdout).toContain("Lane focus-1: focus on state");
+
+    const agent = await runDiffwarden(repo, ["review", "show", outputPath, "--agent"]);
+    expect(agent.stdout).toContain("Diffwarden Review Batch");
+    expect(agent.stdout).toContain("focus-1: focus on state");
+
+    const json = await runDiffwarden(repo, ["review", "show", outputPath, "--json"]);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      schema_version: 2,
+      kind: "batch",
+    });
+  });
+
   it("resolves review show artifact paths relative to review --cwd", async () => {
     const repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");
@@ -613,11 +895,20 @@ async function runDiffwarden(
   });
 }
 
-function parseNdjson(stdout: string): Array<{ type: string }> {
+function parseNdjson(
+  stdout: string,
+): Array<{ type: string; lane_id?: string; artifact?: { kind?: string; engine?: string } }> {
   return stdout
     .split("\n")
     .filter((line) => line.trim() !== "")
-    .map((line) => JSON.parse(line) as { type: string });
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          type: string;
+          lane_id?: string;
+          artifact?: { kind?: string; engine?: string };
+        },
+    );
 }
 
 function readPackageBinPath(): string {

@@ -30,6 +30,27 @@ describe("buildReviewPrompt", () => {
     expect(prompt).toContain("diff --git a/tracked.txt b/tracked.txt");
   });
 
+  it("builds focused diff prompts without dropping patch constraints", () => {
+    const prompt = buildReviewPrompt(
+      {
+        kind: "uncommitted",
+        repo_root: "/repo",
+        diff_command: "git diff",
+        changed_files: ["tracked.txt"],
+      },
+      "diff --git a/tracked.txt b/tracked.txt",
+      { focus: "focus on state management" },
+    );
+
+    expect(prompt).toContain("Focus instructions:");
+    expect(prompt).toContain("focus on state management");
+    expect(prompt).toContain("Only report bugs introduced by this diff.");
+    expect(prompt).toContain("directly relevant to the focus instructions");
+    expect(prompt).toContain("override read-only behavior");
+    expect(prompt).toContain("Patch provenance command:");
+    expect(prompt).toContain("```diff");
+  });
+
   it("builds custom prompts without diff-only instructions", () => {
     const target: ReviewTargetResolved = {
       kind: "custom",

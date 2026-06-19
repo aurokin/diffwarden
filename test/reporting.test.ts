@@ -8,7 +8,7 @@ import {
   resolveReportingOptions,
   writeReviewReport,
 } from "../src/core/reporting.js";
-import type { ReviewArtifact } from "../src/core/schema.js";
+import type { ReviewArtifact, ReviewBatchArtifact } from "../src/core/schema.js";
 
 let root: string | undefined;
 
@@ -378,6 +378,74 @@ describe("createReviewReport", () => {
       droidSessionModel: "session-model",
     });
   });
+
+  it("records focus batch provenance and metadata lane summaries", () => {
+    const artifact = reviewBatchArtifact();
+    const firstLane = artifact.lanes[0];
+    if (firstLane === undefined) {
+      throw new Error("missing lane fixture");
+    }
+    artifact.plan.focus.push("focus on reports");
+    artifact.plan.lanes.push({ id: "focus-2", kind: "focus", focus: "focus on reports" });
+    artifact.lanes.push({
+      ...firstLane,
+      id: "focus-2",
+      focus: "focus on reports",
+    });
+
+    const report = createReviewReport({
+      artifact,
+      reporting: {
+        scope: "global",
+        mode: "metadata",
+      },
+      provenance: {
+        diffwardenVersion: "0.3.3",
+        targetSpec: "base:main",
+        reviewers: ["pi-default"],
+        strict: false,
+        format: "json",
+        outputMode: "json",
+        focus: artifact.plan.focus,
+        includeOverview: false,
+        reviewPlan: artifact.plan,
+        diff: "diff --git a/auth.ts b/auth.ts\n",
+      },
+      runId: "run-batch",
+    });
+
+    expect(report.artifact).toBeUndefined();
+    expect(report.provenance.invocation).toMatchObject({
+      target: "base:main",
+      format: "json",
+      output_mode: "json",
+      focus: artifact.plan.focus,
+      include_overview: false,
+      review_plan: artifact.plan,
+    });
+    expect(report.provenance.target).toMatchObject({
+      diff_sha256: sha256("diff --git a/auth.ts b/auth.ts\n"),
+      diff_bytes: Buffer.byteLength("diff --git a/auth.ts b/auth.ts\n"),
+      patch_persisted: false,
+    });
+    expect(report.summary).toMatchObject({
+      lane_count: 2,
+      successful_lane_count: 2,
+      failed_lane_count: 0,
+      finding_count: 2,
+    });
+    expect(report.lanes?.[0]).toMatchObject({
+      id: "focus-1",
+      kind: "focus",
+      focus: "focus on state",
+      status: "success",
+      reviewer_count: 3,
+      finding_count: 2,
+    });
+    expect(report.lanes?.[0]?.findings[0]).not.toHaveProperty("body");
+    expect(report.lanes).toHaveLength(2);
+    expect(report.reviewers).toHaveLength(3);
+  });
 });
 
 describe("writeReviewReport", () => {
@@ -550,6 +618,50 @@ function reviewArtifact(): ReviewArtifact {
     },
     validation: validation(),
     warnings: ["Reviewer claude-cli failed: Claude exploded"],
+    timing_ms: 1234,
+  };
+}
+
+function reviewBatchArtifact(): ReviewBatchArtifact {
+  const laneArtifact = reviewArtifact();
+  laneArtifact.target = {
+    kind: "base",
+    repo_root: "/repo",
+    base_ref: "main",
+    base_sha: "base",
+    head_sha: "head",
+    diff_command: "git diff base HEAD",
+    changed_files: ["auth.ts", "session.ts"],
+  };
+
+  return {
+    schema_version: 2,
+    kind: "batch",
+    cwd: "/repo/packages/app",
+    target: laneArtifact.target,
+    plan: {
+      include_overview: false,
+      focus: ["focus on state"],
+      lanes: [{ id: "focus-1", kind: "focus", focus: "focus on state" }],
+    },
+    result: {
+      ...laneArtifact.result,
+      findings: laneArtifact.result.findings.map((finding) => ({
+        ...finding,
+        lane_ids: ["focus-1"],
+      })),
+    },
+    validation: validation(),
+    lanes: [
+      {
+        id: "focus-1",
+        kind: "focus",
+        focus: "focus on state",
+        status: "success",
+        artifact: laneArtifact,
+        timing_ms: 1234,
+      },
+    ],
     timing_ms: 1234,
   };
 }

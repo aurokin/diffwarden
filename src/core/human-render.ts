@@ -1,4 +1,11 @@
-import type { ReviewArtifact, ReviewArtifactFinding, ReviewEvent } from "./schema.js";
+import type {
+  ReviewArtifact,
+  ReviewArtifactFinding,
+  ReviewBatchArtifact,
+  ReviewEvent,
+  ReviewRunArtifact,
+  ReviewTargetResolved,
+} from "./schema.js";
 
 export type HumanReviewRenderOptions = {
   color?: boolean;
@@ -12,6 +19,8 @@ type FindingCounts = {
   unspecified: number;
 };
 
+type RenderFinding = ReviewArtifactFinding & { lane_ids?: string[] };
+
 export function renderHumanReviewEvent(
   event: ReviewEvent,
   options: HumanReviewRenderOptions = {},
@@ -19,27 +28,45 @@ export function renderHumanReviewEvent(
   const style = createStyle(options);
 
   switch (event.type) {
+    case "batch_started":
+      return [
+        style.heading("diffwarden review batch"),
+        `Target: ${formatTarget(event.target.kind, event.target)}`,
+        `Reviewers: ${event.reviewers.map((reviewer) => reviewer.id).join(", ")}`,
+        `Lanes: ${event.plan.lanes.map(formatLanePlanLabel).join(", ")}`,
+        "",
+      ].join("\n");
     case "run_started":
       return [
-        style.heading("diffwarden review"),
+        style.heading(`${formatLanePrefix(event.lane_id)}diffwarden review`),
         `Target: ${formatTarget(event.target.kind, event.target)}`,
         `Reviewers: ${event.reviewers.map((reviewer) => reviewer.id).join(", ")}`,
         "",
       ].join("\n");
     case "preflight_started":
-      return `${style.muted("•")} ${event.reviewer_id} preflight`;
+      return `${style.muted("•")} ${formatLanePrefix(event.lane_id)}${event.reviewer_id} preflight`;
     case "preflight_finished":
-      return `${event.ok ? style.success("✓") : style.danger("✗")} ${
+      return `${event.ok ? style.success("✓") : style.danger("✗")} ${formatLanePrefix(
+        event.lane_id,
+      )}${
         event.reviewer_id
       } preflight ${event.ok ? "passed" : "failed"}${formatTiming(event.timing_ms)}`;
     case "reviewer_started":
-      return `${style.accent("→")} ${event.reviewer_id} reviewing`;
+      return `${style.accent("→")} ${formatLanePrefix(event.lane_id)}${
+        event.reviewer_id
+      } reviewing`;
     case "reviewer_result":
-      return `${style.success("✓")} ${event.reviewer_id} finished${formatTiming(
-        event.artifact.timing_ms,
-      )}`;
+      return `${style.success("✓")} ${formatLanePrefix(event.lane_id)}${
+        event.reviewer_id
+      } finished${formatTiming(event.artifact.timing_ms)}`;
     case "reviewer_failed":
-      return `${style.danger("✗")} ${event.reviewer_id} failed${formatTiming(
+      return `${style.danger("✗")} ${formatLanePrefix(event.lane_id)}${
+        event.reviewer_id
+      } failed${formatTiming(event.timing_ms)}: ${event.error.message}`;
+    case "lane_finished":
+      return `${style.success("✓")} Lane ${event.lane_id} finished${formatTiming(event.timing_ms)}`;
+    case "lane_failed":
+      return `${style.danger("✗")} Lane ${event.lane_id} failed${formatTiming(
         event.timing_ms,
       )}: ${event.error.message}`;
     case "error":
@@ -50,9 +77,13 @@ export function renderHumanReviewEvent(
 }
 
 export function renderHumanReviewSummary(
-  artifact: ReviewArtifact,
+  artifact: ReviewRunArtifact,
   options: HumanReviewRenderOptions = {},
 ): string {
+  if (isBatchArtifact(artifact)) {
+    return renderHumanBatchReviewSummary(artifact, options);
+  }
+
   const style = createStyle(options);
   const counts = findingCounts(artifact.result.findings);
   const failedReviewers =
@@ -101,9 +132,13 @@ export function renderHumanReviewSummary(
 }
 
 export function renderHumanReviewArtifact(
-  artifact: ReviewArtifact,
+  artifact: ReviewRunArtifact,
   options: HumanReviewRenderOptions = {},
 ): string {
+  if (isBatchArtifact(artifact)) {
+    return renderHumanBatchReviewArtifact(artifact, options);
+  }
+
   const style = createStyle(options);
   const lines = [
     style.heading("diffwarden review"),
@@ -114,7 +149,11 @@ export function renderHumanReviewArtifact(
   return `${lines.join("\n")}\n${renderHumanReviewSummary(artifact, options)}`;
 }
 
-export function renderAgentReviewSummary(artifact: ReviewArtifact): string {
+export function renderAgentReviewSummary(artifact: ReviewRunArtifact): string {
+  if (isBatchArtifact(artifact)) {
+    return renderAgentBatchReviewSummary(artifact);
+  }
+
   const counts = findingCounts(artifact.result.findings);
   const failedReviewers =
     artifact.reviewers?.filter((reviewer) => reviewer.status === "failed") ?? [];
@@ -162,6 +201,136 @@ export function renderAgentReviewSummary(artifact: ReviewArtifact): string {
   return `${lines.join("\n")}\n`;
 }
 
+function renderHumanBatchReviewArtifact(
+  artifact: ReviewBatchArtifact,
+  options: HumanReviewRenderOptions,
+): string {
+  const style = createStyle(options);
+  const lines = [
+    style.heading("diffwarden review batch"),
+    `Target: ${formatTarget(artifact.target.kind, artifact.target)}`,
+    `Lanes: ${artifact.plan.lanes.map(formatLanePlanLabel).join(", ")}`,
+  ];
+
+  return `${lines.join("\n")}\n${renderHumanBatchReviewSummary(artifact, options)}`;
+}
+
+function renderHumanBatchReviewSummary(
+  artifact: ReviewBatchArtifact,
+  options: HumanReviewRenderOptions,
+): string {
+  const style = createStyle(options);
+  const counts = findingCounts(artifact.result.findings);
+  const findingTotal = artifact.result.findings.length;
+  const successfulLanes = artifact.lanes.filter((lane) => lane.status === "success");
+  const failedLanes = artifact.lanes.filter((lane) => lane.status === "failed");
+  const lines = [
+    "",
+    style.heading("Batch Result"),
+    `Verdict: ${formatVerdict(artifact.result.overall_correctness, style)}`,
+    `Confidence: ${formatConfidence(artifact.result.overall_confidence_score)}`,
+    `Findings: ${formatFindingCount(findingTotal, counts, style)}`,
+    `Lanes: ${successfulLanes.length} passed, ${failedLanes.length} failed`,
+  ];
+
+  if (artifact.warnings !== undefined && artifact.warnings.length > 0) {
+    lines.push("", style.warning("Warnings"));
+    for (const warning of artifact.warnings) {
+      lines.push(`- ${warning}`);
+    }
+  }
+
+  if (findingTotal === 0) {
+    lines.push("", "No findings.");
+  } else {
+    lines.push("", style.warning("Merged findings"));
+    for (const finding of [...artifact.result.findings].sort(compareFindings)) {
+      lines.push(...renderFindingCard(finding, style));
+    }
+  }
+
+  for (const lane of artifact.lanes) {
+    lines.push("", style.heading(`Lane ${formatLaneArtifactLabel(lane)}`));
+    lines.push(`Status: ${lane.status}`);
+    if (lane.status === "failed") {
+      lines.push(`Error: ${lane.error.message}`);
+      continue;
+    }
+
+    lines.push(
+      `Verdict: ${formatVerdict(lane.artifact.result.overall_correctness, style)}`,
+      `Findings: ${lane.artifact.result.findings.length}`,
+      `Reviewers: ${formatReviewers(lane.artifact)}`,
+    );
+    if (lane.artifact.result.findings.length === 0) {
+      lines.push("No lane findings.");
+    } else {
+      for (const finding of [...lane.artifact.result.findings].sort(compareFindings)) {
+        lines.push(...renderFindingCard(finding, style));
+      }
+    }
+  }
+
+  const explanation = artifact.result.overall_explanation.trim();
+  if (explanation !== "") {
+    lines.push("", style.muted("Overall explanation"), explanation);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function renderAgentBatchReviewSummary(artifact: ReviewBatchArtifact): string {
+  const counts = findingCounts(artifact.result.findings);
+  const findingTotal = artifact.result.findings.length;
+  const successfulLanes = artifact.lanes.filter((lane) => lane.status === "success");
+  const failedLanes = artifact.lanes.filter((lane) => lane.status === "failed");
+  const lines = [
+    "Diffwarden Review Batch",
+    `Target: ${formatTarget(artifact.target.kind, artifact.target)}`,
+    `Verdict: ${artifact.result.overall_correctness}`,
+    `Confidence: ${formatConfidence(artifact.result.overall_confidence_score)}`,
+    `Findings: ${formatAgentFindingCount(findingTotal, counts)}`,
+    `Lanes: ${successfulLanes.length} passed, ${failedLanes.length} failed`,
+  ];
+
+  if (artifact.warnings !== undefined && artifact.warnings.length > 0) {
+    lines.push("", "Warnings:");
+    for (const warning of artifact.warnings) {
+      lines.push(`- ${warning}`);
+    }
+  }
+
+  if (findingTotal === 0) {
+    lines.push("", "No findings.");
+  } else {
+    lines.push("", "Merged findings:");
+    for (const [index, finding] of [...artifact.result.findings].sort(compareFindings).entries()) {
+      lines.push(...renderAgentFinding(index + 1, finding));
+    }
+  }
+
+  lines.push("", "Lanes:");
+  for (const lane of artifact.lanes) {
+    lines.push(`- ${formatLaneArtifactLabel(lane)}: ${lane.status}`);
+    if (lane.status === "failed") {
+      lines.push(`  Error: ${lane.error.message}`);
+      continue;
+    }
+    lines.push(
+      `  Verdict: ${lane.artifact.result.overall_correctness}`,
+      `  Findings: ${lane.artifact.result.findings.length}`,
+      `  Reviewers: ${formatReviewers(lane.artifact)}`,
+    );
+  }
+
+  const explanation = artifact.result.overall_explanation.trim();
+  if (explanation !== "") {
+    lines.push("", "Overall explanation:", explanation);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
 export function shouldUseHumanColor(options: {
   env?: NodeJS.ProcessEnv;
   stream?: Pick<NodeJS.WriteStream, "isTTY">;
@@ -177,7 +346,7 @@ export function shouldUseHumanColor(options: {
 }
 
 function renderFindingCard(
-  finding: ReviewArtifactFinding,
+  finding: RenderFinding,
   style: ReturnType<typeof createStyle>,
 ): string[] {
   const location = finding.code_location;
@@ -185,9 +354,13 @@ function renderFindingCard(
     finding.reviewer_ids === undefined || finding.reviewer_ids.length === 0
       ? ""
       : ` · ${finding.reviewer_ids.join(", ")}`;
+  const lanes =
+    finding.lane_ids === undefined || finding.lane_ids.length === 0
+      ? ""
+      : ` · lanes ${finding.lane_ids.join(", ")}`;
   return [
     `- ${style.priority(finding.priority)} ${finding.title}`,
-    `  ${location.absolute_file_path}:${location.line_range.start}-${location.line_range.end}${reviewers}`,
+    `  ${location.absolute_file_path}:${location.line_range.start}-${location.line_range.end}${reviewers}${lanes}`,
     `  ${finding.body.replaceAll("\n", "\n  ")}`,
   ];
 }
@@ -228,7 +401,7 @@ function formatAgentFindingCount(total: number, counts: FindingCounts): string {
   return `${total} (${parts.join(", ")})`;
 }
 
-function renderAgentFinding(index: number, finding: ReviewArtifactFinding): string[] {
+function renderAgentFinding(index: number, finding: RenderFinding): string[] {
   const location = finding.code_location;
   const lines = [
     `${index}. ${formatPlainPriority(finding.priority)} ${finding.title}`,
@@ -238,6 +411,9 @@ function renderAgentFinding(index: number, finding: ReviewArtifactFinding): stri
 
   if (finding.reviewer_ids !== undefined && finding.reviewer_ids.length > 0) {
     lines.push(`Reviewers: ${finding.reviewer_ids.join(", ")}`);
+  }
+  if (finding.lane_ids !== undefined && finding.lane_ids.length > 0) {
+    lines.push(`Lanes: ${finding.lane_ids.join(", ")}`);
   }
 
   const body = finding.body.trim();
@@ -264,7 +440,23 @@ function formatReviewers(artifact: ReviewArtifact): string {
   return "unknown";
 }
 
-function findingCounts(findings: ReviewArtifactFinding[]): FindingCounts {
+function isBatchArtifact(artifact: ReviewRunArtifact): artifact is ReviewBatchArtifact {
+  return "kind" in artifact && artifact.kind === "batch";
+}
+
+function formatLanePrefix(laneId: string | undefined): string {
+  return laneId === undefined ? "" : `[${laneId}] `;
+}
+
+function formatLanePlanLabel(lane: ReviewBatchArtifact["plan"]["lanes"][number]): string {
+  return lane.kind === "overview" ? "overview" : `${lane.id}: ${lane.focus}`;
+}
+
+function formatLaneArtifactLabel(lane: ReviewBatchArtifact["lanes"][number]): string {
+  return lane.kind === "overview" ? "overview" : `${lane.id}: ${lane.focus}`;
+}
+
+function findingCounts(findings: RenderFinding[]): FindingCounts {
   const counts: FindingCounts = { p0: 0, p1: 0, p2: 0, p3: 0, unspecified: 0 };
   for (const finding of findings) {
     switch (finding.priority) {
@@ -289,7 +481,7 @@ function findingCounts(findings: ReviewArtifactFinding[]): FindingCounts {
 }
 
 function formatVerdict(
-  verdict: ReviewArtifact["result"]["overall_correctness"],
+  verdict: ReviewRunArtifact["result"]["overall_correctness"],
   style: ReturnType<typeof createStyle>,
 ): string {
   if (verdict === "patch is correct") {
@@ -309,7 +501,7 @@ function formatTiming(timingMs: number | undefined): string {
   return timingMs === undefined ? "" : ` (${(timingMs / 1000).toFixed(1)}s)`;
 }
 
-function formatTarget(kind: string, target: ReviewArtifact["target"]): string {
+function formatTarget(kind: string, target: ReviewTargetResolved): string {
   if (kind === "base" && target.base_ref) {
     return `base:${target.base_ref}`;
   }
@@ -322,7 +514,7 @@ function formatTarget(kind: string, target: ReviewArtifact["target"]): string {
   return kind;
 }
 
-function compareFindings(left: ReviewArtifactFinding, right: ReviewArtifactFinding): number {
+function compareFindings(left: RenderFinding, right: RenderFinding): number {
   return (
     prioritySortValue(left) - prioritySortValue(right) ||
     left.code_location.absolute_file_path.localeCompare(right.code_location.absolute_file_path) ||
@@ -332,7 +524,7 @@ function compareFindings(left: ReviewArtifactFinding, right: ReviewArtifactFindi
   );
 }
 
-function prioritySortValue(finding: ReviewArtifactFinding): number {
+function prioritySortValue(finding: RenderFinding): number {
   return finding.priority ?? 4;
 }
 

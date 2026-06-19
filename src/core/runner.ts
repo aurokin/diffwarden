@@ -31,7 +31,12 @@ import type {
   ParseMode,
   ReviewArtifact,
   ReviewArtifactResult,
+  ReviewBatchArtifact,
+  ReviewBatchArtifactResult,
+  ReviewBatchLaneArtifact,
   ReviewEvent,
+  ReviewLane,
+  ReviewPlan,
   ReviewReviewerArtifact,
   ReviewTargetResolved,
   ReviewValidation,
@@ -54,6 +59,11 @@ export type RunReviewOptions = {
   config?: DiffwardenConfig;
   env?: NodeJS.ProcessEnv;
   adapters?: Partial<Record<string, ReviewAdapter>>;
+  promptFocus?: string;
+};
+
+export type RunReviewBatchOptions = RunReviewOptions & {
+  plan: ReviewPlan;
 };
 
 export type ReviewerPreflightArtifact = {
@@ -95,22 +105,11 @@ export type ReviewerPreflightReport = {
 export async function* runReviewEvents(
   options: RunReviewOptions,
 ): AsyncGenerator<ReviewEvent, ReviewArtifact | undefined, void> {
-  const reviewers = resolveReviewerConfigs({
-    ...(options.reviewers !== undefined
-      ? { reviewers: options.reviewers }
-      : options.reviewer !== undefined
-        ? { reviewers: [options.reviewer] }
-        : {}),
-    ...(options.reviewerSet !== undefined ? { reviewerSet: options.reviewerSet } : {}),
-    ...(options.model !== undefined ? { model: options.model } : {}),
-    ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
-    ...(options.effort !== undefined ? { effort: options.effort } : {}),
-    ...(options.effortSource !== undefined ? { effortSource: options.effortSource } : {}),
-    ...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
-    ...(options.config !== undefined ? { config: options.config } : {}),
-  });
+  const reviewers = resolveRunReviewers(options);
   const start = Date.now();
-  const prompt = buildReviewPrompt(options.resolved.target, options.resolved.diff);
+  const prompt = buildReviewPrompt(options.resolved.target, options.resolved.diff, {
+    ...(options.promptFocus !== undefined ? { focus: options.promptFocus } : {}),
+  });
   const changedLineRanges = parseChangedLineRanges(options.resolved.diff);
   const env = options.env ?? process.env;
 
@@ -176,6 +175,218 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
   }
 
   return next.value;
+}
+
+export async function* runReviewBatchEvents(
+  options: RunReviewBatchOptions,
+): AsyncGenerator<ReviewEvent, ReviewBatchArtifact | undefined, void> {
+  const reviewers = resolveRunReviewers(options);
+  const start = Date.now();
+  const queue = new AsyncEventQueue<ReviewEvent>();
+  const laneArtifacts = new Array<ReviewBatchLaneArtifact>(options.plan.lanes.length);
+
+  yield event({
+    type: "batch_started",
+    cwd: options.cwd,
+    target: options.resolved.target,
+    reviewers: reviewers.map((reviewer) => ({ id: reviewer.id, engine: reviewer.sdk })),
+    plan: options.plan,
+  });
+
+  const laneRuns = options.plan.lanes.map((lane, index) =>
+    runBatchLane({
+      lane,
+      options,
+      queue,
+    })
+      .then((artifact) => {
+        laneArtifacts[index] = artifact;
+      })
+      .catch((error) => {
+        laneArtifacts[index] = failedLaneArtifact(lane, reviewerError(error), 0);
+      }),
+  );
+
+  void Promise.all(laneRuns).finally(() => queue.close());
+
+  for await (const reviewEvent of queue) {
+    yield reviewEvent;
+  }
+
+  await Promise.all(laneRuns);
+
+  try {
+    const artifact = finalizeBatchArtifact({
+      laneArtifacts,
+      options,
+      changedLineRanges: parseChangedLineRanges(options.resolved.diff),
+      start,
+    });
+    yield event({ type: "final_result", artifact });
+    return artifact;
+  } catch (error) {
+    if (error instanceof DiffwardenError) {
+      yield event({ type: "error", error: diffwardenEventError(error) });
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function resolveRunReviewers(options: RunReviewOptions): ReviewReviewerConfig[] {
+  return resolveReviewerConfigs({
+    ...(options.reviewers !== undefined
+      ? { reviewers: options.reviewers }
+      : options.reviewer !== undefined
+        ? { reviewers: [options.reviewer] }
+        : {}),
+    ...(options.reviewerSet !== undefined ? { reviewerSet: options.reviewerSet } : {}),
+    ...(options.model !== undefined ? { model: options.model } : {}),
+    ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
+    ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    ...(options.effortSource !== undefined ? { effortSource: options.effortSource } : {}),
+    ...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
+    ...(options.config !== undefined ? { config: options.config } : {}),
+  });
+}
+
+async function runBatchLane(options: {
+  lane: ReviewLane;
+  options: RunReviewBatchOptions;
+  queue: AsyncEventQueue<ReviewEvent>;
+}): Promise<ReviewBatchLaneArtifact> {
+  const start = Date.now();
+  let artifact: ReviewArtifact | undefined;
+  let terminalError: ReviewerError | undefined;
+
+  try {
+    const stream = runReviewEvents({
+      ...options.options,
+      ...(options.lane.focus !== undefined ? { promptFocus: options.lane.focus } : {}),
+    });
+    let next = await stream.next();
+    while (next.done !== true) {
+      const reviewEvent = next.value;
+      if (reviewEvent.type === "final_result") {
+        if ("kind" in reviewEvent.artifact && reviewEvent.artifact.kind === "batch") {
+          throw reviewerFailed("Batch lanes must produce single review artifacts");
+        }
+        artifact = reviewEvent.artifact;
+      } else if (reviewEvent.type === "error") {
+        terminalError = reviewEvent.error;
+      } else {
+        options.queue.push(addLaneId(reviewEvent, options.lane.id));
+      }
+      next = await stream.next();
+    }
+
+    const timingMs = Date.now() - start;
+    if (terminalError !== undefined || artifact === undefined) {
+      const error = terminalError ?? reviewerError(reviewerFailed("Lane produced no result"));
+      options.queue.push(
+        event({
+          type: "lane_failed",
+          lane_id: options.lane.id,
+          error,
+          timing_ms: timingMs,
+        }),
+      );
+      return failedLaneArtifact(options.lane, error, timingMs);
+    }
+
+    options.queue.push(
+      event({
+        type: "lane_finished",
+        lane_id: options.lane.id,
+        artifact,
+        timing_ms: timingMs,
+      }),
+    );
+    return {
+      ...options.lane,
+      status: "success",
+      artifact,
+      timing_ms: timingMs,
+    };
+  } catch (error) {
+    const timingMs = Date.now() - start;
+    const reviewerArtifactError = reviewerError(error);
+    options.queue.push(
+      event({
+        type: "lane_failed",
+        lane_id: options.lane.id,
+        error: reviewerArtifactError,
+        timing_ms: timingMs,
+      }),
+    );
+    return failedLaneArtifact(options.lane, reviewerArtifactError, timingMs);
+  }
+}
+
+function addLaneId(reviewEvent: ReviewEvent, laneId: string): ReviewEvent {
+  return {
+    ...reviewEvent,
+    lane_id: laneId,
+  } as ReviewEvent;
+}
+
+function failedLaneArtifact(
+  lane: ReviewLane,
+  error: ReviewerError,
+  timingMs: number,
+): ReviewBatchLaneArtifact {
+  return {
+    ...lane,
+    status: "failed",
+    error,
+    timing_ms: timingMs,
+  };
+}
+
+function finalizeBatchArtifact(params: {
+  laneArtifacts: ReviewBatchLaneArtifact[];
+  options: RunReviewBatchOptions;
+  changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
+  start: number;
+}): ReviewBatchArtifact {
+  const { laneArtifacts, options, changedLineRanges, start } = params;
+  const successfulLanes = laneArtifacts.filter(isSuccessfulLaneArtifact);
+  const failedLanes = laneArtifacts.filter(isFailedLaneArtifact);
+
+  if (successfulLanes.length === 0) {
+    throw reviewerFailed(`All lanes failed: ${formatFailedLanes(failedLanes)}`);
+  }
+
+  if (options.strict === true && failedLanes.length > 0) {
+    throw reviewerFailed(`Lane failed in strict mode: ${formatFailedLanes(failedLanes)}`);
+  }
+
+  const result = mergeLaneResults(successfulLanes);
+  const validation = validateReviewResult({
+    result,
+    target: options.resolved.target,
+    validation: aggregateLaneValidationSeed(successfulLanes),
+    changedLineRanges,
+  });
+
+  if (options.strict === true) {
+    enforceStrictValidation(validation);
+  }
+
+  const warnings = batchWarnings(successfulLanes, failedLanes);
+
+  return {
+    schema_version: 2,
+    kind: "batch",
+    cwd: options.cwd,
+    target: options.resolved.target,
+    plan: options.plan,
+    result,
+    validation,
+    ...(warnings.length > 0 ? { warnings } : {}),
+    timing_ms: Date.now() - start,
+    lanes: laneArtifacts,
+  };
 }
 
 /**
@@ -448,6 +659,16 @@ type SuccessfulReviewerArtifact = ReviewReviewerArtifact & {
 type FailedReviewerArtifact = ReviewReviewerArtifact & {
   status: "failed";
   error: NonNullable<ReviewReviewerArtifact["error"]>;
+};
+
+type SuccessfulLaneArtifact = ReviewBatchLaneArtifact & {
+  status: "success";
+  artifact: ReviewArtifact;
+};
+
+type FailedLaneArtifact = ReviewBatchLaneArtifact & {
+  status: "failed";
+  error: ReviewerError;
 };
 
 type PreflightOutcome =
@@ -760,6 +981,14 @@ function isFailedReviewerArtifact(
   return reviewer.status === "failed" && reviewer.error !== undefined;
 }
 
+function isSuccessfulLaneArtifact(lane: ReviewBatchLaneArtifact): lane is SuccessfulLaneArtifact {
+  return lane.status === "success";
+}
+
+function isFailedLaneArtifact(lane: ReviewBatchLaneArtifact): lane is FailedLaneArtifact {
+  return lane.status === "failed";
+}
+
 function throwReviewerFailures(
   failures: FailedReviewerArtifact[],
   options: { strict: boolean; reviewerCount: number },
@@ -793,6 +1022,102 @@ function enforceStrictValidation(validation: ReviewValidation): void {
   if (!validation.valid_locations || !validation.findings_overlap_diff) {
     throw validationFailed("Reviewer output contains findings outside the reviewed diff");
   }
+}
+
+function mergeLaneResults(lanes: SuccessfulLaneArtifact[]): ReviewBatchArtifactResult {
+  const findings = mergeLaneFindings(lanes);
+  const incorrect = lanes.some(
+    (lane) =>
+      lane.artifact.result.overall_correctness === "patch is incorrect" ||
+      lane.artifact.result.findings.length > 0,
+  );
+  const unknown = lanes.some((lane) => lane.artifact.result.overall_correctness === "unknown");
+  const confidenceScores = lanes.map((lane) => lane.artifact.result.overall_confidence_score);
+  const confidence =
+    confidenceScores.length === 0
+      ? 0
+      : confidenceScores.reduce((sum, score) => sum + score, 0) / confidenceScores.length;
+  const explanations = lanes.map((lane) => {
+    const label = lane.kind === "overview" ? "overview" : `${lane.id} (${lane.focus})`;
+    return `${label}: ${lane.artifact.result.overall_explanation.trim()}`;
+  });
+
+  return {
+    findings,
+    overall_correctness: incorrect
+      ? "patch is incorrect"
+      : unknown
+        ? "unknown"
+        : "patch is correct",
+    overall_explanation: explanations.join("\n\n"),
+    overall_confidence_score: confidence,
+  };
+}
+
+function mergeLaneFindings(lanes: SuccessfulLaneArtifact[]): ReviewBatchArtifactResult["findings"] {
+  const findingsByKey = new Map<string, ReviewBatchArtifactResult["findings"][number]>();
+
+  for (const lane of lanes) {
+    for (const finding of lane.artifact.result.findings) {
+      const key = findingDeduplicationKey(finding);
+      const existing = findingsByKey.get(key);
+      if (existing === undefined) {
+        findingsByKey.set(key, {
+          ...finding,
+          reviewer_ids: finding.reviewer_ids ?? [],
+          lane_ids: [lane.id],
+        });
+        continue;
+      }
+
+      existing.reviewer_ids = [
+        ...new Set([...(existing.reviewer_ids ?? []), ...(finding.reviewer_ids ?? [])]),
+      ];
+      existing.lane_ids = [...new Set([...existing.lane_ids, lane.id])];
+    }
+  }
+
+  return [...findingsByKey.values()];
+}
+
+function aggregateLaneValidationSeed(lanes: SuccessfulLaneArtifact[]): ReviewValidation {
+  return {
+    parse_mode: aggregateLaneParseMode(lanes),
+    valid_schema: lanes.every((lane) => lane.artifact.validation.valid_schema),
+    findings_overlap_diff: lanes.every((lane) => lane.artifact.validation.findings_overlap_diff),
+    valid_locations: lanes.every((lane) => lane.artifact.validation.valid_locations),
+    invalid_locations: [],
+  };
+}
+
+function aggregateLaneParseMode(lanes: SuccessfulLaneArtifact[]): ParseMode {
+  const [firstLane] = lanes;
+  if (
+    firstLane !== undefined &&
+    lanes.every(
+      (lane) => lane.artifact.validation.parse_mode === firstLane.artifact.validation.parse_mode,
+    )
+  ) {
+    return firstLane.artifact.validation.parse_mode;
+  }
+
+  return "tool-output";
+}
+
+function batchWarnings(
+  successfulLanes: SuccessfulLaneArtifact[],
+  failedLanes: FailedLaneArtifact[],
+): string[] {
+  return [
+    ...failedLanes.map((lane) => `Lane ${lane.id} failed: ${lane.error.message}`),
+    ...successfulLanes.flatMap((lane) =>
+      (lane.artifact.warnings ?? []).map((warning) => `Lane ${lane.id}: ${warning}`),
+    ),
+  ];
+}
+
+function formatFailedLanes(lanes: FailedLaneArtifact[]): string {
+  return lanes.map((lane) => `${lane.id}: ${lane.error.message}`).join("; ");
 }
 
 function buildTopLevelResult(
@@ -942,6 +1267,58 @@ async function withTimeout<T>(
   } finally {
     if (timer !== undefined) {
       clearTimeout(timer);
+    }
+  }
+}
+
+class AsyncEventQueue<T> implements AsyncIterable<T> {
+  private readonly values: T[] = [];
+  private closed = false;
+  private waiting: ((result: IteratorResult<T>) => void) | undefined;
+
+  push(value: T): void {
+    if (this.closed) {
+      return;
+    }
+
+    const waiting = this.waiting;
+    if (waiting !== undefined) {
+      this.waiting = undefined;
+      waiting({ value, done: false });
+      return;
+    }
+
+    this.values.push(value);
+  }
+
+  close(): void {
+    this.closed = true;
+    const waiting = this.waiting;
+    if (waiting !== undefined) {
+      this.waiting = undefined;
+      waiting({ value: undefined, done: true });
+    }
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<T> {
+    while (true) {
+      const value = this.values.shift();
+      if (value !== undefined) {
+        yield value;
+        continue;
+      }
+
+      if (this.closed) {
+        return;
+      }
+
+      const next = await new Promise<IteratorResult<T>>((resolve) => {
+        this.waiting = resolve;
+      });
+      if (next.done === true) {
+        return;
+      }
+      yield next.value;
     }
   }
 }

@@ -299,6 +299,36 @@ describe("loadDiffwardenConfig", () => {
     });
   });
 
+  it("loads review plan overview defaults", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewPlan: {
+        includeOverview: false,
+      },
+    });
+
+    const loaded = await loadDiffwardenConfig({ cwd: root, repoRoot: root });
+
+    expect(loaded?.config.reviewPlan).toEqual({
+      includeOverview: false,
+    });
+  });
+
+  it("rejects unsupported review plan configuration", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewPlan: {
+        includeOverview: true,
+        sequential: true,
+      },
+    });
+
+    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+    });
+  });
+
   it("rejects unsupported reporting scopes", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {

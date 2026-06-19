@@ -8,7 +8,11 @@ import { invalidCli } from "./errors.js";
 import type {
   ReviewArtifact,
   ReviewArtifactFinding,
+  ReviewBatchArtifact,
+  ReviewBatchLaneArtifact,
+  ReviewPlan,
   ReviewReviewerArtifact,
+  ReviewRunArtifact,
   ReviewTargetResolved,
 } from "./schema.js";
 
@@ -47,6 +51,7 @@ export type ReviewReportFinding =
       priority?: 0 | 1 | 2 | 3;
       code_location: ReviewArtifactFinding["code_location"];
       reviewer_ids?: string[];
+      lane_ids?: string[];
     };
 
 export type ReviewReport = {
@@ -74,8 +79,12 @@ export type ReviewReport = {
     elapsed_ms?: number;
     overall_correctness: ReviewArtifact["result"]["overall_correctness"];
     overall_confidence_score: number;
+    lane_count?: number;
+    successful_lane_count?: number;
+    failed_lane_count?: number;
   };
-  artifact?: ReviewArtifact;
+  lanes?: ReviewReportLane[];
+  artifact?: ReviewRunArtifact;
 };
 
 export type ReviewReportTarget = Omit<ReviewTargetResolved, "instructions"> & {
@@ -96,6 +105,10 @@ export type ReviewReportProvenance = {
     strict: boolean;
     fail_on_findings?: string;
     format?: ReviewReportOutputFormat;
+    output_mode?: ReviewReportOutputFormat;
+    focus?: string[];
+    include_overview?: boolean;
+    review_plan?: ReviewPlan;
   };
   config?: {
     path: string;
@@ -134,6 +147,21 @@ export type ReviewReportReviewer = {
   error?: NonNullable<ReviewReviewerArtifact["error"]>;
 };
 
+export type ReviewReportLane = {
+  id: string;
+  kind: ReviewBatchLaneArtifact["kind"];
+  focus?: string;
+  status: ReviewBatchLaneArtifact["status"];
+  elapsed_ms?: number;
+  reviewer_count: number;
+  successful_reviewer_count: number;
+  failed_reviewer_count: number;
+  finding_count: number;
+  finding_counts_by_priority: FindingCountsByPriority;
+  findings: ReviewReportFinding[];
+  error?: NonNullable<Extract<ReviewBatchLaneArtifact, { status: "failed" }>["error"]>;
+};
+
 export type ReviewReportValueResolution = {
   requested?: string;
   resolved?: string;
@@ -151,6 +179,10 @@ export type ReviewReportProvenanceInput = {
   strict?: boolean;
   failOnFindings?: string;
   format?: ReviewReportOutputFormat;
+  outputMode?: ReviewReportOutputFormat;
+  focus?: string[];
+  includeOverview?: boolean;
+  reviewPlan?: ReviewPlan;
   config?: {
     path: string;
     sha256: string;
@@ -159,7 +191,7 @@ export type ReviewReportProvenanceInput = {
 };
 
 export type WriteReviewReportOptions = {
-  artifact: ReviewArtifact;
+  artifact: ReviewRunArtifact;
   reporting: ResolvedReportingOptions;
   provenance?: ReviewReportProvenanceInput;
   now?: Date;
@@ -253,7 +285,7 @@ export async function writeReviewReport(
 }
 
 export function createReviewReport(options: {
-  artifact: ReviewArtifact;
+  artifact: ReviewRunArtifact;
   reporting: Pick<ResolvedReportingOptions, "scope" | "mode">;
   provenance?: ReviewReportProvenanceInput;
   now?: Date;
@@ -261,7 +293,7 @@ export function createReviewReport(options: {
 }): ReviewReport {
   const createdAt = (options.now ?? new Date()).toISOString();
   const runId = options.runId ?? randomUUID();
-  const reviewers = (options.artifact.reviewers ?? []).map((reviewer) =>
+  const reviewers = artifactReviewers(options.artifact).map((reviewer) =>
     createReviewerReport(reviewer, options.reporting.mode),
   );
   const summaryFindings = options.artifact.result.findings.map((finding) =>
@@ -295,7 +327,9 @@ export function createReviewReport(options: {
         : {}),
       overall_correctness: options.artifact.result.overall_correctness,
       overall_confidence_score: options.artifact.result.overall_confidence_score,
+      ...batchSummaryCounts(options.artifact),
     },
+    ...batchLaneReports(options.artifact, options.reporting.mode),
     ...(options.reporting.mode === "full" ? { artifact: options.artifact } : {}),
   };
 
@@ -344,6 +378,87 @@ function createReviewerReport(
   };
 }
 
+function artifactReviewers(artifact: ReviewRunArtifact): ReviewReviewerArtifact[] {
+  if (isBatchArtifact(artifact)) {
+    const reviewersById = new Map<string, ReviewReviewerArtifact>();
+    for (const lane of artifact.lanes) {
+      if (lane.status === "failed") {
+        continue;
+      }
+      for (const reviewer of lane.artifact.reviewers ?? []) {
+        if (!reviewersById.has(reviewer.id)) {
+          reviewersById.set(reviewer.id, reviewer);
+        }
+      }
+    }
+    return [...reviewersById.values()];
+  }
+
+  return artifact.reviewers ?? [];
+}
+
+function batchSummaryCounts(
+  artifact: ReviewRunArtifact,
+): Pick<ReviewReport["summary"], "lane_count" | "successful_lane_count" | "failed_lane_count"> {
+  if (!isBatchArtifact(artifact)) {
+    return {};
+  }
+
+  return {
+    lane_count: artifact.lanes.length,
+    successful_lane_count: artifact.lanes.filter((lane) => lane.status === "success").length,
+    failed_lane_count: artifact.lanes.filter((lane) => lane.status === "failed").length,
+  };
+}
+
+function batchLaneReports(
+  artifact: ReviewRunArtifact,
+  mode: ReportingMode,
+): Pick<ReviewReport, "lanes"> {
+  if (!isBatchArtifact(artifact)) {
+    return {};
+  }
+
+  return {
+    lanes: artifact.lanes.map((lane) => createLaneReport(lane, mode)),
+  };
+}
+
+function createLaneReport(lane: ReviewBatchLaneArtifact, mode: ReportingMode): ReviewReportLane {
+  if (lane.status === "failed") {
+    return {
+      id: lane.id,
+      kind: lane.kind,
+      ...(lane.focus !== undefined ? { focus: lane.focus } : {}),
+      status: lane.status,
+      ...(lane.timing_ms !== undefined ? { elapsed_ms: lane.timing_ms } : {}),
+      reviewer_count: 0,
+      successful_reviewer_count: 0,
+      failed_reviewer_count: 0,
+      finding_count: 0,
+      finding_counts_by_priority: countFindingsByPriority([]),
+      findings: [],
+      error: lane.error,
+    };
+  }
+
+  const reviewers = lane.artifact.reviewers ?? [];
+  const findings = lane.artifact.result.findings.map((finding) => reportFinding(finding, mode));
+  return {
+    id: lane.id,
+    kind: lane.kind,
+    ...(lane.focus !== undefined ? { focus: lane.focus } : {}),
+    status: lane.status,
+    ...(lane.timing_ms !== undefined ? { elapsed_ms: lane.timing_ms } : {}),
+    reviewer_count: reviewers.length,
+    successful_reviewer_count: reviewers.filter((reviewer) => reviewer.status !== "failed").length,
+    failed_reviewer_count: reviewers.filter((reviewer) => reviewer.status === "failed").length,
+    finding_count: findings.length,
+    finding_counts_by_priority: countFindingsByPriority(findings),
+    findings,
+  };
+}
+
 function reportValueResolution(
   reviewer: ReviewReviewerArtifact,
   fields: {
@@ -381,7 +496,7 @@ function stringMetadataField<K extends keyof ReviewReportValueResolution>(
 }
 
 function reportProvenance(
-  artifact: ReviewArtifact,
+  artifact: ReviewRunArtifact,
   input: ReviewReportProvenanceInput | undefined,
 ): ReviewReportProvenance {
   const diff = artifact.target.kind === "custom" ? undefined : input?.diff;
@@ -400,12 +515,16 @@ function reportProvenance(
       strict: input?.strict === true,
       ...(input?.failOnFindings !== undefined ? { fail_on_findings: input.failOnFindings } : {}),
       ...(input?.format !== undefined ? { format: input.format } : {}),
+      ...(input?.outputMode !== undefined ? { output_mode: input.outputMode } : {}),
+      ...(input?.focus !== undefined ? { focus: input.focus } : {}),
+      ...(input?.includeOverview !== undefined ? { include_overview: input.includeOverview } : {}),
+      ...(input?.reviewPlan !== undefined ? { review_plan: input.reviewPlan } : {}),
     },
     ...(input?.config !== undefined ? { config: input.config } : {}),
     reviewer_selection: {
       ...(input?.reviewerSet !== undefined ? { reviewer_set: input.reviewerSet } : {}),
       ...(input?.reviewers !== undefined ? { requested_reviewers: input.reviewers } : {}),
-      resolved_reviewers: (artifact.reviewers ?? []).map((reviewer) => reviewer.id),
+      resolved_reviewers: [...new Set(artifactReviewers(artifact).map((reviewer) => reviewer.id))],
     },
     target: {
       ...(diff !== undefined
@@ -430,7 +549,14 @@ function reportFinding(finding: ReviewArtifactFinding, mode: ReportingMode): Rev
     ...(finding.priority !== undefined ? { priority: finding.priority } : {}),
     code_location: finding.code_location,
     ...(finding.reviewer_ids !== undefined ? { reviewer_ids: finding.reviewer_ids } : {}),
+    ...("lane_ids" in finding && Array.isArray(finding.lane_ids)
+      ? { lane_ids: finding.lane_ids as string[] }
+      : {}),
   };
+}
+
+function isBatchArtifact(artifact: ReviewRunArtifact): artifact is ReviewBatchArtifact {
+  return "kind" in artifact && artifact.kind === "batch";
 }
 
 function reportTarget(target: ReviewTargetResolved): ReviewReportTarget {

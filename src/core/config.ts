@@ -14,6 +14,11 @@ const effortSchema = z.enum(effortValues);
 const transportSchema = z.enum(["sdk", "cli", "app-server"]);
 const reportingScopeSchema = z.enum(["global", "repo"]);
 const reportingModeSchema = z.enum(["full", "metadata"]);
+const reviewPlanConfigSchema = z
+  .object({
+    includeOverview: z.boolean().optional(),
+  })
+  .strict();
 const configuredReviewerEngineSchema = reviewerSdkSchema.exclude(["fake"]);
 const codexAppServerModeSchema = z.enum(["auto", "attach", "launch", "stdio-isolated"]);
 const codexWebSearchSchema = z.enum(["enabled", "disabled", "inherit"]);
@@ -63,6 +68,7 @@ export const diffwardenConfigSchema = z
     reviewers: z.array(reviewerConfigSchema).optional(),
     readonly: z.literal(true).optional(),
     timeoutSeconds: z.number().positive().optional(),
+    reviewPlan: reviewPlanConfigSchema.optional(),
     reporting: z
       .object({
         enabled: z.boolean().optional(),

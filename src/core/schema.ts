@@ -41,6 +41,10 @@ export const reviewArtifactFindingSchema = reviewFindingSchema.extend({
   reviewer_ids: z.array(z.string().min(1)).optional(),
 });
 
+export const reviewBatchArtifactFindingSchema = reviewArtifactFindingSchema.extend({
+  lane_ids: z.array(z.string().min(1)).min(1),
+});
+
 export const reviewResultSchema = z
   .object({
     findings: z.array(reviewFindingSchema),
@@ -139,6 +143,10 @@ export const reviewResultStrictJsonSchema = {
 export const reviewArtifactResultSchema = reviewResultSchema.extend({
   findings: z.array(reviewArtifactFindingSchema),
   overall_correctness: artifactOverallCorrectnessSchema,
+});
+
+export const reviewBatchArtifactResultSchema = reviewArtifactResultSchema.extend({
+  findings: z.array(reviewBatchArtifactFindingSchema),
 });
 
 export const parseModeSchema = z.enum([
@@ -297,13 +305,83 @@ export const reviewArtifactSchema = z
   })
   .strict();
 
+export const reviewLaneSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.enum(["overview", "focus"]),
+    focus: z.string().min(1).optional(),
+  })
+  .strict()
+  .superRefine((lane, context) => {
+    if (lane.kind === "focus" && lane.focus === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "focus lanes must include focus instructions",
+        path: ["focus"],
+      });
+    }
+    if (lane.kind === "overview" && lane.focus !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "overview lanes must not include focus instructions",
+        path: ["focus"],
+      });
+    }
+  });
+
+export const reviewPlanSchema = z
+  .object({
+    include_overview: z.boolean(),
+    focus: z.array(z.string().min(1)),
+    lanes: z.array(reviewLaneSchema).min(1),
+  })
+  .strict();
+
+const reviewBatchLaneArtifactBaseSchema = reviewLaneSchema.extend({
+  timing_ms: z.number().nonnegative().optional(),
+});
+
+export const reviewBatchLaneArtifactSchema = z.union([
+  reviewBatchLaneArtifactBaseSchema
+    .extend({
+      status: z.literal("success"),
+      artifact: reviewArtifactSchema,
+    })
+    .strict(),
+  reviewBatchLaneArtifactBaseSchema
+    .extend({
+      status: z.literal("failed"),
+      error: reviewerErrorSchema,
+    })
+    .strict(),
+]);
+
+export const reviewBatchArtifactSchema = z
+  .object({
+    schema_version: z.literal(2),
+    kind: z.literal("batch"),
+    cwd: z.string(),
+    target: reviewTargetResolvedSchema,
+    plan: reviewPlanSchema,
+    result: reviewBatchArtifactResultSchema,
+    validation: reviewValidationSchema,
+    warnings: z.array(z.string()).optional(),
+    timing_ms: z.number().nonnegative().optional(),
+    lanes: z.array(reviewBatchLaneArtifactSchema).min(1),
+  })
+  .strict();
+
+export const reviewRunArtifactSchema = z.union([reviewBatchArtifactSchema, reviewArtifactSchema]);
+
 export type ReviewPriority = z.infer<typeof reviewPrioritySchema>;
 export type OverallCorrectness = z.infer<typeof overallCorrectnessSchema>;
 export type ArtifactOverallCorrectness = z.infer<typeof artifactOverallCorrectnessSchema>;
 export type ReviewFinding = z.infer<typeof reviewFindingSchema>;
 export type ReviewArtifactFinding = z.infer<typeof reviewArtifactFindingSchema>;
+export type ReviewBatchArtifactFinding = z.infer<typeof reviewBatchArtifactFindingSchema>;
 export type ReviewResult = z.infer<typeof reviewResultSchema>;
 export type ReviewArtifactResult = z.infer<typeof reviewArtifactResultSchema>;
+export type ReviewBatchArtifactResult = z.infer<typeof reviewBatchArtifactResultSchema>;
 export type ParseMode = z.infer<typeof parseModeSchema>;
 export type ReviewValidation = z.infer<typeof reviewValidationSchema>;
 export type ReviewTargetResolved = z.infer<typeof reviewTargetResolvedSchema>;
@@ -313,6 +391,11 @@ export type AdapterPreflightResult = z.infer<typeof adapterPreflightResultSchema
 export type ReviewerError = z.infer<typeof reviewerErrorSchema>;
 export type ReviewReviewerArtifact = z.infer<typeof reviewReviewerArtifactSchema>;
 export type ReviewArtifact = z.infer<typeof reviewArtifactSchema>;
+export type ReviewLane = z.infer<typeof reviewLaneSchema>;
+export type ReviewPlan = z.infer<typeof reviewPlanSchema>;
+export type ReviewBatchLaneArtifact = z.infer<typeof reviewBatchLaneArtifactSchema>;
+export type ReviewBatchArtifact = z.infer<typeof reviewBatchArtifactSchema>;
+export type ReviewRunArtifact = z.infer<typeof reviewRunArtifactSchema>;
 
 /**
  * Streaming review events emitted by `runReviewEvents()`.
@@ -324,12 +407,15 @@ export type ReviewArtifact = z.infer<typeof reviewArtifactSchema>;
  * reviewers). Only `final_result.artifact` is authoritative.
  */
 export type ReviewEvent =
+  | ReviewBatchStartedEvent
   | ReviewRunStartedEvent
   | ReviewPreflightStartedEvent
   | ReviewPreflightFinishedEvent
   | ReviewReviewerStartedEvent
   | ReviewReviewerResultEvent
   | ReviewReviewerFailedEvent
+  | ReviewLaneFinishedEvent
+  | ReviewLaneFailedEvent
   | ReviewFinalResultEvent
   | ReviewErrorEvent;
 
@@ -337,6 +423,7 @@ type ReviewEventEnvelope = { schema_version: 2 };
 
 export type ReviewRunStartedEvent = ReviewEventEnvelope & {
   type: "run_started";
+  lane_id?: string;
   cwd: string;
   target: ReviewTargetResolved;
   reviewers: Array<{ id: string; engine: ReviewerSdk }>;
@@ -344,11 +431,13 @@ export type ReviewRunStartedEvent = ReviewEventEnvelope & {
 
 export type ReviewPreflightStartedEvent = ReviewEventEnvelope & {
   type: "preflight_started";
+  lane_id?: string;
   reviewer_id: string;
 };
 
 export type ReviewPreflightFinishedEvent = ReviewEventEnvelope & {
   type: "preflight_finished";
+  lane_id?: string;
   reviewer_id: string;
   ok: boolean;
   timing_ms: number;
@@ -356,11 +445,13 @@ export type ReviewPreflightFinishedEvent = ReviewEventEnvelope & {
 
 export type ReviewReviewerStartedEvent = ReviewEventEnvelope & {
   type: "reviewer_started";
+  lane_id?: string;
   reviewer_id: string;
 };
 
 export type ReviewReviewerResultEvent = ReviewEventEnvelope & {
   type: "reviewer_result";
+  lane_id?: string;
   reviewer_id: string;
   /** Always true: these findings are pre-aggregation; see `final_result`. */
   provisional: true;
@@ -369,7 +460,30 @@ export type ReviewReviewerResultEvent = ReviewEventEnvelope & {
 
 export type ReviewReviewerFailedEvent = ReviewEventEnvelope & {
   type: "reviewer_failed";
+  lane_id?: string;
   reviewer_id: string;
+  error: ReviewerError;
+  timing_ms: number;
+};
+
+export type ReviewBatchStartedEvent = ReviewEventEnvelope & {
+  type: "batch_started";
+  cwd: string;
+  target: ReviewTargetResolved;
+  reviewers: Array<{ id: string; engine: ReviewerSdk }>;
+  plan: ReviewPlan;
+};
+
+export type ReviewLaneFinishedEvent = ReviewEventEnvelope & {
+  type: "lane_finished";
+  lane_id: string;
+  artifact: ReviewArtifact;
+  timing_ms: number;
+};
+
+export type ReviewLaneFailedEvent = ReviewEventEnvelope & {
+  type: "lane_failed";
+  lane_id: string;
   error: ReviewerError;
   timing_ms: number;
 };
@@ -377,7 +491,7 @@ export type ReviewReviewerFailedEvent = ReviewEventEnvelope & {
 export type ReviewFinalResultEvent = ReviewEventEnvelope & {
   type: "final_result";
   /** Authoritative, aggregated, validated result. */
-  artifact: ReviewArtifact;
+  artifact: ReviewRunArtifact;
 };
 
 export type ReviewErrorEvent = ReviewEventEnvelope & {

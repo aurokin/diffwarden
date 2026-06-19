@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewAdapter } from "../src/adapters/types.js";
 import type { ResolvedDiff } from "../src/core/git.js";
-import { runReviewEvents } from "../src/core/runner.js";
-import { type ReviewArtifact, type ReviewEvent, reviewArtifactSchema } from "../src/core/schema.js";
+import { runReviewBatchEvents, runReviewEvents } from "../src/core/runner.js";
+import {
+  type ReviewArtifact,
+  type ReviewBatchArtifact,
+  type ReviewEvent,
+  reviewArtifactSchema,
+  reviewBatchArtifactSchema,
+} from "../src/core/schema.js";
 
 describe("runReviewEvents", () => {
   it("streams lifecycle events and a final aggregate that matches the return value", async () => {
@@ -38,8 +44,12 @@ describe("runReviewEvents", () => {
       throw new Error("expected final_result");
     }
     expect(finalEvent.artifact).toBe(returnValue);
-    expect(() => reviewArtifactSchema.parse(finalEvent.artifact)).not.toThrow();
-    expect(finalEvent.artifact.reviewers?.map((reviewer) => reviewer.id)).toEqual(["pi", "claude"]);
+    const artifact = finalEvent.artifact;
+    if ("kind" in artifact && artifact.kind === "batch") {
+      throw new Error("expected single review artifact");
+    }
+    const parsedArtifact = reviewArtifactSchema.parse(artifact);
+    expect(parsedArtifact.reviewers?.map((reviewer) => reviewer.id)).toEqual(["pi", "claude"]);
   });
 
   it("marks per-reviewer results provisional", async () => {
@@ -195,6 +205,105 @@ describe("runReviewEvents", () => {
   });
 });
 
+describe("runReviewBatchEvents", () => {
+  it("streams lane-aware events and returns a batch artifact", async () => {
+    const { cwd, resolved } = await uncommittedTarget();
+
+    const { events, returnValue } = await collectBatch(
+      runReviewBatchEvents({
+        cwd,
+        resolved,
+        reviewer: "pi",
+        plan: {
+          include_overview: false,
+          focus: ["focus on state"],
+          lanes: [{ id: "focus-1", kind: "focus", focus: "focus on state" }],
+        },
+        adapters: {
+          pi: createSuccessAdapter("pi"),
+        },
+      }),
+    );
+
+    expect(types(events)[0]).toBe("batch_started");
+    expect(
+      events.some((event) => event.type === "run_started" && event.lane_id === "focus-1"),
+    ).toBe(true);
+    expect(
+      events.some((event) => event.type === "reviewer_result" && event.lane_id === "focus-1"),
+    ).toBe(true);
+    expect(
+      events.some((event) => event.type === "lane_finished" && event.lane_id === "focus-1"),
+    ).toBe(true);
+    expectTerminalFrameGuarantee(events);
+    expect(returnValue?.kind).toBe("batch");
+    expect(returnValue?.lanes[0]).toMatchObject({
+      id: "focus-1",
+      kind: "focus",
+      status: "success",
+    });
+    expect(() => reviewBatchArtifactSchema.parse(returnValue)).not.toThrow();
+  });
+
+  it("returns a partial batch when one lane fails and strict mode is off", async () => {
+    const { cwd, resolved } = await uncommittedTarget();
+
+    const { events, returnValue } = await collectBatch(
+      runReviewBatchEvents({
+        cwd,
+        resolved,
+        reviewer: "pi",
+        plan: {
+          include_overview: true,
+          focus: ["fail this lane"],
+          lanes: [
+            { id: "overview", kind: "overview" },
+            { id: "focus-1", kind: "focus", focus: "fail this lane" },
+          ],
+        },
+        adapters: {
+          pi: createPromptSensitiveAdapter("pi"),
+        },
+      }),
+    );
+
+    expectTerminalFrameGuarantee(events);
+    expect(
+      events.some((event) => event.type === "lane_failed" && event.lane_id === "focus-1"),
+    ).toBe(true);
+    expect(returnValue?.warnings).toEqual(["Lane focus-1 failed: Focus lane exploded"]);
+    expect(returnValue?.lanes.map((lane) => lane.status)).toEqual(["success", "failed"]);
+  });
+
+  it("emits a terminal error when strict mode sees a failed lane", async () => {
+    const { cwd, resolved } = await uncommittedTarget();
+
+    const { events, returnValue } = await collectBatch(
+      runReviewBatchEvents({
+        cwd,
+        resolved,
+        reviewer: "pi",
+        strict: true,
+        plan: {
+          include_overview: true,
+          focus: ["fail this lane"],
+          lanes: [
+            { id: "overview", kind: "overview" },
+            { id: "focus-1", kind: "focus", focus: "fail this lane" },
+          ],
+        },
+        adapters: {
+          pi: createPromptSensitiveAdapter("pi"),
+        },
+      }),
+    );
+
+    expectTerminalFrameGuarantee(events);
+    expect(returnValue).toBeUndefined();
+    expect(last(events).type).toBe("error");
+  });
+});
+
 async function uncommittedTarget(): Promise<{
   cwd: string;
   resolved: ResolvedDiff;
@@ -226,6 +335,18 @@ async function uncommittedTarget(): Promise<{
 async function collect(
   stream: ReturnType<typeof runReviewEvents>,
 ): Promise<{ events: ReviewEvent[]; returnValue: ReviewArtifact | undefined }> {
+  const events: ReviewEvent[] = [];
+  let next = await stream.next();
+  while (next.done !== true) {
+    events.push(next.value);
+    next = await stream.next();
+  }
+  return { events, returnValue: next.value };
+}
+
+async function collectBatch(
+  stream: ReturnType<typeof runReviewBatchEvents>,
+): Promise<{ events: ReviewEvent[]; returnValue: ReviewBatchArtifact | undefined }> {
   const events: ReviewEvent[] = [];
   let next = await stream.next();
   while (next.done !== true) {
@@ -315,6 +436,28 @@ function createFailingPreflightAdapter(
     },
     async run() {
       throw new Error("run should not be called");
+    },
+  };
+}
+
+function createPromptSensitiveAdapter(name: ReviewAdapter["name"]): ReviewAdapter {
+  return {
+    name,
+    async preflight() {
+      return { checks: [{ name: "mock", status: "passed" }] };
+    },
+    async run(input) {
+      if (input.prompt.includes("fail this lane")) {
+        throw new Error("Focus lane exploded");
+      }
+      return {
+        structured: {
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation: `Mock ${name} review passed.`,
+          overall_confidence_score: 0.9,
+        },
+      };
     },
   };
 }

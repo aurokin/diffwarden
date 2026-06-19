@@ -6,7 +6,11 @@ import {
   renderHumanReviewSummary,
   shouldUseHumanColor,
 } from "../src/core/human-render.js";
-import type { ReviewArtifact, ReviewArtifactFinding } from "../src/core/schema.js";
+import type {
+  ReviewArtifact,
+  ReviewArtifactFinding,
+  ReviewBatchArtifact,
+} from "../src/core/schema.js";
 
 const artifact: ReviewArtifact = {
   schema_version: 2,
@@ -115,6 +119,64 @@ describe("human review rendering", () => {
     expect(output).toContain("1. P2 [P2] Agent finding");
     expect(output).toContain("File: /repo/src/client.ts:10-10");
     expect(output).not.toContain("\u001B[");
+  });
+
+  it("renders batch artifacts by lane for humans and agents", () => {
+    const batch: ReviewBatchArtifact = {
+      schema_version: 2,
+      kind: "batch",
+      cwd: "/repo",
+      target: artifact.target,
+      plan: {
+        include_overview: false,
+        focus: ["focus on state"],
+        lanes: [{ id: "focus-1", kind: "focus", focus: "focus on state" }],
+      },
+      result: {
+        findings: [
+          {
+            ...finding("[P2] Batch finding", 2, "/repo/src/client.ts", 10),
+            reviewer_ids: ["fake"],
+            lane_ids: ["focus-1"],
+          },
+        ],
+        overall_correctness: "patch is incorrect",
+        overall_explanation: "focus-1: state issue",
+        overall_confidence_score: 0.8,
+      },
+      validation: artifact.validation,
+      lanes: [
+        {
+          id: "focus-1",
+          kind: "focus",
+          focus: "focus on state",
+          status: "success",
+          artifact: {
+            ...artifact,
+            reviewers: [
+              {
+                id: "fake",
+                engine: "fake",
+                status: "success",
+                result: artifact.result,
+                validation: artifact.validation,
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    const human = renderHumanReviewArtifact(batch);
+    expect(human).toContain("diffwarden review batch");
+    expect(human).toContain("Lane focus-1: focus on state");
+    expect(human).toContain("lanes focus-1");
+
+    const agent = renderAgentReviewSummary(batch);
+    expect(agent).toContain("Diffwarden Review Batch");
+    expect(agent).toContain("focus-1: focus on state");
+    expect(agent).toContain("Lanes: focus-1");
+    expect(agent).not.toContain("\u001B[");
   });
 
   it("disables human color outside capable TTYs", () => {

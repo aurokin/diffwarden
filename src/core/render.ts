@@ -1,5 +1,5 @@
-import type { ReviewArtifact } from "./schema.js";
+import type { ReviewRunArtifact } from "./schema.js";
 
-export function renderJson(artifact: ReviewArtifact): string {
+export function renderJson(artifact: ReviewRunArtifact): string {
   return `${JSON.stringify(artifact, null, 2)}\n`;
 }

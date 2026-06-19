@@ -39,14 +39,16 @@ import {
 import type { ReviewerOverrideSource } from "./core/reviewer.js";
 import {
   type ReviewerPreflightReport,
+  runReviewBatchEvents,
   runReviewEvents,
   runReviewerPreflightReport,
 } from "./core/runner.js";
 import {
-  type ReviewArtifact,
   type ReviewEvent,
+  type ReviewPlan,
+  type ReviewRunArtifact,
   type ReviewerError,
-  reviewArtifactSchema,
+  reviewRunArtifactSchema,
 } from "./core/schema.js";
 import { parseTargetSpec } from "./core/target.js";
 import { version } from "./version.js";
@@ -95,6 +97,9 @@ type ReviewCliOptions = {
   timeout?: string;
   strict?: boolean;
   failOnFindings?: string;
+  focus: string[];
+  overview?: boolean;
+  overviewConflict?: boolean;
   cwd: string;
   mode: ReviewOutputMode;
   out?: string;
@@ -132,11 +137,14 @@ const reviewCommand = program
   .option("--timeout <seconds>", "reviewer timeout in seconds")
   .option("--strict", "fail if any reviewer fails")
   .option("--fail-on-findings <priority>", "exit 1 when findings include P0, P1, P2, or P3")
+  .option("--focus <text>", "add a focused diff-backed review lane", collectValues, [])
+  .option("--overview", "include the normal overview lane when focus lanes are present")
+  .option("--no-overview", "suppress the normal overview lane when focus lanes are present")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--agent", "emit plain text optimized for coding agents")
-  .option("--json", "emit the final ReviewArtifact JSON")
+  .option("--json", "emit the final review artifact JSON")
   .option("--ndjson", "emit newline-delimited review events")
-  .option("--out <path>", "write the full ReviewArtifact JSON to a file")
+  .option("--out <path>", "write the full review artifact JSON to a file")
   .option("--report", "persist this review to report history")
   .option("--no-report", "disable configured report history")
   .option("--report-dir <path>", "write report history under a custom directory")
@@ -152,6 +160,8 @@ const reviewCommand = program
       timeout?: string;
       strict?: boolean;
       failOnFindings?: string;
+      focus: string[];
+      overview?: boolean;
       cwd: string;
       agent?: boolean;
       json?: boolean;
@@ -171,16 +181,17 @@ const reviewCommand = program
         ...options,
         target: options.target,
         mode: resolveReviewOutputMode(options),
+        overviewConflict: hasBothOverviewFlags(process.argv),
       });
     },
   );
 
 reviewCommand
   .command("show <path>")
-  .description("Render a saved ReviewArtifact JSON file.")
+  .description("Render a saved review artifact JSON file.")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--agent", "emit plain text optimized for coding agents")
-  .option("--json", "emit normalized ReviewArtifact JSON")
+  .option("--json", "emit normalized review artifact JSON")
   .action(
     async (
       artifactPath: string,
@@ -366,6 +377,13 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
     cwd: options.cwd,
     repoRoot: resolved.target.repo_root,
   });
+  const reviewPlan = resolveReviewPlan({
+    focus: options.focus,
+    overviewConflict: options.overviewConflict === true,
+    targetKind: resolved.target.kind,
+    ...(options.overview !== undefined ? { overview: options.overview } : {}),
+    ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
+  });
   const cliTimeoutSeconds = parseTimeoutSeconds("--timeout", options.timeout);
   const envOptions = resolveReviewEnvOptionsWithSettings(process.env, {
     includeTimeout: cliTimeoutSeconds === undefined,
@@ -400,7 +418,7 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
   const humanColor = human
     ? shouldUseHumanColor({ env: process.env, stream: process.stdout })
     : false;
-  const events = runReviewEvents({
+  const runOptions = {
     cwd: options.cwd,
     resolved,
     ...reviewerOptions,
@@ -409,9 +427,16 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     ...(options.strict === true ? { strict: true } : {}),
     ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
-  });
+  };
+  const events =
+    reviewPlan === undefined
+      ? runReviewEvents(runOptions)
+      : runReviewBatchEvents({
+          ...runOptions,
+          plan: reviewPlan,
+        });
 
-  let artifact: ReviewArtifact | undefined;
+  let artifact: ReviewRunArtifact | undefined;
   let terminalError: ReviewerError | undefined;
   let next = await events.next();
   while (next.done !== true) {
@@ -480,6 +505,14 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
       strict: options.strict === true,
       ...(options.failOnFindings !== undefined ? { failOnFindings: options.failOnFindings } : {}),
       format: provenanceFormat,
+      outputMode: provenanceFormat,
+      ...(reviewPlan !== undefined
+        ? {
+            focus: reviewPlan.focus,
+            includeOverview: reviewPlan.include_overview,
+            reviewPlan,
+          }
+        : {}),
       ...(loadedConfig !== undefined
         ? { config: { path: loadedConfig.path, sha256: loadedConfig.sha256 } }
         : {}),
@@ -504,18 +537,32 @@ function writeHumanBlock(value: string | undefined): void {
 
 function formatReviewProgressLine(reviewEvent: ReviewEvent): string | undefined {
   switch (reviewEvent.type) {
+    case "batch_started":
+      return `diffwarden: reviewing ${reviewEvent.plan.lanes.length} lane${
+        reviewEvent.plan.lanes.length === 1 ? "" : "s"
+      } with ${reviewEvent.reviewers.map((reviewer) => reviewer.id).join(", ")}`;
     case "run_started":
-      return `diffwarden: reviewing with ${reviewEvent.reviewers
+      return `${formatProgressLanePrefix(reviewEvent.lane_id)}diffwarden: reviewing with ${reviewEvent.reviewers
         .map((reviewer) => reviewer.id)
         .join(", ")}`;
     case "reviewer_started":
-      return `  … ${reviewEvent.reviewer_id} running`;
+      return `  … ${formatProgressLanePrefix(reviewEvent.lane_id)}${
+        reviewEvent.reviewer_id
+      } running`;
     case "reviewer_result":
-      return `  ✓ ${reviewEvent.reviewer_id} finished${formatProgressTiming(
-        reviewEvent.artifact.timing_ms,
-      )}`;
+      return `  ✓ ${formatProgressLanePrefix(reviewEvent.lane_id)}${
+        reviewEvent.reviewer_id
+      } finished${formatProgressTiming(reviewEvent.artifact.timing_ms)}`;
     case "reviewer_failed":
-      return `  ✗ ${reviewEvent.reviewer_id} failed: ${reviewEvent.error.message}`;
+      return `  ✗ ${formatProgressLanePrefix(reviewEvent.lane_id)}${
+        reviewEvent.reviewer_id
+      } failed: ${reviewEvent.error.message}`;
+    case "lane_finished":
+      return `  ✓ lane ${reviewEvent.lane_id} finished${formatProgressTiming(
+        reviewEvent.timing_ms,
+      )}`;
+    case "lane_failed":
+      return `  ✗ lane ${reviewEvent.lane_id} failed: ${reviewEvent.error.message}`;
     case "final_result": {
       const count = reviewEvent.artifact.result.findings.length;
       return `diffwarden: aggregated ${count} finding${count === 1 ? "" : "s"}`;
@@ -527,8 +574,57 @@ function formatReviewProgressLine(reviewEvent: ReviewEvent): string | undefined 
   }
 }
 
+function formatProgressLanePrefix(laneId: string | undefined): string {
+  return laneId === undefined ? "" : `[${laneId}] `;
+}
+
 function formatProgressTiming(timingMs: number | undefined): string {
   return timingMs === undefined ? "" : ` (${(timingMs / 1000).toFixed(1)}s)`;
+}
+
+function resolveReviewPlan(options: {
+  focus: string[];
+  overview?: boolean;
+  overviewConflict: boolean;
+  targetKind: string;
+  config?: LoadedDiffwardenConfig["config"];
+}): ReviewPlan | undefined {
+  if (options.overviewConflict) {
+    throw invalidCli("Choose only one overview control: --overview or --no-overview");
+  }
+
+  const focus = options.focus.map((value) => value.trim());
+  const emptyFocusIndex = focus.findIndex((value) => value === "");
+  if (emptyFocusIndex >= 0) {
+    throw invalidCli(`Invalid --focus value at position ${emptyFocusIndex + 1}: expected text`);
+  }
+
+  if (focus.length === 0) {
+    if (options.overview !== undefined) {
+      throw invalidCli("--overview and --no-overview require at least one --focus");
+    }
+    return undefined;
+  }
+
+  if (options.targetKind === "custom") {
+    throw invalidCli("--focus is only supported for diff-backed targets, not custom:<text>");
+  }
+
+  const includeOverview = options.overview ?? options.config?.reviewPlan?.includeOverview ?? true;
+  const lanes: ReviewPlan["lanes"] = [
+    ...(includeOverview ? [{ id: "overview", kind: "overview" as const }] : []),
+    ...focus.map((focusText, index) => ({
+      id: `focus-${index + 1}`,
+      kind: "focus" as const,
+      focus: focusText,
+    })),
+  ];
+
+  return {
+    include_overview: includeOverview,
+    focus,
+    lanes,
+  };
 }
 
 function renderPreflightText(report: ReviewerPreflightReport): string {
@@ -716,6 +812,27 @@ function resolveReviewOutputMode(options: {
   return selected[0] ?? "human";
 }
 
+function hasBothOverviewFlags(argv: string[]): boolean {
+  let sawOverview = false;
+  let sawNoOverview = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--focus") {
+      index += 1;
+      continue;
+    }
+    if (arg?.startsWith("--focus=")) {
+      continue;
+    }
+    if (arg === "--overview") {
+      sawOverview = true;
+    } else if (arg === "--no-overview") {
+      sawNoOverview = true;
+    }
+  }
+  return sawOverview && sawNoOverview;
+}
+
 function resolveReviewShowOutputMode(options: {
   agent?: boolean;
   json?: boolean;
@@ -748,7 +865,7 @@ function resolveReviewShowCwd(options: { cwd: string }, command: Command): strin
   return reviewCommand.opts<{ cwd?: string }>().cwd ?? options.cwd;
 }
 
-async function readReviewArtifact(artifactPath: string, cwd: string): Promise<ReviewArtifact> {
+async function readReviewArtifact(artifactPath: string, cwd: string): Promise<ReviewRunArtifact> {
   let raw: string;
   try {
     raw = await readFile(path.resolve(cwd, artifactPath), "utf8");
@@ -765,7 +882,7 @@ async function readReviewArtifact(artifactPath: string, cwd: string): Promise<Re
     throw invalidCli(`Invalid ReviewArtifact JSON: ${message}`);
   }
 
-  const result = reviewArtifactSchema.safeParse(parsedJson);
+  const result = reviewRunArtifactSchema.safeParse(parsedJson);
   if (!result.success) {
     throw invalidCli(`Invalid ReviewArtifact JSON: ${result.error.message}`);
   }
