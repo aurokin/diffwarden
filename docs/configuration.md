@@ -225,6 +225,10 @@ machine-readable runtime value. Gemini remains supported for enterprise and paid
 after Google's June 18, 2026 consumer/free Gemini CLI transition to Antigravity CLI, but no new
 metadata-specific behavior is being added for it.
 
+Droid CLI stream modes are not used for review metadata today. CLI reviews keep the single-shot
+JSON/text contract plus `session_id` session-settings lookup for Factory UI-friendly routine
+runs.
+
 Reports also promote these fields into each reviewer summary as `model_resolution` and
 `effort_resolution` objects. Run adapter metadata is preferred; preflight metadata is used only
 when run metadata is unavailable.

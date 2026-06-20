@@ -50,6 +50,7 @@ Use the upstream repository for the current SDK docs, JSON mode docs, extension 
 - Local CLI inspection on 2026-05-21: Droid CLI `0.131.0` supports `droid exec --output-format json`, `--file`, `--cwd`, `--model`, and `--reasoning-effort`; default exec mode is read-only unless `--auto` is set.
 - Local CLI and SDK inspection on 2026-05-22: Droid persists sessions under `~/.factory/sessions` by working directory; `droid exec` exposes repeatable `--tag` metadata but no ephemeral/no-history flag, and `@factory/droid-sdk@0.3.0` exposes `tags` and `machineId` on `run()` options.
 - Product decision on 2026-05-22: prefer Droid CLI transport for routine reviews because current SDK runs still appear in Factory session history and do not expose a supported no-history option.
+- Local CLI and SDK inspection on 2026-06-19: Droid CLI `0.142.0` advertises `stream-json` and `stream-jsonrpc`; installed `@factory/droid-sdk@0.3.0` already exposes JSON-RPC-backed streaming for SDK reviews. Diffwarden keeps Droid CLI on single-shot JSON for now.
 
 Use official Factory docs over local source when CLI or SDK behavior differs.
 

@@ -475,16 +475,22 @@ do not expose an ephemeral/no-history review mode. Diffwarden cannot currently s
 Droid session history without isolating Factory's home/config directory, which is not the
 default review path.
 
+Diffwarden does not currently use Droid CLI `stream-json` or raw JSON-RPC. The CLI path stays on
+single-shot JSON because it is the smallest stable contract for routine reviews and preserves the
+existing parse/validation path. Any future reviewer debug capture or streaming should be designed
+as an explicit opt-in cross-adapter feature, not as Droid-only review metadata.
+
 Diffwarden does not add Droid-specific tool-call, turn, step, retry, mission, compaction, or
 equivalent caps around review runs. A configured reviewer timeout, when set, is the
 Diffwarden-owned run-level circuit breaker. Droid-native context limits, structured-output
 behavior, session history, and
 any provider or organization policy limits still apply.
 
-Live SDK smoke test:
+Live smoke tests:
 
 ```bash
 DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:sdk
+DIFFWARDEN_LIVE_CLI=droid DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:cli
 ```
 
 ## GitHub Copilot
