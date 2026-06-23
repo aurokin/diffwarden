@@ -198,6 +198,50 @@ describe("cursorAdapter", () => {
     });
   });
 
+  it("classifies unsupported Cursor SDK sandboxing as an environment failure", async () => {
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return mockCursorSdk({
+          async createAgent() {
+            throw new Error(
+              "Local SDK sandboxing was requested, but sandboxing is not supported in this environment.",
+            );
+          },
+        });
+      },
+    });
+
+    await expect(adapter.run(input({ env: { CURSOR_API_KEY: "key" } }))).rejects.toMatchObject({
+      code: "reviewer_environment_failed",
+      exitCode: 3,
+      reason: "cursor_sdk_sandbox_unsupported",
+      recovery: expect.arrayContaining([
+        "Run the Cursor reviewer on a host where Cursor SDK local sandboxing is supported.",
+      ]),
+      message: expect.stringContaining("did not retry unsandboxed"),
+    });
+  });
+
+  it("classifies Cursor ConfigurationError sandbox dependency failures", async () => {
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return mockCursorSdk({
+          async createAgent() {
+            const error = new Error("Sandbox missing dependency: bwrap");
+            error.name = "ConfigurationError";
+            throw error;
+          },
+        });
+      },
+    });
+
+    await expect(adapter.run(input({ env: { CURSOR_API_KEY: "key" } }))).rejects.toMatchObject({
+      code: "reviewer_environment_failed",
+      reason: "cursor_sdk_sandbox_unsupported",
+      message: expect.stringContaining("Sandbox missing dependency: bwrap"),
+    });
+  });
+
   it("cancels a Cursor run that appears after the signal aborts during send", async () => {
     const controller = new AbortController();
     const sendStarted = deferred<void>();

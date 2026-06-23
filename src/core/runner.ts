@@ -163,11 +163,7 @@ export async function runReview(options: RunReviewOptions): Promise<ReviewArtifa
   }
 
   if (terminalError !== undefined) {
-    throw new DiffwardenError(
-      terminalError.code as ReviewErrorCode,
-      terminalError.message,
-      terminalError.exit_code ?? 3,
-    );
+    throw diffwardenErrorFromReviewerError(terminalError);
   }
 
   if (next.value === undefined) {
@@ -579,7 +575,7 @@ function event(payload: DistributiveOmit<ReviewEvent, "schema_version">): Review
 }
 
 function diffwardenEventError(error: DiffwardenError): ReviewerError {
-  return { code: error.code, message: error.message, exit_code: error.exitCode };
+  return serializedDiffwardenError(error);
 }
 
 function preflightOutcomeTiming(outcome: PreflightOutcome): number {
@@ -951,11 +947,7 @@ function createFailedReviewerArtifact(
 
 function reviewerError(error: unknown): FailedReviewerArtifact["error"] {
   if (error instanceof DiffwardenError) {
-    return {
-      code: error.code,
-      message: error.message,
-      exit_code: error.exitCode,
-    };
+    return serializedDiffwardenError(error);
   }
 
   return {
@@ -995,8 +987,7 @@ function throwReviewerFailures(
 ): never {
   const [firstFailure] = failures;
   if (options.reviewerCount === 1 && firstFailure !== undefined) {
-    const { error } = firstFailure;
-    throw new DiffwardenError(error.code as ReviewErrorCode, error.message, error.exit_code ?? 3);
+    throw diffwardenErrorFromReviewerError(firstFailure.error);
   }
 
   throw reviewerFailed(
@@ -1012,6 +1003,23 @@ function formatReviewerFailureWarning(reviewer: FailedReviewerArtifact): string 
 
 function formatFailedReviewers(failures: FailedReviewerArtifact[]): string {
   return failures.map((reviewer) => `${reviewer.id}: ${reviewer.error.message}`).join("; ");
+}
+
+function serializedDiffwardenError(error: DiffwardenError): ReviewerError {
+  return {
+    code: error.code,
+    message: error.message,
+    exit_code: error.exitCode,
+    ...(error.reason !== undefined ? { reason: error.reason } : {}),
+    ...(error.recovery !== undefined ? { recovery: [...error.recovery] } : {}),
+  };
+}
+
+export function diffwardenErrorFromReviewerError(error: ReviewerError): DiffwardenError {
+  return new DiffwardenError(error.code as ReviewErrorCode, error.message, error.exit_code ?? 3, {
+    ...(error.reason !== undefined ? { reason: error.reason } : {}),
+    ...(error.recovery !== undefined ? { recovery: error.recovery } : {}),
+  });
 }
 
 function enforceStrictValidation(validation: ReviewValidation): void {

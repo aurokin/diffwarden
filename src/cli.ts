@@ -13,13 +13,7 @@ import {
   resolveReviewEnvOptionsWithSettings,
   resolveReviewerSelectionWithEnv,
 } from "./core/env.js";
-import {
-  DiffwardenError,
-  type ReviewErrorCode,
-  invalidCli,
-  invalidConfig,
-  reviewerFailed,
-} from "./core/errors.js";
+import { DiffwardenError, invalidCli, invalidConfig, reviewerFailed } from "./core/errors.js";
 import { hasFindingAtOrAbovePriority, parseFindingFailureThreshold } from "./core/finding-gate.js";
 import { resolveGitTarget } from "./core/git.js";
 import {
@@ -39,6 +33,7 @@ import {
 import type { ReviewerOverrideSource } from "./core/reviewer.js";
 import {
   type ReviewerPreflightReport,
+  diffwardenErrorFromReviewerError,
   runReviewBatchEvents,
   runReviewEvents,
   runReviewerPreflightReport,
@@ -467,11 +462,7 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
       process.exitCode = terminalError.exit_code ?? 3;
       return;
     }
-    throw new DiffwardenError(
-      terminalError.code as ReviewErrorCode,
-      terminalError.message,
-      terminalError.exit_code ?? 3,
-    );
+    throw diffwardenErrorFromReviewerError(terminalError);
   }
 
   if (artifact === undefined) {

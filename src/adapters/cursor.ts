@@ -6,6 +6,7 @@ import {
   DiffwardenError,
   missingAuth,
   missingRequirement,
+  reviewerEnvironmentFailed,
   reviewerFailed,
 } from "../core/errors.js";
 import {
@@ -30,6 +31,12 @@ import type {
 } from "./types.js";
 
 const defaultCursorModel = "composer-2.5";
+const cursorSandboxUnsupportedReason = "cursor_sdk_sandbox_unsupported";
+const cursorSandboxUnsupportedRecovery = [
+  "Fix or remove Cursor's local sandbox config, for example ~/.cursor/sandbox.json.",
+  "Run the Cursor reviewer on a host where Cursor SDK local sandboxing is supported.",
+  "Temporarily disable the configured Cursor reviewer with enabled: false.",
+] as const;
 
 type CursorAdapterDependencies = {
   loadSdk: () => Promise<CursorSdk>;
@@ -201,6 +208,12 @@ export function createCursorAdapter(
         if (isCursorAuthenticationError(error)) {
           throw missingAuth(`Cursor reviewer authentication failed: ${error.message}`);
         }
+        if (isCursorSandboxUnsupportedError(error)) {
+          throw reviewerEnvironmentFailed(formatCursorSandboxUnsupportedError(error.message), {
+            reason: cursorSandboxUnsupportedReason,
+            recovery: cursorSandboxUnsupportedRecovery,
+          });
+        }
         if (isCursorSdkError(error)) {
           throw reviewerFailed(`Cursor reviewer failed: ${error.message}`);
         }
@@ -311,6 +324,37 @@ function assertCursorAuth(env: NodeJS.ProcessEnv | undefined): string {
 
 function isCursorSdkError(error: unknown): error is Error & { isRetryable?: boolean } {
   return error instanceof Error && ("isRetryable" in error || error.name.includes("Cursor"));
+}
+
+function isCursorSandboxUnsupportedError(error: unknown): error is Error {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  if (
+    message.includes("local sdk sandboxing was requested") &&
+    message.includes("sandboxing is not supported")
+  ) {
+    return true;
+  }
+
+  return (
+    error.name === "ConfigurationError" &&
+    message.includes("sandbox") &&
+    (message.includes("not supported") ||
+      message.includes("unsupported") ||
+      message.includes("missing dependency"))
+  );
+}
+
+function formatCursorSandboxUnsupportedError(sdkMessage: string): string {
+  return [
+    "Cursor reviewer environment failure: local SDK sandboxing is enabled, but Cursor reported sandboxing is not supported in this environment.",
+    "Diffwarden keeps Cursor sandboxing enabled by default and did not retry unsandboxed.",
+    "Fix or remove Cursor's local sandbox config, run on a host with Cursor sandbox support, or disable the configured Cursor reviewer temporarily.",
+    `Cursor SDK error: ${sdkMessage}`,
+  ].join(" ");
 }
 
 function isCursorAuthenticationError(error: unknown): error is Error {

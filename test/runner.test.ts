@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewAdapter } from "../src/adapters/types.js";
+import { reviewerEnvironmentFailed } from "../src/core/errors.js";
 import type { ResolvedDiff } from "../src/core/git.js";
 import { runReview, runReviewerPreflightReport } from "../src/core/runner.js";
 import { reviewArtifactSchema } from "../src/core/schema.js";
@@ -553,6 +554,34 @@ describe("runReview", () => {
     expect(artifact.result.overall_explanation).toContain("pi: Mock pi review passed.");
   });
 
+  it("preserves structured reviewer environment failure metadata in artifacts", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewers: ["pi", "cursor"],
+      adapters: {
+        pi: createMockAdapter("pi"),
+        cursor: createEnvironmentFailureAdapter("cursor"),
+      },
+    });
+
+    expect(() => reviewArtifactSchema.parse(artifact)).not.toThrow();
+    expect(artifact.reviewers?.find((reviewer) => reviewer.id === "cursor")).toMatchObject({
+      status: "failed",
+      error: {
+        code: "reviewer_environment_failed",
+        reason: "cursor_sdk_sandbox_unsupported",
+        recovery: [
+          "Run the Cursor reviewer on a host where Cursor SDK local sandboxing is supported.",
+        ],
+      },
+    });
+    expect(artifact.warnings?.[0]).toContain("Cursor sandbox unsupported");
+  });
+
   it("fails partial multi-reviewer runs in strict mode", async () => {
     repo = createWorkspace();
     const resolved = createResolvedTarget(repo);
@@ -632,6 +661,29 @@ describe("runReview", () => {
     ).rejects.toMatchObject({
       code: "missing_auth",
       exitCode: 3,
+    });
+  });
+
+  it("preserves single-reviewer structured failure metadata on terminal throws", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+
+    await expect(
+      runReview({
+        cwd: repo,
+        resolved,
+        reviewer: "cursor",
+        adapters: {
+          cursor: createEnvironmentFailureAdapter("cursor"),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "reviewer_environment_failed",
+      exitCode: 3,
+      reason: "cursor_sdk_sandbox_unsupported",
+      recovery: [
+        "Run the Cursor reviewer on a host where Cursor SDK local sandboxing is supported.",
+      ],
     });
   });
 
@@ -979,6 +1031,25 @@ function createFailingRunAdapter(name: ReviewAdapter["name"], message: string): 
     },
     async run() {
       throw new Error(message);
+    },
+  };
+}
+
+function createEnvironmentFailureAdapter(name: ReviewAdapter["name"]): ReviewAdapter {
+  return {
+    name,
+    async preflight() {
+      return {
+        checks: [{ name: "mock", status: "passed" }],
+      };
+    },
+    async run() {
+      throw reviewerEnvironmentFailed("Cursor sandbox unsupported", {
+        reason: "cursor_sdk_sandbox_unsupported",
+        recovery: [
+          "Run the Cursor reviewer on a host where Cursor SDK local sandboxing is supported.",
+        ],
+      });
     },
   };
 }

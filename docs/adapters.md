@@ -228,6 +228,11 @@ The JSONL store keeps Diffwarden reviews out of Cursor's default persistent loca
 Cursor still does not expose deterministic read/glob/grep-only tool allowlisting for this path,
 so Diffwarden reports prompt-only read-only capability instead of hard enforcement.
 
+If Cursor reports that local SDK sandboxing is unsupported on the host, Diffwarden classifies the
+reviewer as an environment failure and does not retry unsandboxed. Fix or remove the local Cursor
+sandbox config, run on a supported host, or temporarily disable the configured Cursor reviewer with
+`enabled: false`.
+
 Several SDK and toolchain dependencies install native or platform-specific artifacts, so
 `pnpm-workspace.yaml` explicitly approves their install scripts with `allowBuilds` and
 keeps the dependency list mirrored in `onlyBuiltDependencies`.

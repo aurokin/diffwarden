@@ -88,8 +88,10 @@ describe("human review rendering", () => {
     expect(summary).toContain("Result");
     expect(summary).toContain("Verdict: patch is incorrect");
     expect(summary).toContain("Findings: 1 (P2 1)");
+    expect(summary).toContain("Reviewers: 1 passed, 1 failed");
     expect(summary).toContain("Warnings");
     expect(summary).toContain("Failed reviewers");
+    expect(summary).toContain("- claude: missing auth");
     expect(summary).toContain("[P2] Human finding");
   });
 

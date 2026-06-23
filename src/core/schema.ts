@@ -223,6 +223,8 @@ export const reviewerErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
   exit_code: z.number().int().optional(),
+  reason: z.string().optional(),
+  recovery: z.array(z.string()).optional(),
 });
 
 const artifactTransportSchema = z.enum(["native", "cli", "app-server"]);

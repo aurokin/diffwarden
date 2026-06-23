@@ -322,10 +322,13 @@ export type ReviewError = {
       | "missing_requirement"
       | "missing_auth"
       | "reviewer_failed"
+      | "reviewer_environment_failed"
       | "timeout"
       | "parse_failed"
       | "validation_failed";
     message: string;
+    reason?: string;
+    recovery?: string[];
     reviewer_id?: string;
     engine?: "cursor" | "claude" | "pi" | "droid" | "codex" | "gemini" | "opencode" | "grok" | "antigravity";
     hint?: string;
