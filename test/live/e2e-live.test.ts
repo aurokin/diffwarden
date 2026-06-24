@@ -49,6 +49,29 @@ describe("live diffwarden CLI e2e", () => {
     ]);
   });
 
+  it("passes live Copilot CLI overrides into generated config", () => {
+    const parsed = JSON.parse(
+      liveE2eConfigJson(["copilot"], {
+        DIFFWARDEN_LIVE_COPILOT_MODEL: "gpt-5",
+        DIFFWARDEN_LIVE_COPILOT_EFFORT: "high",
+        DIFFWARDEN_LIVE_COPILOT_EXECUTABLE: "/opt/copilot",
+      }),
+    );
+
+    expect(parsed.reviewers).toEqual([
+      {
+        id: "live-copilot",
+        engine: "copilot",
+        transport: "cli",
+        model: "gpt-5",
+        effort: "high",
+        cliOptions: {
+          executable: "/opt/copilot",
+        },
+      },
+    ]);
+  });
+
   it.skipIf(isIntegrationDisabled("e2e") || liveE2eReviewers().length === 0)(
     "runs selected live reviewers through the built binary",
     async () => {

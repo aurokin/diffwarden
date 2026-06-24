@@ -576,6 +576,13 @@ Then run:
 diffwarden review --target uncommitted --reviewer copilot-cli
 ```
 
+Live Copilot CLI validation is opt-in and may use subscription-backed requests:
+
+```bash
+DIFFWARDEN_LIVE_CLI=copilot DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:cli
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 DIFFWARDEN_LIVE_E2E_REVIEWERS=copilot pnpm test:live:e2e
+```
+
 ## CLI Transports
 
 ```bash
@@ -740,6 +747,7 @@ Restrict live CLI adapter tests to a subset with `DIFFWARDEN_LIVE_CLI`.
 
 ```bash
 DIFFWARDEN_LIVE_CLI=codex,claude,gemini DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:cli
+DIFFWARDEN_LIVE_CLI=copilot DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:cli
 ```
 
 Override CLI executable paths with engine-specific variables when a binary is not on `PATH`.
@@ -747,6 +755,7 @@ Override CLI executable paths with engine-specific variables when a binary is no
 ```bash
 DIFFWARDEN_LIVE_PI_EXECUTABLE=/Users/auro/.local/share/mise/installs/npm-earendil-works-pi-coding-agent/latest/bin/pi
 DIFFWARDEN_LIVE_PI_MODEL=anthropic/claude-sonnet-4-5
+DIFFWARDEN_LIVE_COPILOT_EXECUTABLE=/Users/auro/.local/bin/copilot
 DIFFWARDEN_LIVE_DROID_CLI_EXECUTABLE=/Users/auro/.local/bin/droid
 DIFFWARDEN_LIVE_DROID_SDK_EXECUTABLE=/Users/auro/.local/bin/droid
 DIFFWARDEN_LIVE_DROID_MACHINE_ID=YOUR_DROID_COMPUTER_ID
@@ -756,6 +765,7 @@ DIFFWARDEN_LIVE_ANTIGRAVITY_EXECUTABLE=/Users/auro/.local/bin/agy
 Run built-binary e2e smoke tests against selected reviewers with:
 
 ```bash
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 DIFFWARDEN_LIVE_E2E_REVIEWERS=copilot pnpm test:live:e2e
 DIFFWARDEN_ALLOW_MODEL_SPEND=1 DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
 ```
 

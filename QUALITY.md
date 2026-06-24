@@ -113,11 +113,13 @@ Run CLI transport smoke tests:
 
 ```bash
 DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:cli
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 DIFFWARDEN_LIVE_CLI=copilot pnpm test:live:cli
 ```
 
 Run built-binary e2e smoke tests for selected reviewers:
 
 ```bash
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 DIFFWARDEN_LIVE_E2E_REVIEWERS=copilot pnpm test:live:e2e
 DIFFWARDEN_ALLOW_MODEL_SPEND=1 DIFFWARDEN_LIVE_E2E_REVIEWERS=codex,claude pnpm test:live:e2e
 DIFFWARDEN_ALLOW_MODEL_SPEND=1 DIFFWARDEN_LIVE_E2E_REVIEWERS=droid DIFFWARDEN_LIVE_DROID_EFFORT=low pnpm test:live:e2e
 ```
@@ -132,7 +134,9 @@ Use `INTEGRATION_DISABLE=cursor,claude,pi,droid,codex` to skip specific SDKs or 
 runs. Use `DIFFWARDEN_LIVE_CLI=codex,claude,gemini` to restrict CLI live tests to a subset.
 Live CLI and e2e tests also honor `DIFFWARDEN_LIVE_<REVIEWER>_PROVIDER`,
 `DIFFWARDEN_LIVE_<REVIEWER>_MODEL`, `DIFFWARDEN_LIVE_<REVIEWER>_EFFORT`, and
-`DIFFWARDEN_LIVE_<REVIEWER>_EXECUTABLE`.
+`DIFFWARDEN_LIVE_<REVIEWER>_EXECUTABLE`. For Copilot, use
+`DIFFWARDEN_LIVE_COPILOT_EXECUTABLE` when the `copilot` binary is not on `PATH`; the CLI owns
+GitHub/Copilot auth and subscription checks.
 Droid SDK live tests also honor `DIFFWARDEN_LIVE_DROID_MACHINE_ID`, but SDK runs still
 create Factory session-history entries. Use the Droid CLI live path when validating the
 recommended Droid reviewer behavior.
