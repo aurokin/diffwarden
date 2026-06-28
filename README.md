@@ -48,12 +48,21 @@ diffwarden doctor --reviewer pi
 diffwarden review --target base:main --reviewer pi
 ```
 
-Create a starter user config when you want to run Diffwarden without passing reviewers
-on every command:
+On a fresh machine, find out which reviewers this host can already run before configuring
+anything. Discovery probes installed executables, SDK packages, and auth signals without
+running a review or spending model budget:
 
 ```bash
-diffwarden init
-diffwarden reviewers list
+diffwarden reviewers discover
+```
+
+Then create a user config so you can run Diffwarden without passing reviewers on every
+command. Scaffold it from what discovery found, or start from a hand-written template:
+
+```bash
+diffwarden init --discover   # write a config from discovered, ready-to-use reviewers
+diffwarden init              # write a minimal starter config to edit by hand
+diffwarden doctor --reviewer-set 1
 diffwarden review --target base:main
 ```
 
@@ -99,6 +108,17 @@ List configured reviewers and reviewer sets without running preflight checks:
 ```bash
 diffwarden reviewers list
 diffwarden reviewers list --json
+```
+
+Probe the host for usable reviewer engines, then add one to the user config. Discovery never
+runs a review or spends model budget; `--deep` additionally runs adapter preflight:
+
+```bash
+diffwarden reviewers discover
+diffwarden reviewers discover --deep
+diffwarden reviewers discover --json
+diffwarden reviewers add codex
+diffwarden reviewers add claude --transport cli --set 1
 ```
 
 Supported v1 targets:
@@ -285,6 +305,8 @@ Implemented:
 - Diff-backed focus lanes with optional overview and batch artifacts.
 - Opt-in review history reports.
 - Project/user `diffwarden.config.json` discovery.
+- Host-aware reviewer discovery and config setup (`reviewers discover`, `reviewers add`,
+  `init --discover`).
 - Reviewer sets and `engine[:profile]` reviewer specs.
 - Cursor, Claude, Pi, Droid, and GitHub Copilot SDK adapters.
 - Codex app-server transport with shared server reuse, structured review mode, and

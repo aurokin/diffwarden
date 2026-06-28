@@ -123,7 +123,11 @@ Expected behavior:
 diffwarden
 diffwarden review [options]
 diffwarden review show <path> [--agent|--json]
+diffwarden doctor [--reviewer <spec>|--reviewer-set <name>] [--model <id>] [--effort <level>] [--timeout <seconds>] [--cwd <path>] [--json]
 diffwarden reviewers list [--cwd <path>] [--json]
+diffwarden reviewers discover [--deep] [--cwd <path>] [--json]
+diffwarden reviewers add [engine] [--id <id>] [--transport <transport>] [--model <id>] [--effort <level>] [--provider <name>] [--set <name>] [--disabled] [--interactive] [--cwd <path>] [--json]
+diffwarden init [--discover] [--interactive] [--cwd <path>] [--json]
 ```
 
 ### 5.2 Options
@@ -183,6 +187,36 @@ agents and automation and must not include nested option bags such as `providerO
 
 Reviewer-list JSON currently emits `schema_version: 2`. Each configured reviewer summary
 includes `enabled: boolean`; omitted `enabled` in config is rendered as `true`.
+
+`diffwarden doctor` resolves reviewers from config or flags and runs adapter preflight
+without resolving a review target or collecting a diff. It is the host-side counterpart to
+`reviewers list`: `list` reports what is configured, `doctor` reports whether the configured
+reviewers can actually run.
+
+`diffwarden reviewers discover` probes the host for which built-in reviewer engines and
+transports are usable without running a review, resolving a target, or spending model/API
+budget. It is read-only with respect to config: it never reads or writes
+`diffwarden.config.json`. Shallow discovery (the default) uses only token-free probes:
+executable presence on `PATH`, side-effect-free SDK package resolution, presence of relevant
+environment variables, and readability of credential files. `--deep` additionally runs the
+same adapter preflight as `doctor` for present engines, which may spawn CLIs or call provider
+APIs. Each candidate is classified as one of `available`, `missing_executable`, `missing_auth`,
+`requires_env`, `unsupported_host`, or `preflight_failed`, with an `authState` of `verified`,
+`unverified`, `missing`, or `not_required`. Discovery JSON emits `schema_version: 1` and
+reports the environment-variable names and credential-file paths it probed but never secret
+values. `available` candidates include a recommended minimal config entry.
+
+`diffwarden reviewers add [engine]` and `diffwarden init --discover` are the only commands
+that write reviewer config, and they always write the user config path
+(`$XDG_CONFIG_HOME/diffwarden/diffwarden.config.json` or
+`~/.config/diffwarden/diffwarden.config.json`), never a project config. `reviewers add`
+merges a reviewer by `id` in place, preserves all other config keys, writes atomically with a
+compare-and-swap guard, and only appends an id to a named reviewer set when `--set` is given.
+Neither command changes `defaultReviewerSet` for an existing config. `init --discover`
+scaffolds a fresh config from discovered ready-to-use reviewers with a `defaultReviewerSet`
+and `readonly: true`, and refuses to overwrite an existing config. `--interactive` (on
+`reviewers add` and `init --discover`) selects and confirms before writing and requires a TTY;
+it exits `2` when stdin is not interactive.
 
 Reviewer specs should stay compact and SDK-agnostic at the public boundary:
 
@@ -1210,6 +1244,16 @@ Default posture:
 - No external review comment publishing.
 - No network side effects beyond the selected SDK/API.
 - No secret printing.
+
+The read-only posture applies to review runs and to host discovery. `diffwarden reviewers
+discover` performs only token-free probes (executable/package presence, environment-variable
+presence, credential-file readability) and prints probed names and paths but never secret
+values; shallow discovery makes no network calls and spends no model budget, and `--deep`
+reuses the same adapter preflight as `doctor`. The only commands that modify files are the
+explicit setup commands `diffwarden reviewers add` and `diffwarden init`, which write the user
+config (never a project config or repository file) atomically and never publish anywhere
+external. Review execution itself still modifies nothing outside the documented Pi shared-auth
+`auth.json` refresh case.
 
 If a reviewer adapter requires shell access, restrict the prompt and adapter policy to read/grep/find/git inspection. Write-capable tools are permanently out of scope for this CLI.
 

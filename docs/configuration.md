@@ -16,8 +16,12 @@ User config is discovered at:
 Create a starter user config with:
 
 ```bash
-diffwarden init
+diffwarden init              # minimal template to edit by hand
+diffwarden init --discover   # scaffold from reviewers discovered on this host
 ```
+
+`init` and `reviewers add` always write to the user config path above, never to a project
+`diffwarden.config.json`. See [Discovery & Setup](#discovery--setup).
 
 ## Reviewer Selection
 
@@ -50,6 +54,56 @@ Configured reviewers must use `engine` for the reviewer family (`claude`, `pi`, 
 etc.). Use `transport: "sdk"` for the SDK-backed path when you want to be explicit, or
 `transport: "cli"` for executable-backed runs. Codex also supports a `transport: "app-server"`
 path for ephemeral `codex app-server` reviews.
+
+## Discovery & Setup
+
+Three commands answer three different questions. None of them publish review comments, and
+discovery never spends model budget:
+
+- `diffwarden reviewers discover` — *What could this host run?* Probes every built-in reviewer
+  engine for an installed executable or resolvable SDK package and for token-free auth signals
+  (relevant environment variables and credential files), then classifies each candidate. It
+  reads nothing from your config and writes nothing.
+- `diffwarden reviewers list` — *What is configured?* Lists the reviewers, reviewer sets, and
+  `defaultReviewerSet` already in config. It does not probe the host.
+- `diffwarden doctor` — *Will a configured reviewer actually run?* Resolves reviewers from
+  config and runs full adapter preflight (which may spawn CLIs or call provider APIs).
+
+Discovery is shallow by default: it inspects `PATH`, resolvable SDK packages, environment
+variables, and credential-file presence only. Pass `--deep` to additionally run adapter
+preflight for present engines, which can spawn CLIs or make provider calls:
+
+```bash
+diffwarden reviewers discover
+diffwarden reviewers discover --deep
+diffwarden reviewers discover --json
+```
+
+Each candidate is classified as one of `available`, `missing_executable`, `missing_auth`,
+`requires_env`, `unsupported_host`, or `preflight_failed`. `available` candidates carry a
+recommended config entry. JSON output uses `schema_version: 1`; it reports environment
+variable *names* and credential-file *paths* that were probed but never secret values.
+
+Write a discovered reviewer into the user config with `reviewers add`:
+
+```bash
+diffwarden reviewers add codex                       # add with defaults, id "codex"
+diffwarden reviewers add claude --transport cli      # add CLI-transport Claude
+diffwarden reviewers add pi --id pi-fast --set 1     # custom id, also append to set "1"
+diffwarden reviewers add grok --disabled             # write a disabled placeholder
+```
+
+`reviewers add` merges by `id` (re-adding an existing id updates it in place), appends to a
+named reviewer set with `--set` without ever changing `defaultReviewerSet`, preserves every
+other key in the file, and writes atomically. Adding a reviewer never enables it into the
+default set silently; choose the set explicitly. Scaffold a whole config from discovery in one
+step with `init --discover`, which writes the ready-to-use reviewers, a `defaultReviewerSet`,
+and `readonly: true`, and refuses to overwrite an existing config.
+
+Add `--interactive` to `reviewers add` or `init --discover` to select and confirm before
+writing. Interactive mode requires a TTY and exits with a usage error when stdin is not
+interactive (for example in CI or when piped), so non-interactive callers should pass the
+engine and flags directly.
 
 ## Disabling Configured Reviewers
 

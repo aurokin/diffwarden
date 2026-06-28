@@ -26,16 +26,54 @@ export type ReviewerTransportCapability = {
   transport: ReviewerTransport;
   supported: boolean;
   defaultExecutable?: string;
+  /** npm package import-probed to detect SDK availability (sdk transport only). */
+  sdkPackage?: string;
   supportsModel: boolean;
   supportsEffort: boolean;
   captureMode: CaptureMode;
   readonlyCapability: ReadonlyCapability;
 };
 
+/** A credential file whose readability indicates a logged-in state. Checked token-free. */
+export type ReviewerAuthFile = {
+  /** Env var holding the base directory, if any (e.g. CODEX_HOME). */
+  baseEnvVar?: string;
+  /** Directory under the user home used when baseEnvVar is unset (e.g. ".codex"). */
+  homeSubdir: string;
+  /** Credential file name within the resolved directory (e.g. "auth.json"). */
+  file: string;
+};
+
+/**
+ * Declarative, token-free auth signals an engine exposes so host-aware discovery can
+ * classify readiness without spending model budget or running review prompts.
+ */
+export type ReviewerAuthSignal = {
+  /** Env vars whose presence indicates the engine is authenticated. Any one satisfies the check. */
+  envVars?: readonly string[];
+  /** When true, the env vars are recommended but their absence is a warning, not a hard failure. */
+  envVarsOptional?: boolean;
+  /** A credential file that, when readable, indicates a logged-in state. */
+  credentialFile?: ReviewerAuthFile;
+  /**
+   * True when auth is delegated to the engine's own login and cannot be confirmed token-free.
+   * Discovery reports the engine as present-but-unverified rather than missing_auth when no
+   * other positive signal is found.
+   */
+  loginDelegated?: boolean;
+  /**
+   * Transports that cannot use the engine's delegated login and require explicit env/credential
+   * auth (e.g. the Cursor SDK needs CURSOR_API_KEY even though the Cursor CLI has its own login).
+   * Delegated login is not applied when classifying these transports.
+   */
+  explicitAuthTransports?: readonly ReviewerTransport[];
+};
+
 export type ReviewerCapability = {
   sdk: ReviewerSdk;
   defaultTransport?: ReviewerTransport;
   defaultModel?: string;
+  auth?: ReviewerAuthSignal;
   transports: Partial<Record<ReviewerTransport, ReviewerTransportCapability>>;
 };
 
@@ -47,10 +85,17 @@ const reviewerCapabilityDefinitions = {
   cursor: {
     sdk: "cursor",
     defaultModel: "composer-2.5",
+    auth: {
+      envVars: ["CURSOR_API_KEY"],
+      loginDelegated: true,
+      // The Cursor SDK requires CURSOR_API_KEY; only the cursor-agent CLI has a delegated login.
+      explicitAuthTransports: ["sdk"],
+    },
     transports: {
       sdk: {
         transport: "sdk",
         supported: true,
+        sdkPackage: "@cursor/sdk",
         supportsModel: true,
         supportsEffort: false,
         captureMode: "text",
@@ -70,11 +115,16 @@ const reviewerCapabilityDefinitions = {
   claude: {
     sdk: "claude",
     defaultModel: "sonnet",
+    auth: {
+      envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+      loginDelegated: true,
+    },
     transports: {
       sdk: {
         transport: "sdk",
         supported: true,
         defaultExecutable: "claude",
+        sdkPackage: "@anthropic-ai/claude-agent-sdk",
         supportsModel: true,
         supportsEffort: true,
         captureMode: "native-structured",
@@ -93,10 +143,14 @@ const reviewerCapabilityDefinitions = {
   },
   pi: {
     sdk: "pi",
+    auth: {
+      loginDelegated: true,
+    },
     transports: {
       sdk: {
         transport: "sdk",
         supported: true,
+        sdkPackage: "@earendil-works/pi-coding-agent",
         supportsModel: true,
         supportsEffort: true,
         captureMode: "tool-call",
@@ -115,11 +169,17 @@ const reviewerCapabilityDefinitions = {
   },
   droid: {
     sdk: "droid",
+    auth: {
+      envVars: ["FACTORY_API_KEY"],
+      envVarsOptional: true,
+      loginDelegated: true,
+    },
     transports: {
       sdk: {
         transport: "sdk",
         supported: true,
         defaultExecutable: "droid",
+        sdkPackage: "@factory/droid-sdk",
         supportsModel: true,
         supportsEffort: true,
         captureMode: "native-structured",
@@ -138,10 +198,14 @@ const reviewerCapabilityDefinitions = {
   },
   copilot: {
     sdk: "copilot",
+    auth: {
+      loginDelegated: true,
+    },
     transports: {
       sdk: {
         transport: "sdk",
         supported: true,
+        sdkPackage: "@github/copilot-sdk",
         supportsModel: true,
         supportsEffort: true,
         captureMode: "text",
@@ -161,6 +225,9 @@ const reviewerCapabilityDefinitions = {
   codex: {
     sdk: "codex",
     defaultTransport: "cli",
+    auth: {
+      credentialFile: { baseEnvVar: "CODEX_HOME", homeSubdir: ".codex", file: "auth.json" },
+    },
     transports: {
       cli: {
         transport: "cli",
@@ -185,6 +252,10 @@ const reviewerCapabilityDefinitions = {
   gemini: {
     sdk: "gemini",
     defaultTransport: "cli",
+    auth: {
+      credentialFile: { homeSubdir: ".gemini", file: "oauth_creds.json" },
+      loginDelegated: true,
+    },
     transports: {
       cli: {
         transport: "cli",
@@ -200,6 +271,15 @@ const reviewerCapabilityDefinitions = {
   opencode: {
     sdk: "opencode",
     defaultTransport: "cli",
+    auth: {
+      // opencode writes auth.json on first login under the XDG data dir. XDG_DATA_HOME points at
+      // the parent of the opencode/ dir (not the dir itself), so it cannot be a baseEnvVar here;
+      // the default ~/.local/share/opencode path is probed directly. Logout rewrites the file to
+      // {} rather than deleting it, so this is a "logged in at least once" signal. loginDelegated
+      // stays the fallback for provider-env/OAuth auth that leaves no token-free file.
+      credentialFile: { homeSubdir: ".local/share/opencode", file: "auth.json" },
+      loginDelegated: true,
+    },
     transports: {
       cli: {
         transport: "cli",
@@ -215,6 +295,9 @@ const reviewerCapabilityDefinitions = {
   grok: {
     sdk: "grok",
     defaultTransport: "cli",
+    auth: {
+      loginDelegated: true,
+    },
     transports: {
       cli: {
         transport: "cli",
@@ -230,6 +313,10 @@ const reviewerCapabilityDefinitions = {
   antigravity: {
     sdk: "antigravity",
     defaultTransport: "cli",
+    auth: {
+      credentialFile: { homeSubdir: ".gemini", file: "oauth_creds.json" },
+      loginDelegated: true,
+    },
     transports: {
       cli: {
         transport: "cli",
@@ -268,6 +355,14 @@ export function getTransportCapability(
   transport: ReviewerTransport,
 ): ReviewerTransportCapability | undefined {
   return reviewerCapabilities[sdk].transports[transport];
+}
+
+export function getReviewerAuthSignal(sdk: ReviewerSdk): ReviewerAuthSignal | undefined {
+  return reviewerCapabilities[sdk].auth;
+}
+
+export function reviewerSdkPackage(sdk: ReviewerSdk): string | undefined {
+  return reviewerCapabilities[sdk].transports.sdk?.sdkPackage;
 }
 
 export function reviewerCapabilityDefaults(

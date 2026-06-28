@@ -40,6 +40,49 @@ Codex also has an opt-in app-server transport:
 
 SDK-backed families can also opt into CLI transport through config.
 
+## Reviewer Discovery
+
+`diffwarden reviewers discover` decides whether each adapter path is usable on the current
+host using token-free probes only; it never spawns a review or spends model budget. The
+capability registry (`src/adapters/capabilities.ts`) owns both the per-engine probe targets
+and the auth signals, so discovery stays aligned with the adapters without duplicating
+knowledge.
+
+Probes by transport:
+
+- SDK transports check whether the adapter's SDK npm package resolves (for example
+  `@anthropic-ai/claude-agent-sdk`, `@cursor/sdk`, `@github/copilot-sdk`). Resolution is
+  side-effect-free and does not load or execute the package. ESM-only packages whose
+  `exports` map omits a `require` condition are resolved through `import.meta.resolve` with a
+  `require.resolve` fallback.
+- CLI and app-server transports check whether the default executable resolves on `PATH`
+  (for example `codex`, `cursor-agent`, `gemini`, `agy`).
+
+Auth signals, layered on a present executable or package:
+
+- Environment-variable auth (for example `ANTHROPIC_API_KEY`, `CURSOR_API_KEY`,
+  `OPENROUTER_API_KEY`) is `verified` when the variable is set and non-empty.
+- Credential-file auth (for example `~/.codex/auth.json`, honoring `$CODEX_HOME`) is
+  `verified` when the file is readable.
+- Engines that own their own login flow (`loginDelegated`) report `available`/`unverified`
+  when present but unverified, because Diffwarden cannot confirm the login without spending.
+- Engines whose environment variables are optional report `requires_env` when the variable is
+  absent but the engine can still authenticate another way.
+- Engines that need credentials and expose neither a delegated login nor optional env vars
+  (notably `codex`) report `missing_auth` when no credential file is present.
+
+`--deep` additionally runs `diffwarden doctor`'s adapter preflight for present engines, which
+may spawn CLIs or call provider APIs. Preflight outcomes refine the shallow classification: a
+pass marks the candidate `available` but preserves the shallow `authState` rather than claiming
+verification the preflight did not perform — CLI/app-server preflight delegates auth to the
+executable, so a delegated-login engine such as `grok` (no token-free credential signal) stays
+`available`/`unverified` after a pass, while a candidate already `verified` token-free stays
+`verified`. A
+missing-auth error yields `missing_auth` (and a pass never overrides a shallow `missing_auth`),
+a reviewer-environment error yields `unsupported_host`, a missing executable yields
+`missing_executable`, and any other failure yields `preflight_failed`. Discovery output reports
+the environment-variable names and credential-file paths it probed but never their values.
+
 ## Tool Policy Guidelines
 
 Reviewer adapters should expose the smallest useful read-only tool surface whenever the

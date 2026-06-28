@@ -45,7 +45,10 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
      different set. Passing no reviewer flags uses `defaultReviewerSet` when config defines
      it; use `--reviewer-set <name|count>` when you need an explicit set.
    - If neither is available, explain that Diffwarden needs an explicit reviewer, a reviewer
-     set, or a config-defined `defaultReviewerSet`.
+     set, or a config-defined `defaultReviewerSet`. You may run `diffwarden reviewers discover`
+     to show which engines this host could run; it is read-only and spends no model budget. Do
+     not write config (`diffwarden reviewers add`, `diffwarden init`) or change reviewer setup
+     unless the user explicitly asks you to.
 
 3. Run `diffwarden review` from the repository being reviewed. If running from another
    directory, pass `--cwd <repo>`.
@@ -89,6 +92,7 @@ diffwarden review --target 'custom:Review auth flow and permission checks' --rev
 diffwarden review --target base:main --reviewer-set <name> --fail-on-findings P2 --agent
 diffwarden reviewers list
 diffwarden reviewers list --json
+diffwarden reviewers discover
 diffwarden init
 ```
 
@@ -122,5 +126,8 @@ diffwarden review --target uncommitted --reviewer fake --agent
 ## Boundaries
 
 - Diffwarden does not publish review comments to external services.
+- Reviewing and `reviewers discover` are read-only and spend no model budget. Only
+  `reviewers add` and `init` write config, and only to the user config file. Do not run them
+  unless the user explicitly asks you to change reviewer setup.
 - Droid users should prefer configured `droid-cli` reviewers for routine reviews when Factory
   UI session history matters.
