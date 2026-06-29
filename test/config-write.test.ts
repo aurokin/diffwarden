@@ -7,6 +7,7 @@ import {
   addReviewerToUserConfig,
   createDiscoveredUserConfig,
   editReviewerInUserConfig,
+  listUserConfigReviewers,
   loadDiffwardenConfig,
   removeReviewerFromSetInUserConfig,
   removeReviewerFromUserConfig,
@@ -475,5 +476,42 @@ describe("reviewer set membership", () => {
       env,
     });
     expect((readRaw(configPath).reviewerSets as Record<string, string[]>).fast).toEqual([]);
+  });
+});
+
+describe("listUserConfigReviewers", () => {
+  it("summarizes configured reviewers by id, engine, and enabled state", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      reviewers: [
+        { id: "codex", engine: "codex" },
+        { id: "cursor", engine: "cursor", enabled: false },
+      ],
+    });
+
+    const { path, reviewers } = await listUserConfigReviewers({ env });
+
+    expect(path).toBe(configPath);
+    expect(reviewers).toEqual([
+      { id: "codex", engine: "codex", enabled: true },
+      { id: "cursor", engine: "cursor", enabled: false },
+    ]);
+  });
+
+  it("skips entries without a string id since they cannot be targeted", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      reviewers: [{ engine: "codex" }, { id: "cursor", engine: "cursor" }],
+    });
+
+    const { reviewers } = await listUserConfigReviewers({ env });
+
+    expect(reviewers).toEqual([{ id: "cursor", engine: "cursor", enabled: true }]);
+  });
+
+  it("throws when no user config exists", async () => {
+    const { env } = setup();
+
+    await expect(listUserConfigReviewers({ env })).rejects.toThrow(/No diffwarden user config/);
   });
 });

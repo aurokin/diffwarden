@@ -1,7 +1,7 @@
 import * as readline from "node:readline/promises";
 import type { Readable, Writable } from "node:stream";
 import type { ReviewerTransport } from "../adapters/capabilities.js";
-import type { PublicReviewerEntry } from "./config.js";
+import type { ConfiguredReviewerSummary, PublicReviewerEntry } from "./config.js";
 import type { ReviewerDiscoveryResult } from "./discovery.js";
 
 /**
@@ -16,6 +16,25 @@ export type Prompter = {
 
 export function isInteractiveAvailable(stream: { isTTY?: boolean } = process.stdin): boolean {
   return stream.isTTY === true;
+}
+
+/**
+ * Decide whether a config-mutating setup command should drop into its guided flow (AUR-583's
+ * interactive-by-default-in-a-TTY dispatch). `--json` never blocks on input; an explicit
+ * `--interactive` opts in (the caller still guards for a real TTY, so a non-TTY `--interactive`
+ * errors rather than hanging); otherwise the guided flow is the default only when stdin is a TTY.
+ */
+export function shouldRunInteractiveSetup(
+  options: { interactive?: boolean; json?: boolean },
+  stream: { isTTY?: boolean } = process.stdin,
+): boolean {
+  if (options.json === true) {
+    return false;
+  }
+  if (options.interactive === true) {
+    return true;
+  }
+  return isInteractiveAvailable(stream);
 }
 
 export function createReadlinePrompter(io: { input?: Readable; output?: Writable } = {}): Prompter {
@@ -86,6 +105,43 @@ export async function promptSelectReviewerEntry(
     ...(recommendation.transport !== undefined ? { transport: recommendation.transport } : {}),
     ...(recommendation.model !== undefined ? { model: recommendation.model } : {}),
   };
+}
+
+/**
+ * Present the configured reviewers and return the id the user picked, or undefined when there are
+ * none to choose. Drives the no-id `reviewers remove` / `reviewers edit` interactive paths, which
+ * pick *which* configured reviewer to act on (the patch/force still come from flags).
+ */
+export async function promptSelectConfiguredReviewer(
+  prompter: Prompter,
+  reviewers: ConfiguredReviewerSummary[],
+  action: string,
+): Promise<string | undefined> {
+  if (reviewers.length === 0) {
+    return undefined;
+  }
+  const labels = reviewers.map(
+    (reviewer) => `${reviewer.id} (${reviewer.engine})${reviewer.enabled ? "" : " [disabled]"}`,
+  );
+  const index = await prompter.select(`Select a reviewer to ${action}`, labels);
+  return reviewers[index]?.id;
+}
+
+export function confirmRemoveReviewer(
+  prompter: Prompter,
+  id: string,
+  targetPath: string,
+): Promise<boolean> {
+  // Default to no: removal is destructive, so an empty Enter must not delete a reviewer.
+  return prompter.confirm(`Remove reviewer "${id}" from ${targetPath}?`, false);
+}
+
+export function confirmEditReviewer(
+  prompter: Prompter,
+  id: string,
+  targetPath: string,
+): Promise<boolean> {
+  return prompter.confirm(`Edit reviewer "${id}" in ${targetPath}?`, true);
 }
 
 export function confirmWriteEntry(

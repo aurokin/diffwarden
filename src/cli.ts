@@ -20,6 +20,7 @@ import {
   createDiscoveredUserConfig,
   editReviewerInUserConfig,
   initDiffwardenConfig,
+  listUserConfigReviewers,
   loadDiffwardenConfig,
   removeReviewerFromSetInUserConfig,
   removeReviewerFromUserConfig,
@@ -50,12 +51,16 @@ import {
 } from "./core/human-render.js";
 import {
   type Prompter,
+  confirmEditReviewer,
+  confirmRemoveReviewer,
   confirmScaffold,
   confirmWriteEntry,
   createReadlinePrompter,
   isInteractiveAvailable,
+  promptSelectConfiguredReviewer,
   promptSelectReviewerEntry,
   selectScaffoldReviewers,
+  shouldRunInteractiveSetup,
 } from "./core/interactive.js";
 import { type MacosDoctorReport, runMacosDoctor } from "./core/macos.js";
 import { renderJson } from "./core/render.js";
@@ -252,9 +257,9 @@ reviewCommand
 
 program
   .command("init")
-  .description("Create a starter user config file.")
+  .description("Create a starter user config file, or scaffold one from discovered reviewers.")
   .option("--discover", "scaffold the config from reviewers discovered on this host")
-  .option("--interactive", "confirm the discovered config before writing (requires --discover)")
+  .option("--interactive", "force the discover/scaffold flow (the default in a TTY; needs a TTY)")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
   .action(
@@ -264,12 +269,17 @@ program
       cwd: string;
       json?: boolean;
     }) => {
-      if (options.discover === true) {
-        await runInitDiscover(options);
+      // Interactive-by-default in a TTY: bare `init` at a terminal runs the discover/scaffold flow;
+      // --json or a non-TTY writes the static starter config. --discover still forces discovery even
+      // when non-interactive (e.g. `init --discover --json` scaffolds every reviewer without prompts).
+      const interactive = shouldRunInteractiveSetup(options);
+      if (interactive || options.discover === true) {
+        await runInitDiscover({
+          cwd: options.cwd,
+          interactive,
+          ...(options.json === true ? { json: true } : {}),
+        });
         return;
-      }
-      if (options.interactive === true) {
-        throw invalidCli("--interactive requires --discover");
       }
 
       const configPath = await initDiffwardenConfig();
@@ -417,14 +427,22 @@ reviewers
   .option("--provider <name>", "provider hint for the reviewer")
   .option("--set <name>", "also add the reviewer id to this reviewer set")
   .option("--disabled", "write the reviewer as a disabled placeholder (enabled: false)")
-  .option("--interactive", "select and confirm the reviewer before writing (requires a TTY)")
+  .option(
+    "--interactive",
+    "force the picker/confirm (the default for a bare add in a TTY; needs a TTY)",
+  )
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
   .action(async (engineArg: string | undefined, options: ReviewerAddCliOptions) => {
-    const entry =
-      options.interactive === true
-        ? await resolveInteractiveAddEntry(engineArg, options)
-        : buildRequiredAddEntry(engineArg, options);
+    // Interactive-by-default in a TTY: a bare `add` at a terminal opens the discovered picker, while
+    // naming an engine stays declarative (the engine is the non-interactive escape) and a non-TTY
+    // bare `add` keeps erroring with the engine hint. Explicit --interactive forces the flow.
+    const interactive =
+      options.interactive === true ||
+      (engineArg === undefined && shouldRunInteractiveSetup(options));
+    const entry = interactive
+      ? await resolveInteractiveAddEntry(engineArg, options)
+      : buildRequiredAddEntry(engineArg, options);
     if (entry === undefined) {
       return;
     }
@@ -465,42 +483,54 @@ reviewers
   });
 
 reviewers
-  .command("remove <id>")
+  .command("remove [id]")
   .description("Remove a reviewer from the user config and prune it from reviewer sets.")
   .option("--force", "remove even if it empties the default reviewer set")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
-  .action(async (id: string, options: { force?: boolean; cwd: string; json?: boolean }) => {
-    // By design the write target is the env-located user config (decision: always user, never
-    // project), so it is not derived from --cwd; --cwd only scopes the shadow-config check.
-    const result = await removeReviewerFromUserConfig({
-      id,
-      env: process.env,
-      ...(options.force === true ? { force: true } : {}),
-    });
+  .action(
+    async (
+      idArg: string | undefined,
+      options: { force?: boolean; cwd: string; json?: boolean },
+    ) => {
+      // Interactive-by-default in a TTY: a bare `remove` at a terminal picks the reviewer from a list;
+      // naming an id stays declarative, and a non-TTY / --json bare `remove` errors instead of hanging.
+      const id = idArg ?? (await resolveInteractiveReviewerId(options, "remove"));
+      if (id === undefined) {
+        return;
+      }
 
-    await warnIfProjectConfigShadows(options.cwd, result.path);
+      // By design the write target is the env-located user config (decision: always user, never
+      // project), so it is not derived from --cwd; --cwd only scopes the shadow-config check.
+      const result = await removeReviewerFromUserConfig({
+        id,
+        env: process.env,
+        ...(options.force === true ? { force: true } : {}),
+      });
 
-    if (options.json === true) {
-      process.stdout.write(
-        `${JSON.stringify(
-          { path: result.path, removed: id, prunedFromSets: result.prunedFromSets },
-          null,
-          2,
-        )}\n`,
-      );
-      return;
-    }
+      await warnIfProjectConfigShadows(options.cwd, result.path);
 
-    const setSuffix =
-      result.prunedFromSets.length > 0
-        ? ` and pruned it from reviewer set ${result.prunedFromSets.join(", ")}`
-        : "";
-    process.stdout.write(`Removed reviewer ${id}${setSuffix} in ${result.path}\n`);
-  });
+      if (options.json === true) {
+        process.stdout.write(
+          `${JSON.stringify(
+            { path: result.path, removed: id, prunedFromSets: result.prunedFromSets },
+            null,
+            2,
+          )}\n`,
+        );
+        return;
+      }
+
+      const setSuffix =
+        result.prunedFromSets.length > 0
+          ? ` and pruned it from reviewer set ${result.prunedFromSets.join(", ")}`
+          : "";
+      process.stdout.write(`Removed reviewer ${id}${setSuffix} in ${result.path}\n`);
+    },
+  );
 
 reviewers
-  .command("edit <id>")
+  .command("edit [id]")
   .description("Edit fields on a configured reviewer in the user config.")
   .option("--transport <transport>", "transport: sdk, cli, or app-server")
   .option("--model <id>", "model for the reviewer")
@@ -510,8 +540,17 @@ reviewers
   .option("--disabled", "mark the reviewer disabled (enabled: false)")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
-  .action(async (id: string, options: ReviewerEditCliOptions) => {
+  .action(async (idArg: string | undefined, options: ReviewerEditCliOptions) => {
+    // Validate the patch first so a no-field edit fails fast regardless of TTY, before any picker.
     const patch = buildReviewerEditPatch(options);
+
+    // Interactive-by-default in a TTY: a bare `edit` (still needs at least one field flag) picks
+    // *which* configured reviewer to patch from a list; naming an id stays declarative, and a
+    // non-TTY / --json bare `edit` errors instead of hanging.
+    const id = idArg ?? (await resolveInteractiveReviewerId(options, "edit"));
+    if (id === undefined) {
+      return;
+    }
 
     // Write target is the env-located user config by design; --cwd only scopes the shadow check.
     const result = await editReviewerInUserConfig({ id, patch, env: process.env });
@@ -1077,6 +1116,47 @@ async function selectInteractiveAddEntry(
   return promptSelectReviewerEntry(prompter, result);
 }
 
+/**
+ * Resolve the reviewer id for a no-id `reviewers remove` / `edit` by letting the user pick from the
+ * configured reviewers. Reached only when no id was named; stays declarative outside a TTY (and for
+ * --json) so agents and CI get a clean error instead of a hung prompt. Returns undefined when the
+ * user aborts or there is nothing to pick.
+ */
+async function resolveInteractiveReviewerId(
+  options: { json?: boolean; cwd: string },
+  action: "remove" | "edit",
+): Promise<string | undefined> {
+  if (options.json === true || !isInteractiveAvailable(process.stdin)) {
+    throw invalidCli(`Specify a reviewer id to ${action} (interactive selection requires a TTY).`);
+  }
+
+  const { path: configPath, reviewers } = await listUserConfigReviewers({ env: process.env });
+  if (reviewers.length === 0) {
+    process.stdout.write(`No configured reviewers to ${action}.\n`);
+    return undefined;
+  }
+
+  // Prompts go to stderr to keep stdout clean for any machine-readable result.
+  const prompter = createReadlinePrompter({ output: process.stderr });
+  try {
+    const id = await promptSelectConfiguredReviewer(prompter, reviewers, action);
+    if (id === undefined) {
+      return undefined;
+    }
+    const confirmed =
+      action === "remove"
+        ? await confirmRemoveReviewer(prompter, id, configPath)
+        : await confirmEditReviewer(prompter, id, configPath);
+    if (!confirmed) {
+      process.stdout.write("Aborted.\n");
+      return undefined;
+    }
+    return id;
+  } finally {
+    prompter.close();
+  }
+}
+
 function buildReviewerAddEntry(
   engineArg: string,
   options: ReviewerAddCliOptions,
@@ -1159,18 +1239,18 @@ async function warnIfProjectConfigShadows(cwd: string, writtenPath: string): Pro
 async function runInitDiscover(options: {
   cwd: string;
   json?: boolean;
-  interactive?: boolean;
+  interactive: boolean;
 }): Promise<void> {
   const result = await discoverReviewers({ cwd: options.cwd, env: process.env });
   const discovered = selectDiscoveredReviewers(result.candidates);
   if (discovered.length === 0) {
     throw invalidCli(
-      "No usable reviewers found on this host. Run diffwarden reviewers discover to see options, install or authenticate an engine, then retry, or run diffwarden init for a starter config.",
+      "No usable reviewers found on this host. Run diffwarden reviewers discover to see options, install or authenticate an engine, then retry, or run diffwarden init --json to write a static starter config without discovery.",
     );
   }
 
   let reviewers = discovered;
-  if (options.interactive === true) {
+  if (options.interactive) {
     if (!isInteractiveAvailable(process.stdin)) {
       throw invalidCli("--interactive requires an interactive terminal (TTY)");
     }

@@ -138,6 +138,9 @@ diffwarden review --target uncommitted --reviewer fake --agent
   commands — `reviewers add`, `reviewers edit`, `reviewers remove`, `reviewers set add/remove`,
   and `init` — write only to the user config file, atomically. Do not run them unless the user
   explicitly asks you to change reviewer setup. `remove` and `set remove` refuse to empty the
-  `defaultReviewerSet` without `--force`.
+  `defaultReviewerSet` without `--force`. These commands are interactive-by-default only in a TTY;
+  when you do run them, always name the target explicitly (the engine for `add`, the id for
+  `remove`/`edit`), since a no-target invocation in your non-TTY session exits non-zero instead of
+  prompting.
 - Droid users should prefer configured `droid-cli` reviewers for routine reviews when Factory
   UI session history matters.
