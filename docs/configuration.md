@@ -16,12 +16,15 @@ User config is discovered at:
 Create a starter user config with:
 
 ```bash
-diffwarden init              # minimal template to edit by hand
-diffwarden init --discover   # scaffold from reviewers discovered on this host
+diffwarden init              # in a TTY: guided discovery; non-TTY or --json: static starter
+diffwarden init --discover   # force the discovery scaffold (prompts in a TTY)
+diffwarden init --json       # static starter config, never interactive
 ```
 
-`init` and `reviewers add` always write to the user config path above, never to a project
-`diffwarden.config.json`. See [Discovery & Setup](#discovery--setup).
+In a terminal, a bare `diffwarden init` drops into the guided discover → scaffold → confirm
+flow. Pass `--json`, or run in a non-TTY (CI, piped), to write the static starter template
+instead. `init` and `reviewers add` always write to the user config path above, never to a
+project `diffwarden.config.json`. See [Discovery & Setup](#discovery--setup).
 
 ## Reviewer Selection
 
@@ -118,10 +121,14 @@ never reference a missing reviewer. Both `remove` and `set remove` refuse to lea
 by `defaultReviewerSet` empty unless you pass `--force`; removing or editing an unknown id exits
 non-zero and writes nothing. `set add` requires the id to be a configured reviewer.
 
-Add `--interactive` to `reviewers add` or `init --discover` to select and confirm before
-writing. Interactive mode requires a TTY and exits with a usage error when stdin is not
-interactive (for example in CI or when piped), so non-interactive callers should pass the
-engine and flags directly.
+Interactive setup is the default in a TTY. A bare `diffwarden reviewers add` opens the
+discovered-reviewer picker, a bare `diffwarden init` runs the discover/scaffold flow, and a
+bare `reviewers remove` or `reviewers edit <field>` lets you pick which configured reviewer to
+act on (`edit` still needs at least one field flag, which chooses *what* to change). Naming a
+target — an engine, an id — passing `--json`, or running outside a TTY (CI, piped) stays fully
+declarative and never prompts; a no-target setup command in a non-TTY exits with a usage error
+rather than hanging. `--interactive` forces the guided flow for `add` and `init` even when a
+target is named, and still requires a real TTY.
 
 ## Disabling Configured Reviewers
 

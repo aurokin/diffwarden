@@ -57,11 +57,12 @@ diffwarden reviewers discover
 ```
 
 Then create a user config so you can run Diffwarden without passing reviewers on every
-command. Scaffold it from what discovery found, or start from a hand-written template:
+command. In a terminal, a bare `diffwarden init` walks you through discovery; pass `--json` or
+run non-interactively for a static starter:
 
 ```bash
-diffwarden init --discover   # write a config from discovered, ready-to-use reviewers
-diffwarden init              # write a minimal starter config to edit by hand
+diffwarden init              # in a TTY: guided discovery; non-TTY or --json: static starter
+diffwarden init --discover   # force the discovery scaffold
 diffwarden doctor --reviewer-set 1
 diffwarden review --target base:main
 ```
@@ -128,7 +129,9 @@ diffwarden reviewers remove codex
 
 `add`, `edit`, `remove`, and `set` all write only the env-located user config (never the project
 config), atomically. Removing a reviewer also prunes it from every reviewer set; `remove` and
-`set remove` refuse to leave `defaultReviewerSet` empty unless you pass `--force`.
+`set remove` refuse to leave `defaultReviewerSet` empty unless you pass `--force`. In a TTY,
+running `add`, `remove`, or `edit` without naming a target drops into a guided picker; naming a
+target, passing `--json`, or running non-interactively stays declarative.
 
 Supported v1 targets:
 

@@ -127,8 +127,8 @@ diffwarden doctor [--reviewer <spec>|--reviewer-set <name>] [--model <id>] [--ef
 diffwarden reviewers list [--cwd <path>] [--json]
 diffwarden reviewers discover [--deep] [--cwd <path>] [--json]
 diffwarden reviewers add [engine] [--id <id>] [--transport <transport>] [--model <id>] [--effort <level>] [--provider <name>] [--set <name>] [--disabled] [--interactive] [--cwd <path>] [--json]
-diffwarden reviewers edit <id> [--transport <transport>] [--model <id>] [--effort <level>] [--provider <name>] [--enabled] [--disabled] [--cwd <path>] [--json]
-diffwarden reviewers remove <id> [--force] [--cwd <path>] [--json]
+diffwarden reviewers edit [id] [--transport <transport>] [--model <id>] [--effort <level>] [--provider <name>] [--enabled] [--disabled] [--cwd <path>] [--json]
+diffwarden reviewers remove [id] [--force] [--cwd <path>] [--json]
 diffwarden reviewers set add <set> <reviewer> [--cwd <path>] [--json]
 diffwarden reviewers set remove <set> <reviewer> [--force] [--cwd <path>] [--json]
 diffwarden init [--discover] [--interactive] [--cwd <path>] [--json]
@@ -224,9 +224,16 @@ manages set membership; `set add` requires the id to be a configured reviewer. `
 given, and editing/removing an unknown id exits non-zero and writes nothing. None of these
 commands changes `defaultReviewerSet` for an existing config. `init --discover` scaffolds a fresh
 config from discovered ready-to-use reviewers with a `defaultReviewerSet` and `readonly: true`,
-and refuses to overwrite an existing config. `--interactive` (on `reviewers add` and
-`init --discover`) selects and confirms before writing and requires a TTY; it exits `2` when
-stdin is not interactive.
+and refuses to overwrite an existing config.
+
+Setup is interactive-by-default in a TTY. With stdin attached to a terminal, a bare
+`diffwarden init` runs the discover/scaffold flow, a bare `reviewers add` opens the discovered
+picker, and a bare `reviewers remove`/`edit` lets the user pick which configured reviewer to act
+on (`edit` still requires at least one field flag, validated before the picker). Naming a target
+(an engine for `add`, an id for `remove`/`edit`), passing `--json`, or running without a TTY
+stays fully declarative; a no-target setup command without a TTY exits `2` with a usage error
+rather than blocking on input, and `--json` never prompts. `--interactive` (on `reviewers add`
+and `init`) forces the guided flow and requires a TTY, exiting `2` when stdin is not interactive.
 
 Reviewer specs should stay compact and SDK-agnostic at the public boundary:
 

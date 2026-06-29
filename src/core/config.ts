@@ -509,6 +509,46 @@ export async function editReviewerInUserConfig(
   return { path, reviewer: result.reviewer, sha256: digest };
 }
 
+/** A configured reviewer in summary form for interactive pickers (id + engine + enabled state). */
+export type ConfiguredReviewerSummary = {
+  id: string;
+  engine: string;
+  enabled: boolean;
+};
+
+/**
+ * Read the configured reviewers from the user config so the no-id `reviewers remove` / `edit`
+ * interactive paths can present a picker. Read-only; throws the same missing-config error as the
+ * mutators when no user config exists. Entries without a string id are skipped because they cannot
+ * be targeted by id anyway.
+ */
+export async function listUserConfigReviewers(options: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): Promise<{ path: string; reviewers: ConfiguredReviewerSummary[] }> {
+  const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
+  const existingRaw = await readFileIfExists(configPath);
+  if (existingRaw === undefined) {
+    throw invalidConfig(
+      `No diffwarden user config at ${configPath}. Run diffwarden init or diffwarden reviewers add <engine> first.`,
+    );
+  }
+  const rawConfig = parseRawConfigObject(existingRaw, configPath);
+  const rawReviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
+  const reviewers: ConfiguredReviewerSummary[] = [];
+  for (const reviewer of rawReviewers) {
+    if (!isRecord(reviewer) || typeof reviewer.id !== "string") {
+      continue;
+    }
+    reviewers.push({
+      id: reviewer.id,
+      engine: typeof reviewer.engine === "string" ? reviewer.engine : "unknown",
+      enabled: reviewer.enabled !== false,
+    });
+  }
+  return { path: configPath, reviewers };
+}
+
 export type ReviewerSetMembershipOptions = {
   setName: string;
   reviewerId: string;
