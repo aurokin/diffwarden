@@ -4,7 +4,13 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { type ReviewerSdk, getTransportCapability } from "../adapters/capabilities.js";
+import {
+  type ReviewerSdk,
+  defaultReviewerTransport,
+  getTransportCapability,
+  isReviewerSdk,
+  validateReviewerCapabilityOverrides,
+} from "../adapters/capabilities.js";
 import { invalidConfig } from "./errors.js";
 import { reviewerSdkSchema } from "./schema.js";
 
@@ -290,6 +296,280 @@ export async function createDiscoveredUserConfig(
   assertWritableConfig(rawConfig, configPath);
   await createConfigFileExclusive(configPath, `${JSON.stringify(rawConfig, null, 2)}\n`);
   return configPath;
+}
+
+/**
+ * Read the env-located user config, apply `mutate` to its raw JSON, schema-validate, and write
+ * atomically with a compare-and-swap on the bytes we read. Errors if no user config exists yet.
+ * Shared by remove / edit / set so every mutation keeps the same atomic, validated write contract.
+ */
+async function mutateUserConfig<T>(
+  options: { env?: NodeJS.ProcessEnv; homeDir?: string; expectedSha256?: string },
+  mutate: (rawConfig: Record<string, unknown>, configPath: string) => T,
+): Promise<{ path: string; sha256: string; result: T }> {
+  const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
+  const existingRaw = await readFileIfExists(configPath);
+  if (existingRaw === undefined) {
+    throw invalidConfig(
+      `No diffwarden user config at ${configPath}. Run diffwarden init or diffwarden reviewers add <engine> first.`,
+    );
+  }
+  if (options.expectedSha256 !== undefined && sha256(existingRaw) !== options.expectedSha256) {
+    throw invalidConfig(`Config changed on disk since it was read: ${configPath}`);
+  }
+
+  const rawConfig = parseRawConfigObject(existingRaw, configPath);
+  const result = mutate(rawConfig, configPath);
+  assertWritableConfig(rawConfig, configPath);
+  const serialized = `${JSON.stringify(rawConfig, null, 2)}\n`;
+  await atomicWrite(configPath, serialized, { expectedSha256: sha256(existingRaw) });
+  return { path: configPath, sha256: sha256(serialized), result };
+}
+
+function findReviewerIndexById(reviewers: unknown[], id: string): number {
+  return reviewers.findIndex((reviewer) => isRecord(reviewer) && reviewer.id === id);
+}
+
+/** Remove `reviewerId` from every reviewer set, returning the names of sets it was pruned from. */
+function pruneReviewerFromSets(rawConfig: Record<string, unknown>, reviewerId: string): string[] {
+  if (!isRecord(rawConfig.reviewerSets)) {
+    return [];
+  }
+  const sets = rawConfig.reviewerSets;
+  const pruned: string[] = [];
+  for (const [name, members] of Object.entries(sets)) {
+    if (Array.isArray(members) && members.includes(reviewerId)) {
+      sets[name] = members.filter((member) => member !== reviewerId);
+      pruned.push(name);
+    }
+  }
+  return pruned;
+}
+
+/** Refuse to leave `defaultReviewerSet` pointing at an empty/missing set unless `force` is set. */
+function guardDefaultReviewerSet(
+  rawConfig: Record<string, unknown>,
+  configPath: string,
+  force: boolean,
+): void {
+  if (force || typeof rawConfig.defaultReviewerSet !== "string") {
+    return;
+  }
+  const setName = rawConfig.defaultReviewerSet;
+  const sets = isRecord(rawConfig.reviewerSets) ? rawConfig.reviewerSets : {};
+  const members = sets[setName];
+  if (Array.isArray(members) && members.length > 0) {
+    return;
+  }
+  throw invalidConfig(
+    `This leaves the default reviewer set "${setName}" empty in ${configPath}. Re-run with --force to proceed, or repoint defaultReviewerSet first.`,
+  );
+}
+
+export type RemoveReviewerFromUserConfigOptions = {
+  id: string;
+  force?: boolean;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  expectedSha256?: string;
+};
+
+export type RemoveReviewerFromUserConfigResult = {
+  path: string;
+  prunedFromSets: string[];
+  sha256: string;
+};
+
+/**
+ * Delete a configured reviewer by id and prune it from every reviewer set. Refuses (unless
+ * `force`) when this would leave `defaultReviewerSet` empty. Errors if the id is not configured.
+ */
+export async function removeReviewerFromUserConfig(
+  options: RemoveReviewerFromUserConfigOptions,
+): Promise<RemoveReviewerFromUserConfigResult> {
+  const {
+    path,
+    sha256: digest,
+    result,
+  } = await mutateUserConfig(options, (rawConfig, configPath) => {
+    const reviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
+    const index = findReviewerIndexById(reviewers, options.id);
+    if (index < 0) {
+      throw invalidConfig(`No reviewer with id "${options.id}" in ${configPath}`);
+    }
+    reviewers.splice(index, 1);
+    rawConfig.reviewers = reviewers;
+    const prunedFromSets = pruneReviewerFromSets(rawConfig, options.id);
+    guardDefaultReviewerSet(rawConfig, configPath, options.force === true);
+    return { prunedFromSets };
+  });
+  return { path, prunedFromSets: result.prunedFromSets, sha256: digest };
+}
+
+/** Fields `reviewers edit` can patch; only provided keys change, the rest of the entry survives. */
+export type EditReviewerPatch = {
+  transport?: "sdk" | "cli" | "app-server";
+  provider?: string;
+  model?: string;
+  effort?: string;
+  enabled?: boolean;
+};
+
+export type EditReviewerInUserConfigOptions = {
+  id: string;
+  patch: EditReviewerPatch;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  expectedSha256?: string;
+};
+
+export type EditReviewerInUserConfigResult = {
+  path: string;
+  reviewer: Record<string, unknown>;
+  sha256: string;
+};
+
+/**
+ * Patch individual fields on an existing reviewer, preserving untouched keys (sdkOptions, profile,
+ * etc.). `enabled: true` clears the disabled placeholder; `false` sets it. Validates the resulting
+ * transport/model/effort against the capability registry before writing. Errors if id is absent.
+ */
+export async function editReviewerInUserConfig(
+  options: EditReviewerInUserConfigOptions,
+): Promise<EditReviewerInUserConfigResult> {
+  const {
+    path,
+    sha256: digest,
+    result,
+  } = await mutateUserConfig(options, (rawConfig, configPath) => {
+    const reviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
+    const index = findReviewerIndexById(reviewers, options.id);
+    if (index < 0) {
+      throw invalidConfig(`No reviewer with id "${options.id}" in ${configPath}`);
+    }
+    const existing = reviewers[index] as Record<string, unknown>;
+    const merged: Record<string, unknown> = { ...existing };
+    const { patch } = options;
+    if (patch.transport !== undefined) {
+      merged.transport = patch.transport;
+    }
+    if (patch.provider !== undefined) {
+      merged.provider = patch.provider;
+    }
+    if (patch.model !== undefined) {
+      merged.model = patch.model;
+    }
+    if (patch.effort !== undefined) {
+      merged.effort = patch.effort;
+    }
+    if (patch.enabled === false) {
+      merged.enabled = false;
+    } else if (patch.enabled === true) {
+      // Clearing the disabled placeholder: undefined is dropped by JSON.stringify, so the
+      // reviewer reads as active (we omit `enabled` for enabled reviewers).
+      merged.enabled = undefined;
+    }
+
+    // Guard the engine before any capability lookup: a hand-edited/legacy config could carry an
+    // unknown engine, and capability helpers index the registry by engine — an unknown key would
+    // throw an uncaught TypeError instead of a clean, write-nothing config error.
+    const engineValue = existing.engine;
+    if (typeof engineValue !== "string" || !isReviewerSdk(engineValue)) {
+      throw invalidConfig(
+        `Reviewer "${options.id}" in ${configPath} has an unknown engine and cannot be edited: ${String(engineValue)}`,
+      );
+    }
+
+    // Reject overrides the resulting transport cannot honor before writing, so the failure is at
+    // edit time rather than at the next review/preflight. Resolve the effective transport the way
+    // resolution does (an omitted transport falls back to the engine default) so model/effort are
+    // validated against the transport that will actually run, not a phantom "sdk".
+    const engine = engineValue;
+    const effectiveTransport =
+      (typeof merged.transport === "string"
+        ? (merged.transport as "sdk" | "cli" | "app-server")
+        : undefined) ??
+      defaultReviewerTransport(engine) ??
+      "sdk";
+    validateReviewerCapabilityOverrides({
+      id: String(merged.id),
+      sdk: engine,
+      transport: effectiveTransport,
+      ...(typeof merged.model === "string" ? { model: merged.model } : {}),
+      ...(typeof merged.effort === "string"
+        ? { effort: merged.effort as EditReviewerPatch["effort"] }
+        : {}),
+      readonly: true,
+    } as Parameters<typeof validateReviewerCapabilityOverrides>[0]);
+
+    reviewers[index] = merged;
+    rawConfig.reviewers = reviewers;
+    return { reviewer: merged };
+  });
+  return { path, reviewer: result.reviewer, sha256: digest };
+}
+
+export type ReviewerSetMembershipOptions = {
+  setName: string;
+  reviewerId: string;
+  force?: boolean;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  expectedSha256?: string;
+};
+
+export type ReviewerSetMembershipResult = {
+  path: string;
+  set: string;
+  members: string[];
+  sha256: string;
+};
+
+/** Add a configured reviewer id to a reviewer set (creating the set if needed). */
+export async function addReviewerToSetInUserConfig(
+  options: ReviewerSetMembershipOptions,
+): Promise<ReviewerSetMembershipResult> {
+  const {
+    path,
+    sha256: digest,
+    result,
+  } = await mutateUserConfig(options, (rawConfig, configPath) => {
+    const reviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
+    if (findReviewerIndexById(reviewers, options.reviewerId) < 0) {
+      throw invalidConfig(
+        `No reviewer with id "${options.reviewerId}" in ${configPath}; add it before adding it to a set`,
+      );
+    }
+    appendToReviewerSet(rawConfig, options.setName, options.reviewerId);
+    const sets = rawConfig.reviewerSets as Record<string, unknown>;
+    return { members: (sets[options.setName] as string[]).slice() };
+  });
+  return { path, set: options.setName, members: result.members, sha256: digest };
+}
+
+/** Remove a reviewer id from a reviewer set. Refuses (unless force) if it empties the default set. */
+export async function removeReviewerFromSetInUserConfig(
+  options: ReviewerSetMembershipOptions,
+): Promise<ReviewerSetMembershipResult> {
+  const {
+    path,
+    sha256: digest,
+    result,
+  } = await mutateUserConfig(options, (rawConfig, configPath) => {
+    const sets = isRecord(rawConfig.reviewerSets) ? rawConfig.reviewerSets : {};
+    const members = sets[options.setName];
+    if (!Array.isArray(members) || !members.includes(options.reviewerId)) {
+      throw invalidConfig(
+        `Reviewer set "${options.setName}" does not contain "${options.reviewerId}" in ${configPath}`,
+      );
+    }
+    const remaining = members.filter((member) => member !== options.reviewerId);
+    sets[options.setName] = remaining;
+    rawConfig.reviewerSets = sets;
+    guardDefaultReviewerSet(rawConfig, configPath, options.force === true);
+    return { members: remaining.slice() };
+  });
+  return { path, set: options.setName, members: result.members, sha256: digest };
 }
 
 async function createConfigFileExclusive(configPath: string, content: string): Promise<void> {

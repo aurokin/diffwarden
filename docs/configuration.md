@@ -100,6 +100,24 @@ default set silently; choose the set explicitly. Scaffold a whole config from di
 step with `init --discover`, which writes the ready-to-use reviewers, a `defaultReviewerSet`,
 and `readonly: true`, and refuses to overwrite an existing config.
 
+Edit, remove, and manage set membership of existing reviewers with the same atomic,
+user-config-only write contract:
+
+```bash
+diffwarden reviewers edit codex --model gpt-5.1-codex  # patch one field, keep the rest
+diffwarden reviewers edit grok --enabled               # clear a disabled placeholder
+diffwarden reviewers set add 1 codex                   # add a configured id to set "1"
+diffwarden reviewers set remove 1 codex                # remove it from set "1"
+diffwarden reviewers remove codex                      # delete it and prune it from all sets
+```
+
+`edit` patches only the named fields (preserving `sdkOptions`, `profile`, `enabled: false`, and
+every untouched key) and rejects overrides the resolved transport cannot honor before writing,
+just like `add`. `remove` deletes the reviewer and prunes its id from every reviewer set so sets
+never reference a missing reviewer. Both `remove` and `set remove` refuse to leave the set named
+by `defaultReviewerSet` empty unless you pass `--force`; removing or editing an unknown id exits
+non-zero and writes nothing. `set add` requires the id to be a configured reviewer.
+
 Add `--interactive` to `reviewers add` or `init --discover` to select and confirm before
 writing. Interactive mode requires a TTY and exits with a usage error when stdin is not
 interactive (for example in CI or when piped), so non-interactive callers should pass the

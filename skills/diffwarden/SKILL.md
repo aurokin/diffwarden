@@ -134,8 +134,10 @@ diffwarden review --target uncommitted --reviewer fake --agent
 ## Boundaries
 
 - Diffwarden does not publish review comments to external services.
-- Reviewing and `reviewers discover` are read-only and spend no model budget. Only
-  `reviewers add` and `init` write config, and only to the user config file. Do not run them
-  unless the user explicitly asks you to change reviewer setup.
+- Reviewing and `reviewers discover` are read-only and spend no model budget. The config-writing
+  commands — `reviewers add`, `reviewers edit`, `reviewers remove`, `reviewers set add/remove`,
+  and `init` — write only to the user config file, atomically. Do not run them unless the user
+  explicitly asks you to change reviewer setup. `remove` and `set remove` refuse to empty the
+  `defaultReviewerSet` without `--force`.
 - Droid users should prefer configured `droid-cli` reviewers for routine reviews when Factory
   UI session history matters.
