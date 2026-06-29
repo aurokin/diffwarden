@@ -122,6 +122,14 @@ diffwarden review --target uncommitted --reviewer fake --agent
   comment near the relevant code explaining the invariant or tradeoff. That helps future
   review runs avoid fixating on the same apparent issue. 
 - If there are no findings, say that directly and mention any warnings or residual test gaps.
+- `reviewers discover` reports host readiness, not a review. It groups reviewers as Ready to use /
+  Needs attention / Not installed, ordered verified-first then alphabetically. JSON uses
+  `schema_version: 1` with `candidates` (each carrying `status` and `authState`) plus a `summary`.
+  `status` is one of `available`, `missing_executable`, `missing_auth`, `requires_env`,
+  `unsupported_host`, or `preflight_failed`. `authState` is `verified` (a token-free signal — an
+  env var or credential file — confirmed auth), `unverified` (installed but auth is delegated to
+  the engine's own login and was not checked), `missing`, or `not_required`. It is shallow by
+  default (no network or login); `--deep` additionally runs adapter preflight.
 
 ## Boundaries
 
