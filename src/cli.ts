@@ -12,12 +12,17 @@ import {
 } from "./adapters/capabilities.js";
 import {
   type DiffwardenConfig,
+  type EditReviewerPatch,
   type LoadedDiffwardenConfig,
   type PublicReviewerEntry,
+  addReviewerToSetInUserConfig,
   addReviewerToUserConfig,
   createDiscoveredUserConfig,
+  editReviewerInUserConfig,
   initDiffwardenConfig,
   loadDiffwardenConfig,
+  removeReviewerFromSetInUserConfig,
+  removeReviewerFromUserConfig,
   userConfigPath,
 } from "./core/config.js";
 import {
@@ -459,6 +464,129 @@ reviewers
     );
   });
 
+reviewers
+  .command("remove <id>")
+  .description("Remove a reviewer from the user config and prune it from reviewer sets.")
+  .option("--force", "remove even if it empties the default reviewer set")
+  .option("--cwd <path>", "working directory", process.cwd())
+  .option("--json", "output machine-readable JSON")
+  .action(async (id: string, options: { force?: boolean; cwd: string; json?: boolean }) => {
+    // By design the write target is the env-located user config (decision: always user, never
+    // project), so it is not derived from --cwd; --cwd only scopes the shadow-config check.
+    const result = await removeReviewerFromUserConfig({
+      id,
+      env: process.env,
+      ...(options.force === true ? { force: true } : {}),
+    });
+
+    await warnIfProjectConfigShadows(options.cwd, result.path);
+
+    if (options.json === true) {
+      process.stdout.write(
+        `${JSON.stringify(
+          { path: result.path, removed: id, prunedFromSets: result.prunedFromSets },
+          null,
+          2,
+        )}\n`,
+      );
+      return;
+    }
+
+    const setSuffix =
+      result.prunedFromSets.length > 0
+        ? ` and pruned it from reviewer set ${result.prunedFromSets.join(", ")}`
+        : "";
+    process.stdout.write(`Removed reviewer ${id}${setSuffix} in ${result.path}\n`);
+  });
+
+reviewers
+  .command("edit <id>")
+  .description("Edit fields on a configured reviewer in the user config.")
+  .option("--transport <transport>", "transport: sdk, cli, or app-server")
+  .option("--model <id>", "model for the reviewer")
+  .option("--effort <level>", "effort for the reviewer")
+  .option("--provider <name>", "provider hint for the reviewer")
+  .option("--enabled", "mark the reviewer enabled (clear a disabled placeholder)")
+  .option("--disabled", "mark the reviewer disabled (enabled: false)")
+  .option("--cwd <path>", "working directory", process.cwd())
+  .option("--json", "output machine-readable JSON")
+  .action(async (id: string, options: ReviewerEditCliOptions) => {
+    const patch = buildReviewerEditPatch(options);
+
+    // Write target is the env-located user config by design; --cwd only scopes the shadow check.
+    const result = await editReviewerInUserConfig({ id, patch, env: process.env });
+
+    await warnIfProjectConfigShadows(options.cwd, result.path);
+
+    if (options.json === true) {
+      process.stdout.write(
+        `${JSON.stringify({ path: result.path, reviewer: result.reviewer }, null, 2)}\n`,
+      );
+      return;
+    }
+    process.stdout.write(`Updated reviewer ${id} in ${result.path}\n`);
+  });
+
+const reviewerSet = reviewers
+  .command("set")
+  .description("Manage reviewer set membership in the user config.");
+
+reviewerSet
+  .command("add <set> <reviewer>")
+  .description("Add a configured reviewer id to a reviewer set.")
+  .option("--cwd <path>", "working directory", process.cwd())
+  .option("--json", "output machine-readable JSON")
+  .action(async (setName: string, reviewerId: string, options: { cwd: string; json?: boolean }) => {
+    const result = await addReviewerToSetInUserConfig({
+      setName,
+      reviewerId,
+      env: process.env,
+    });
+
+    await warnIfProjectConfigShadows(options.cwd, result.path);
+
+    if (options.json === true) {
+      process.stdout.write(
+        `${JSON.stringify({ path: result.path, set: result.set, members: result.members }, null, 2)}\n`,
+      );
+      return;
+    }
+    process.stdout.write(`Added ${reviewerId} to reviewer set ${setName} in ${result.path}\n`);
+  });
+
+reviewerSet
+  .command("remove <set> <reviewer>")
+  .description("Remove a reviewer id from a reviewer set.")
+  .option("--force", "remove even if it empties the default reviewer set")
+  .option("--cwd <path>", "working directory", process.cwd())
+  .option("--json", "output machine-readable JSON")
+  .action(
+    async (
+      setName: string,
+      reviewerId: string,
+      options: { force?: boolean; cwd: string; json?: boolean },
+    ) => {
+      const result = await removeReviewerFromSetInUserConfig({
+        setName,
+        reviewerId,
+        env: process.env,
+        ...(options.force === true ? { force: true } : {}),
+      });
+
+      await warnIfProjectConfigShadows(options.cwd, result.path);
+
+      if (options.json === true) {
+        process.stdout.write(
+          `${JSON.stringify({ path: result.path, set: result.set, members: result.members }, null, 2)}\n`,
+        );
+        return;
+      }
+      process.stdout.write(
+        `Removed ${reviewerId} from reviewer set ${setName} in ${result.path}\n`,
+      );
+    },
+  );
+
 const macos = program.command("macos").description("Inspect macOS executable trust state.");
 
 macos
@@ -839,6 +967,46 @@ type ReviewerAddCliOptions = {
   cwd: string;
   json?: boolean;
 };
+
+type ReviewerEditCliOptions = {
+  transport?: string;
+  model?: string;
+  effort?: string;
+  provider?: string;
+  enabled?: boolean;
+  disabled?: boolean;
+  cwd: string;
+  json?: boolean;
+};
+
+function buildReviewerEditPatch(options: ReviewerEditCliOptions): EditReviewerPatch {
+  if (options.enabled === true && options.disabled === true) {
+    throw invalidCli("Pass only one of --enabled or --disabled");
+  }
+  const { transport } = options;
+  if (
+    transport !== undefined &&
+    transport !== "sdk" &&
+    transport !== "cli" &&
+    transport !== "app-server"
+  ) {
+    throw invalidCli(`Invalid transport: ${transport}`);
+  }
+  const patch: EditReviewerPatch = {
+    ...(transport !== undefined ? { transport } : {}),
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
+    ...(options.model !== undefined ? { model: options.model } : {}),
+    ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    ...(options.enabled === true ? { enabled: true } : {}),
+    ...(options.disabled === true ? { enabled: false } : {}),
+  };
+  if (Object.keys(patch).length === 0) {
+    throw invalidCli(
+      "Specify at least one field to edit: --transport, --model, --effort, --provider, --enabled, or --disabled",
+    );
+  }
+  return patch;
+}
 
 function buildRequiredAddEntry(
   engineArg: string | undefined,

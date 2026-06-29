@@ -110,8 +110,9 @@ diffwarden reviewers list
 diffwarden reviewers list --json
 ```
 
-Probe the host for usable reviewer engines, then add one to the user config. Discovery never
-runs a review or spends model budget; `--deep` additionally runs adapter preflight:
+Probe the host for usable reviewer engines, then add, edit, or remove reviewers in the user
+config. Discovery never runs a review or spends model budget; `--deep` additionally runs adapter
+preflight:
 
 ```bash
 diffwarden reviewers discover
@@ -119,7 +120,15 @@ diffwarden reviewers discover --deep
 diffwarden reviewers discover --json
 diffwarden reviewers add codex
 diffwarden reviewers add claude --transport cli --set 1
+diffwarden reviewers edit codex --model gpt-5.1-codex
+diffwarden reviewers set add 1 codex
+diffwarden reviewers set remove 1 codex
+diffwarden reviewers remove codex
 ```
+
+`add`, `edit`, `remove`, and `set` all write only the env-located user config (never the project
+config), atomically. Removing a reviewer also prunes it from every reviewer set; `remove` and
+`set remove` refuse to leave `defaultReviewerSet` empty unless you pass `--force`.
 
 Supported v1 targets:
 

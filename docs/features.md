@@ -149,4 +149,4 @@ current host without running a review or spending model budget. The same capabil
 that backs this matrix owns the discovery probe targets and auth signals. See
 [`adapters.md`](./adapters.md#reviewer-discovery) for per-engine probe behavior and
 [`configuration.md`](./configuration.md#discovery--setup) for the discover/list/doctor split
-and the `reviewers add` / `init --discover` setup flow.
+and the `reviewers add` / `edit` / `remove` / `set` / `init --discover` setup flow.

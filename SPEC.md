@@ -127,6 +127,10 @@ diffwarden doctor [--reviewer <spec>|--reviewer-set <name>] [--model <id>] [--ef
 diffwarden reviewers list [--cwd <path>] [--json]
 diffwarden reviewers discover [--deep] [--cwd <path>] [--json]
 diffwarden reviewers add [engine] [--id <id>] [--transport <transport>] [--model <id>] [--effort <level>] [--provider <name>] [--set <name>] [--disabled] [--interactive] [--cwd <path>] [--json]
+diffwarden reviewers edit <id> [--transport <transport>] [--model <id>] [--effort <level>] [--provider <name>] [--enabled] [--disabled] [--cwd <path>] [--json]
+diffwarden reviewers remove <id> [--force] [--cwd <path>] [--json]
+diffwarden reviewers set add <set> <reviewer> [--cwd <path>] [--json]
+diffwarden reviewers set remove <set> <reviewer> [--force] [--cwd <path>] [--json]
 diffwarden init [--discover] [--interactive] [--cwd <path>] [--json]
 ```
 
@@ -206,17 +210,23 @@ APIs. Each candidate is classified as one of `available`, `missing_executable`, 
 reports the environment-variable names and credential-file paths it probed but never secret
 values. `available` candidates include a recommended minimal config entry.
 
-`diffwarden reviewers add [engine]` and `diffwarden init --discover` are the only commands
+`diffwarden reviewers add`/`edit`/`remove`/`set` and `diffwarden init` are the only commands
 that write reviewer config, and they always write the user config path
 (`$XDG_CONFIG_HOME/diffwarden/diffwarden.config.json` or
 `~/.config/diffwarden/diffwarden.config.json`), never a project config. `reviewers add`
 merges a reviewer by `id` in place, preserves all other config keys, writes atomically with a
 compare-and-swap guard, and only appends an id to a named reviewer set when `--set` is given.
-Neither command changes `defaultReviewerSet` for an existing config. `init --discover`
-scaffolds a fresh config from discovered ready-to-use reviewers with a `defaultReviewerSet`
-and `readonly: true`, and refuses to overwrite an existing config. `--interactive` (on
-`reviewers add` and `init --discover`) selects and confirms before writing and requires a TTY;
-it exits `2` when stdin is not interactive.
+`reviewers edit <id>` patches only the named fields (preserving every untouched key) and rejects
+overrides the resolved transport cannot honor before writing. `reviewers remove <id>` deletes the
+reviewer and prunes its id from every reviewer set. `reviewers set add/remove <set> <reviewer>`
+manages set membership; `set add` requires the id to be a configured reviewer. `remove` and
+`set remove` refuse to leave the set named by `defaultReviewerSet` empty unless `--force` is
+given, and editing/removing an unknown id exits non-zero and writes nothing. None of these
+commands changes `defaultReviewerSet` for an existing config. `init --discover` scaffolds a fresh
+config from discovered ready-to-use reviewers with a `defaultReviewerSet` and `readonly: true`,
+and refuses to overwrite an existing config. `--interactive` (on `reviewers add` and
+`init --discover`) selects and confirms before writing and requires a TTY; it exits `2` when
+stdin is not interactive.
 
 Reviewer specs should stay compact and SDK-agnostic at the public boundary:
 
@@ -1250,9 +1260,9 @@ discover` performs only token-free probes (executable/package presence, environm
 presence, credential-file readability) and prints probed names and paths but never secret
 values; shallow discovery makes no network calls and spends no model budget, and `--deep`
 reuses the same adapter preflight as `doctor`. The only commands that modify files are the
-explicit setup commands `diffwarden reviewers add` and `diffwarden init`, which write the user
-config (never a project config or repository file) atomically and never publish anywhere
-external. Review execution itself still modifies nothing outside the documented Pi shared-auth
+explicit setup commands `diffwarden reviewers add`/`edit`/`remove`/`set` and `diffwarden init`,
+which write the user config (never a project config or repository file) atomically and never
+publish anywhere external. Review execution itself still modifies nothing outside the documented Pi shared-auth
 `auth.json` refresh case.
 
 If a reviewer adapter requires shell access, restrict the prompt and adapter policy to read/grep/find/git inspection. Write-capable tools are permanently out of scope for this CLI.

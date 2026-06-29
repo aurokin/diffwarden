@@ -1027,6 +1027,63 @@ describe("diffwarden discovery & setup e2e", () => {
   });
 });
 
+describe("diffwarden reviewer mutation e2e", () => {
+  it("round-trips edit, set membership, and remove through the CLI", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const env = { XDG_CONFIG_HOME: configHome };
+    const configPath = userConfigFile(configHome);
+
+    await runDiffwarden(process.cwd(), ["reviewers", "add", "codex", "--json"], env);
+    await runDiffwarden(process.cwd(), ["reviewers", "add", "grok", "--json"], env);
+
+    const edited = await runDiffwarden(
+      process.cwd(),
+      ["reviewers", "edit", "codex", "--model", "gpt-5.5", "--json"],
+      env,
+    );
+    expect(JSON.parse(edited.stdout).reviewer).toMatchObject({ id: "codex", model: "gpt-5.5" });
+
+    await runDiffwarden(process.cwd(), ["reviewers", "set", "add", "1", "codex", "--json"], env);
+    const setAdd = await runDiffwarden(
+      process.cwd(),
+      ["reviewers", "set", "add", "1", "grok", "--json"],
+      env,
+    );
+    expect(JSON.parse(setAdd.stdout)).toMatchObject({ set: "1", members: ["codex", "grok"] });
+
+    const removed = await runDiffwarden(
+      process.cwd(),
+      ["reviewers", "remove", "grok", "--json"],
+      env,
+    );
+    expect(JSON.parse(removed.stdout)).toMatchObject({ removed: "grok", prunedFromSets: ["1"] });
+
+    const raw = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(raw.reviewers.map((r: { id: string }) => r.id)).toEqual(["codex"]);
+    expect(raw.reviewerSets["1"]).toEqual(["codex"]);
+  });
+
+  it("rejects remove/edit of an unknown reviewer and an empty edit", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const env = { XDG_CONFIG_HOME: configHome };
+    await runDiffwarden(process.cwd(), ["reviewers", "add", "codex", "--json"], env);
+
+    await expect(
+      runDiffwarden(process.cwd(), ["reviewers", "remove", "ghost"], env),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining('No reviewer with id "ghost"'),
+    });
+
+    await expect(
+      runDiffwarden(process.cwd(), ["reviewers", "edit", "codex"], env),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("Specify at least one field to edit"),
+    });
+  });
+});
+
 async function runDiffwarden(
   cwd: string,
   args: string[],

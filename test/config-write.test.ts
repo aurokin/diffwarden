@@ -3,9 +3,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  addReviewerToSetInUserConfig,
   addReviewerToUserConfig,
   createDiscoveredUserConfig,
+  editReviewerInUserConfig,
   loadDiffwardenConfig,
+  removeReviewerFromSetInUserConfig,
+  removeReviewerFromUserConfig,
   userConfigPath,
 } from "../src/core/config.js";
 
@@ -249,5 +253,227 @@ describe("createDiscoveredUserConfig", () => {
   it("rejects an empty reviewer list", async () => {
     const { env } = setup();
     await expect(createDiscoveredUserConfig({ reviewers: [], env })).rejects.toThrow();
+  });
+});
+
+describe("removeReviewerFromUserConfig", () => {
+  it("removes the entry and prunes it from every reviewer set", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      defaultReviewerSet: "main",
+      reviewerSets: { main: ["codex", "claude"], extra: ["claude"] },
+      reviewers: [
+        { id: "codex", engine: "codex" },
+        { id: "claude", engine: "claude" },
+      ],
+    });
+
+    const result = await removeReviewerFromUserConfig({ id: "claude", env });
+
+    expect(result.prunedFromSets.sort()).toEqual(["extra", "main"]);
+    const raw = readRaw(configPath);
+    expect((raw.reviewers as Record<string, unknown>[]).map((r) => r.id)).toEqual(["codex"]);
+    expect(raw.reviewerSets).toEqual({ main: ["codex"], extra: [] });
+  });
+
+  it("errors and writes nothing when the id is absent", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "codex", engine: "codex" }] });
+    const before = readFileSync(configPath, "utf8");
+
+    await expect(removeReviewerFromUserConfig({ id: "ghost", env })).rejects.toThrow(
+      /No reviewer with id "ghost"/,
+    );
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  it("refuses to empty the default reviewer set without --force", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      defaultReviewerSet: "main",
+      reviewerSets: { main: ["codex"] },
+      reviewers: [{ id: "codex", engine: "codex" }],
+    });
+    const before = readFileSync(configPath, "utf8");
+
+    await expect(removeReviewerFromUserConfig({ id: "codex", env })).rejects.toThrow(
+      /default reviewer set "main" empty/,
+    );
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  it("removes anyway with --force, leaving the default set empty", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      defaultReviewerSet: "main",
+      reviewerSets: { main: ["codex"] },
+      reviewers: [{ id: "codex", engine: "codex" }],
+    });
+
+    await removeReviewerFromUserConfig({ id: "codex", force: true, env });
+
+    const raw = readRaw(configPath);
+    expect(raw.reviewers).toEqual([]);
+    expect(raw.reviewerSets).toEqual({ main: [] });
+    expect(raw.defaultReviewerSet).toBe("main");
+  });
+});
+
+describe("editReviewerInUserConfig", () => {
+  it("patches only the named field and preserves the rest", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      reviewers: [
+        {
+          id: "pi",
+          engine: "pi",
+          model: "anthropic/claude-sonnet",
+          effort: "high",
+          sdkOptions: { authSource: "shared" },
+        },
+      ],
+    });
+
+    const result = await editReviewerInUserConfig({ id: "pi", patch: { model: "gpt-5.5" }, env });
+
+    expect(result.reviewer).toMatchObject({ id: "pi", model: "gpt-5.5", effort: "high" });
+    const reviewers = readRaw(configPath).reviewers as Record<string, unknown>[];
+    expect(reviewers[0]).toEqual({
+      id: "pi",
+      engine: "pi",
+      model: "gpt-5.5",
+      effort: "high",
+      sdkOptions: { authSource: "shared" },
+    });
+  });
+
+  it("toggles enabled: --disabled sets the flag, --enabled clears it", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "codex", engine: "codex" }] });
+
+    await editReviewerInUserConfig({ id: "codex", patch: { enabled: false }, env });
+    expect((readRaw(configPath).reviewers as Record<string, unknown>[])[0]).toMatchObject({
+      enabled: false,
+    });
+
+    await editReviewerInUserConfig({ id: "codex", patch: { enabled: true }, env });
+    expect((readRaw(configPath).reviewers as Record<string, unknown>[])[0]).not.toHaveProperty(
+      "enabled",
+    );
+  });
+
+  it("rejects an override the resulting transport cannot honor and writes nothing", async () => {
+    const { env, configPath } = setup();
+    // antigravity CLI supports neither model nor effort overrides. Transport is omitted here, so
+    // the check must resolve the engine default (cli) rather than assuming sdk.
+    writeExisting(configPath, {
+      reviewers: [{ id: "agy", engine: "antigravity" }],
+    });
+    const before = readFileSync(configPath, "utf8");
+
+    await expect(
+      editReviewerInUserConfig({ id: "agy", patch: { model: "x" }, env }),
+    ).rejects.toThrow(/does not support/);
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  it("errors when the id is absent", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "codex", engine: "codex" }] });
+
+    await expect(
+      editReviewerInUserConfig({ id: "ghost", patch: { model: "x" }, env }),
+    ).rejects.toThrow(/No reviewer with id "ghost"/);
+  });
+
+  it("rejects editing a reviewer with an unknown engine cleanly, writing nothing", async () => {
+    const { env, configPath } = setup();
+    // A hand-edited/legacy config can carry an engine the registry does not know; editing it must
+    // fail with a clean config error rather than crashing on a capability lookup.
+    writeExisting(configPath, { reviewers: [{ id: "legacy", engine: "bogus", model: "x" }] });
+    const before = readFileSync(configPath, "utf8");
+
+    await expect(
+      editReviewerInUserConfig({ id: "legacy", patch: { model: "y" }, env }),
+    ).rejects.toThrow(/unknown engine/);
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+});
+
+describe("reviewer set membership", () => {
+  it("adds a configured reviewer id to a set, creating the set", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "codex", engine: "codex" }] });
+
+    const result = await addReviewerToSetInUserConfig({
+      setName: "fast",
+      reviewerId: "codex",
+      env,
+    });
+
+    expect(result.members).toEqual(["codex"]);
+    expect((readRaw(configPath).reviewerSets as Record<string, string[]>).fast).toEqual(["codex"]);
+  });
+
+  it("refuses to add an unconfigured reviewer id to a set", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "codex", engine: "codex" }] });
+
+    await expect(
+      addReviewerToSetInUserConfig({ setName: "fast", reviewerId: "ghost", env }),
+    ).rejects.toThrow(/No reviewer with id "ghost"/);
+  });
+
+  it("removes a reviewer id from a set", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      reviewerSets: { fast: ["codex", "claude"] },
+      reviewers: [
+        { id: "codex", engine: "codex" },
+        { id: "claude", engine: "claude" },
+      ],
+    });
+
+    const result = await removeReviewerFromSetInUserConfig({
+      setName: "fast",
+      reviewerId: "claude",
+      env,
+    });
+
+    expect(result.members).toEqual(["codex"]);
+    expect((readRaw(configPath).reviewerSets as Record<string, string[]>).fast).toEqual(["codex"]);
+  });
+
+  it("errors when the set does not contain the id", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      reviewerSets: { fast: ["codex"] },
+      reviewers: [{ id: "codex", engine: "codex" }],
+    });
+
+    await expect(
+      removeReviewerFromSetInUserConfig({ setName: "fast", reviewerId: "ghost", env }),
+    ).rejects.toThrow(/does not contain/);
+  });
+
+  it("refuses to empty the default set without --force, then succeeds with it", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      defaultReviewerSet: "fast",
+      reviewerSets: { fast: ["codex"] },
+      reviewers: [{ id: "codex", engine: "codex" }],
+    });
+
+    await expect(
+      removeReviewerFromSetInUserConfig({ setName: "fast", reviewerId: "codex", env }),
+    ).rejects.toThrow(/default reviewer set "fast" empty/);
+
+    await removeReviewerFromSetInUserConfig({
+      setName: "fast",
+      reviewerId: "codex",
+      force: true,
+      env,
+    });
+    expect((readRaw(configPath).reviewerSets as Record<string, string[]>).fast).toEqual([]);
   });
 });
