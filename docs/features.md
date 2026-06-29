@@ -141,3 +141,12 @@ audits; use `--focus` for scoped reviews of a specific diff.
 when the final aggregated findings include a prioritized finding at or above the threshold.
 For example, `--fail-on-findings P2` fails for P0, P1, and P2 findings but not P3 findings.
 Findings without a `priority` do not trigger the gate.
+
+## Discovery
+
+`diffwarden reviewers discover` probes which of the reviewer paths above are usable on the
+current host without running a review or spending model budget. The same capability registry
+that backs this matrix owns the discovery probe targets and auth signals. See
+[`adapters.md`](./adapters.md#reviewer-discovery) for per-engine probe behavior and
+[`configuration.md`](./configuration.md#discovery--setup) for the discover/list/doctor split
+and the `reviewers add` / `init --discover` setup flow.

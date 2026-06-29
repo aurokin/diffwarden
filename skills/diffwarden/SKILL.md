@@ -45,7 +45,10 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
      different set. Passing no reviewer flags uses `defaultReviewerSet` when config defines
      it; use `--reviewer-set <name|count>` when you need an explicit set.
    - If neither is available, explain that Diffwarden needs an explicit reviewer, a reviewer
-     set, or a config-defined `defaultReviewerSet`.
+     set, or a config-defined `defaultReviewerSet`. You may run `diffwarden reviewers discover`
+     to show which engines this host could run; it is read-only and spends no model budget. Do
+     not write config (`diffwarden reviewers add`, `diffwarden init`) or change reviewer setup
+     unless the user explicitly asks you to.
 
 3. Run `diffwarden review` from the repository being reviewed. If running from another
    directory, pass `--cwd <repo>`.
@@ -89,6 +92,7 @@ diffwarden review --target 'custom:Review auth flow and permission checks' --rev
 diffwarden review --target base:main --reviewer-set <name> --fail-on-findings P2 --agent
 diffwarden reviewers list
 diffwarden reviewers list --json
+diffwarden reviewers discover
 diffwarden init
 ```
 
@@ -118,9 +122,20 @@ diffwarden review --target uncommitted --reviewer fake --agent
   comment near the relevant code explaining the invariant or tradeoff. That helps future
   review runs avoid fixating on the same apparent issue. 
 - If there are no findings, say that directly and mention any warnings or residual test gaps.
+- `reviewers discover` reports host readiness, not a review. It groups reviewers as Ready to use /
+  Needs attention / Not installed, ordered verified-first then alphabetically. JSON uses
+  `schema_version: 1` with `candidates` (each carrying `status` and `authState`) plus a `summary`.
+  `status` is one of `available`, `missing_executable`, `missing_auth`, `requires_env`,
+  `unsupported_host`, or `preflight_failed`. `authState` is `verified` (a token-free signal — an
+  env var or credential file — confirmed auth), `unverified` (installed but auth is delegated to
+  the engine's own login and was not checked), `missing`, or `not_required`. It is shallow by
+  default (no network or login); `--deep` additionally runs adapter preflight.
 
 ## Boundaries
 
 - Diffwarden does not publish review comments to external services.
+- Reviewing and `reviewers discover` are read-only and spend no model budget. Only
+  `reviewers add` and `init` write config, and only to the user config file. Do not run them
+  unless the user explicitly asks you to change reviewer setup.
 - Droid users should prefer configured `droid-cli` reviewers for routine reviews when Factory
   UI session history matters.

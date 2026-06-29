@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { getTransportCapability } from "../adapters/capabilities.js";
+import { type ReviewerSdk, getTransportCapability } from "../adapters/capabilities.js";
 import { invalidConfig } from "./errors.js";
 import { reviewerSdkSchema } from "./schema.js";
 
@@ -187,17 +187,248 @@ export async function initDiffwardenConfig(
   options: InitDiffwardenConfigOptions = {},
 ): Promise<string> {
   const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
+  await createConfigFileExclusive(configPath, starterConfigJson());
+  return configPath;
+}
 
+/** A reviewer entry in its public, on-disk shape (uses `engine`, not the internal `sdk`). */
+export type PublicReviewerEntry = {
+  id: string;
+  engine: ReviewerSdk;
+  transport?: "sdk" | "cli" | "app-server";
+  profile?: string;
+  provider?: string;
+  enabled?: boolean;
+  model?: string;
+  effort?: string;
+};
+
+export type AddReviewerToUserConfigOptions = {
+  entry: PublicReviewerEntry;
+  reviewerSet?: string;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  /** Optimistic-concurrency token: abort if the file changed since this hash was read. */
+  expectedSha256?: string;
+};
+
+export type AddReviewerToUserConfigResult = {
+  path: string;
+  created: boolean;
+  action: "added" | "updated";
+  sha256: string;
+};
+
+/**
+ * Merge a reviewer entry into the user config, creating the file if absent. The entry is
+ * merged by `id` into the raw JSON (preserving `engine` and every untouched key), validated
+ * against the schema before persisting, then written atomically. `defaultReviewerSet` is
+ * never changed; an explicit `reviewerSet` only appends the id to that set.
+ */
+export async function addReviewerToUserConfig(
+  options: AddReviewerToUserConfigOptions,
+): Promise<AddReviewerToUserConfigResult> {
+  const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
+  const existingRaw = await readFileIfExists(configPath);
+
+  if (
+    existingRaw !== undefined &&
+    options.expectedSha256 !== undefined &&
+    sha256(existingRaw) !== options.expectedSha256
+  ) {
+    throw invalidConfig(`Config changed on disk since it was read: ${configPath}`);
+  }
+
+  const rawConfig = existingRaw === undefined ? {} : parseRawConfigObject(existingRaw, configPath);
+  const created = existingRaw === undefined;
+
+  const reviewers = Array.isArray(rawConfig.reviewers) ? [...rawConfig.reviewers] : [];
+  const action = mergeReviewerById(reviewers, options.entry, configPath);
+  rawConfig.reviewers = reviewers;
+
+  if (options.reviewerSet !== undefined) {
+    appendToReviewerSet(rawConfig, options.reviewerSet, options.entry.id);
+  }
+
+  assertWritableConfig(rawConfig, configPath);
+
+  const serialized = `${JSON.stringify(rawConfig, null, 2)}\n`;
+  // Compare-and-swap on every write, not only when a caller passes a token: abort if another
+  // process changed the file between our read and our write so concurrent setups cannot clobber.
+  await atomicWrite(
+    configPath,
+    serialized,
+    existingRaw === undefined ? { expectAbsent: true } : { expectedSha256: sha256(existingRaw) },
+  );
+
+  return { path: configPath, created, action, sha256: sha256(serialized) };
+}
+
+export type CreateDiscoveredUserConfigOptions = {
+  reviewers: PublicReviewerEntry[];
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+};
+
+/**
+ * Scaffold a fresh user config from discovered reviewers: one reviewer set listing them all,
+ * `defaultReviewerSet` pointing at it, and read-only enabled. Create-only (never clobbers).
+ */
+export async function createDiscoveredUserConfig(
+  options: CreateDiscoveredUserConfigOptions,
+): Promise<string> {
+  if (options.reviewers.length === 0) {
+    throw invalidConfig("No reviewers to write");
+  }
+  const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
+  const rawConfig: Record<string, unknown> = {
+    defaultReviewerSet: "1",
+    reviewerSets: { "1": options.reviewers.map((reviewer) => reviewer.id) },
+    reviewers: options.reviewers.map(buildReviewerEntryObject),
+    readonly: true,
+  };
+  assertWritableConfig(rawConfig, configPath);
+  await createConfigFileExclusive(configPath, `${JSON.stringify(rawConfig, null, 2)}\n`);
+  return configPath;
+}
+
+async function createConfigFileExclusive(configPath: string, content: string): Promise<void> {
   await mkdir(path.dirname(configPath), { recursive: true });
   try {
-    await writeFile(configPath, starterConfigJson(), { flag: "wx" });
+    await writeFile(configPath, content, { flag: "wx" });
   } catch (error) {
     if (isNodeErrorWithCode(error, "EEXIST")) {
       throw invalidConfig(`Config already exists: ${configPath}`);
     }
     throw invalidConfig(`Unable to create config at ${configPath}: ${errorMessage(error)}`);
   }
-  return configPath;
+}
+
+type AtomicWriteGuard = { expectedSha256?: string; expectAbsent?: boolean };
+
+async function atomicWrite(
+  configPath: string,
+  content: string,
+  guard: AtomicWriteGuard = {},
+): Promise<void> {
+  await mkdir(path.dirname(configPath), { recursive: true });
+  const tempPath = `${configPath}.${process.pid}.tmp`;
+  await writeFile(tempPath, content, "utf8");
+  try {
+    // Re-check the target immediately before swapping so a concurrent write since our read is
+    // detected instead of silently overwritten.
+    const current = await readFileIfExists(configPath);
+    const changed =
+      guard.expectAbsent === true
+        ? current !== undefined
+        : guard.expectedSha256 !== undefined &&
+          (current === undefined || sha256(current) !== guard.expectedSha256);
+    if (changed) {
+      throw invalidConfig(`Config changed on disk since it was read: ${configPath}`);
+    }
+    await rename(tempPath, configPath);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
+}
+
+async function readFileIfExists(filePath: string): Promise<string | undefined> {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch (error) {
+    if (isNodeErrorWithCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw invalidConfig(`Unable to read config at ${filePath}: ${errorMessage(error)}`);
+  }
+}
+
+function parseRawConfigObject(raw: string, configPath: string): Record<string, unknown> {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch (error) {
+    throw invalidConfig(`Invalid JSON in config at ${configPath}: ${errorMessage(error)}`);
+  }
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    throw invalidConfig(`Config at ${configPath} must be a JSON object`);
+  }
+  return data as Record<string, unknown>;
+}
+
+function buildReviewerEntryObject(entry: PublicReviewerEntry): Record<string, unknown> {
+  return {
+    id: entry.id,
+    engine: entry.engine,
+    ...(entry.transport !== undefined ? { transport: entry.transport } : {}),
+    ...(entry.profile !== undefined ? { profile: entry.profile } : {}),
+    ...(entry.provider !== undefined ? { provider: entry.provider } : {}),
+    ...(entry.model !== undefined ? { model: entry.model } : {}),
+    ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+    // Omit `enabled` for active reviewers; only persist the disabled placeholder flag.
+    ...(entry.enabled === false ? { enabled: false } : {}),
+  };
+}
+
+function mergeReviewerById(
+  reviewers: unknown[],
+  entry: PublicReviewerEntry,
+  configPath: string,
+): "added" | "updated" {
+  if (entry.profile !== undefined) {
+    const collision = reviewers.find(
+      (reviewer) =>
+        isRecord(reviewer) &&
+        reviewer.id !== entry.id &&
+        reviewer.engine === entry.engine &&
+        reviewer.profile === entry.profile,
+    );
+    if (collision !== undefined) {
+      throw invalidConfig(
+        `Config at ${configPath} already has a ${entry.engine}:${entry.profile} reviewer profile`,
+      );
+    }
+  }
+
+  const entryObject = buildReviewerEntryObject(entry);
+  const index = reviewers.findIndex((reviewer) => isRecord(reviewer) && reviewer.id === entry.id);
+  if (index >= 0) {
+    // Merge over the existing entry so fields the add command does not express (sdkOptions,
+    // cliOptions, effort, enabled:false, etc.) survive an update by id.
+    const existing = reviewers[index];
+    reviewers[index] = isRecord(existing) ? { ...existing, ...entryObject } : entryObject;
+    return "updated";
+  }
+  reviewers.push(entryObject);
+  return "added";
+}
+
+function appendToReviewerSet(
+  rawConfig: Record<string, unknown>,
+  setName: string,
+  reviewerId: string,
+): void {
+  const sets = isRecord(rawConfig.reviewerSets) ? rawConfig.reviewerSets : {};
+  const existing = Array.isArray(sets[setName]) ? (sets[setName] as unknown[]) : [];
+  if (!existing.includes(reviewerId)) {
+    existing.push(reviewerId);
+  }
+  sets[setName] = existing;
+  rawConfig.reviewerSets = sets;
+}
+
+function assertWritableConfig(rawConfig: unknown, configPath: string): void {
+  const parsed = diffwardenConfigSchema.safeParse(rawConfig);
+  if (!parsed.success) {
+    throw invalidConfig(
+      `Refusing to write invalid config to ${configPath}: ${z.prettifyError(parsed.error)}`,
+    );
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function findDiffwardenConfigPath(options: LoadDiffwardenConfigOptions): string | undefined {
@@ -214,7 +445,7 @@ function findDiffwardenConfigPath(options: LoadDiffwardenConfigOptions): string 
   return undefined;
 }
 
-function userConfigPath(env: NodeJS.ProcessEnv, homeDir: string = homedir()): string {
+export function userConfigPath(env: NodeJS.ProcessEnv, homeDir: string = homedir()): string {
   return path.join(
     env.XDG_CONFIG_HOME?.trim()
       ? env.XDG_CONFIG_HOME

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   defaultReviewerModel,
   defaultReviewerTransport,
+  getReviewerAuthSignal,
   getTransportCapability,
   reviewerCapabilities,
+  reviewerSdkPackage,
   reviewerSdkValues,
 } from "../src/adapters/capabilities.js";
 import { resolveReviewerConfig } from "../src/core/reviewer.js";
@@ -129,5 +131,77 @@ describe("reviewerCapabilities", () => {
       captureMode: "text",
       readonlyCapability: "tool-restricted",
     });
+  });
+
+  it("owns the SDK package name for every sdk-transport engine", () => {
+    expect(reviewerSdkPackage("cursor")).toBe("@cursor/sdk");
+    expect(reviewerSdkPackage("claude")).toBe("@anthropic-ai/claude-agent-sdk");
+    expect(reviewerSdkPackage("pi")).toBe("@earendil-works/pi-coding-agent");
+    expect(reviewerSdkPackage("droid")).toBe("@factory/droid-sdk");
+    expect(reviewerSdkPackage("copilot")).toBe("@github/copilot-sdk");
+
+    // CLI-only engines expose no sdk transport, so no SDK package.
+    expect(reviewerSdkPackage("codex")).toBeUndefined();
+    expect(reviewerSdkPackage("gemini")).toBeUndefined();
+    expect(reviewerSdkPackage("opencode")).toBeUndefined();
+    expect(reviewerSdkPackage("grok")).toBeUndefined();
+    expect(reviewerSdkPackage("antigravity")).toBeUndefined();
+    expect(reviewerSdkPackage("fake")).toBeUndefined();
+  });
+
+  it("declares only sdk-transport packages on the sdk capability", () => {
+    for (const sdk of reviewerSdkValues) {
+      expect(getTransportCapability(sdk, "cli")?.sdkPackage).toBeUndefined();
+      expect(getTransportCapability(sdk, "app-server")?.sdkPackage).toBeUndefined();
+      expect(getTransportCapability(sdk, "sdk")?.sdkPackage).toBe(reviewerSdkPackage(sdk));
+    }
+  });
+
+  it("owns token-free auth signals for host-aware discovery", () => {
+    expect(getReviewerAuthSignal("cursor")).toEqual({
+      envVars: ["CURSOR_API_KEY"],
+      loginDelegated: true,
+      explicitAuthTransports: ["sdk"],
+    });
+    expect(getReviewerAuthSignal("claude")).toEqual({
+      envVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+      loginDelegated: true,
+    });
+    expect(getReviewerAuthSignal("droid")).toEqual({
+      envVars: ["FACTORY_API_KEY"],
+      envVarsOptional: true,
+      loginDelegated: true,
+    });
+    expect(getReviewerAuthSignal("codex")).toEqual({
+      credentialFile: { baseEnvVar: "CODEX_HOME", homeSubdir: ".codex", file: "auth.json" },
+    });
+    expect(getReviewerAuthSignal("antigravity")).toEqual({
+      credentialFile: { homeSubdir: ".gemini", file: "oauth_creds.json" },
+      loginDelegated: true,
+    });
+    expect(getReviewerAuthSignal("gemini")).toEqual({
+      credentialFile: { homeSubdir: ".gemini", file: "oauth_creds.json" },
+      loginDelegated: true,
+    });
+
+    expect(getReviewerAuthSignal("opencode")).toEqual({
+      credentialFile: { homeSubdir: ".local/share/opencode", file: "auth.json" },
+      loginDelegated: true,
+    });
+
+    // Login-delegated engines with no token-free positive signal.
+    expect(getReviewerAuthSignal("pi")).toEqual({ loginDelegated: true });
+    expect(getReviewerAuthSignal("grok")).toEqual({ loginDelegated: true });
+
+    // fake has no auth surface.
+    expect(getReviewerAuthSignal("fake")).toBeUndefined();
+  });
+
+  it("keeps every declared auth env var a non-empty uppercase token", () => {
+    for (const sdk of reviewerSdkValues) {
+      for (const envVar of getReviewerAuthSignal(sdk)?.envVars ?? []) {
+        expect(envVar).toMatch(/^[A-Z][A-Z0-9_]*$/);
+      }
+    }
   });
 });

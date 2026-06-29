@@ -1,6 +1,14 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -879,6 +887,146 @@ describe("diffwarden CLI e2e", () => {
   });
 });
 
+describe("diffwarden discovery & setup e2e", () => {
+  it("probes the host for reviewers in human text without spending budget", async () => {
+    const result = await runDiffwarden(process.cwd(), ["reviewers", "discover"]);
+
+    expect(result.stdout).toContain("Diffwarden reviewer discovery");
+    expect(result.stdout).toContain("Ready to use (");
+    expect(result.stdout).toContain("Needs attention (");
+    expect(result.stdout).toContain("Not installed (");
+    expect(result.stdout).toContain("Shallow probe only");
+    expect(result.stderr).toBe("");
+  });
+
+  it("emits structured discovery JSON with a partitioned, credential-free summary", async () => {
+    const result = await runDiffwarden(process.cwd(), ["reviewers", "discover", "--json"]);
+    const discovery = JSON.parse(result.stdout);
+
+    expect(discovery).toMatchObject({ schema_version: 1, deep: false });
+    expect(Array.isArray(discovery.candidates)).toBe(true);
+    expect(discovery.candidates.length).toBeGreaterThan(0);
+
+    for (const candidate of discovery.candidates) {
+      expect(candidate).toMatchObject({
+        engine: expect.any(String),
+        transport: expect.any(String),
+        status: expect.any(String),
+        authState: expect.any(String),
+        detail: expect.any(String),
+      });
+      // The isolated env carries no API keys and a fresh HOME, so nothing can verify auth.
+      expect(candidate.authState).not.toBe("verified");
+    }
+
+    // Every candidate falls into exactly one rendered group; the summary partitions them.
+    const summarized =
+      discovery.summary.available.length +
+      discovery.summary.needsAttention.length +
+      discovery.summary.missing.length;
+    expect(summarized).toBe(discovery.candidates.length);
+    expect(result.stderr).toBe("");
+  });
+
+  it("adds a reviewer to the user config and reports the env-located write target", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const configPath = userConfigFile(configHome);
+
+    const result = await runDiffwarden(process.cwd(), ["reviewers", "add", "codex", "--json"], {
+      XDG_CONFIG_HOME: configHome,
+    });
+
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      path: configPath,
+      created: true,
+      action: "added",
+      reviewer: { id: "codex", engine: "codex" },
+    });
+    const written = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(written.reviewers).toHaveLength(1);
+    expect(written.reviewers[0]).toEqual({ id: "codex", engine: "codex" });
+    expect(result.stderr).toBe("");
+  });
+
+  it("adds a reviewer to a reviewer set and merges in place on re-add", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const env = { XDG_CONFIG_HOME: configHome };
+    const configPath = userConfigFile(configHome);
+
+    const first = await runDiffwarden(
+      process.cwd(),
+      ["reviewers", "add", "codex", "--set", "1", "--json"],
+      env,
+    );
+    expect(JSON.parse(first.stdout)).toMatchObject({
+      created: true,
+      action: "added",
+      reviewerSet: "1",
+      reviewer: { id: "codex", engine: "codex" },
+    });
+    expect(JSON.parse(readFileSync(configPath, "utf8")).reviewerSets).toEqual({ "1": ["codex"] });
+
+    // Re-adding the same id updates in place rather than appending a duplicate.
+    const second = await runDiffwarden(process.cwd(), ["reviewers", "add", "codex", "--json"], env);
+    expect(JSON.parse(second.stdout)).toMatchObject({ created: false, action: "updated" });
+    expect(JSON.parse(readFileSync(configPath, "utf8")).reviewers).toHaveLength(1);
+  });
+
+  it("rejects an add with no engine and an unknown engine", async () => {
+    await expect(runDiffwarden(process.cwd(), ["reviewers", "add"])).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("Specify a reviewer engine to add"),
+    });
+
+    await expect(runDiffwarden(process.cwd(), ["reviewers", "add", "bogus"])).rejects.toMatchObject(
+      {
+        code: 2,
+        stderr: expect.stringContaining("Unknown reviewer engine: bogus"),
+      },
+    );
+  });
+
+  it("creates a starter user config with init and guards --interactive", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const configPath = userConfigFile(configHome);
+
+    const result = await runDiffwarden(process.cwd(), ["init", "--json"], {
+      XDG_CONFIG_HOME: configHome,
+    });
+    expect(JSON.parse(result.stdout)).toMatchObject({ path: configPath, created: true });
+    expect(existsSync(configPath)).toBe(true);
+
+    // --interactive only applies to the discovery scaffold; it must error on its own.
+    await expect(
+      runDiffwarden(process.cwd(), ["init", "--interactive"], {
+        XDG_CONFIG_HOME: mkdtemp("diffwarden-e2e-xdg-"),
+      }),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("--interactive requires --discover"),
+    });
+  });
+
+  it("scaffolds the user config from discovered reviewers with init --discover", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const configPath = userConfigFile(configHome);
+    // grok is login-delegated, so a resolvable executable alone makes it an available candidate.
+    const binDir = makeFakeExecutables(["grok"]);
+
+    const result = await runDiffwarden(process.cwd(), ["init", "--discover", "--json"], {
+      XDG_CONFIG_HOME: configHome,
+      PATH: binDir,
+    });
+
+    const output = JSON.parse(result.stdout);
+    expect(output).toMatchObject({ path: configPath, created: true });
+    expect(output.reviewers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ engine: "grok" })]),
+    );
+    expect(existsSync(configPath)).toBe(true);
+  });
+});
+
 async function runDiffwarden(
   cwd: string,
   args: string[],
@@ -978,6 +1126,20 @@ function writeDiffwardenConfig(repo: string): void {
 
 function expectedConfigPath(repo: string): string {
   return path.join(repo, "diffwarden.config.json");
+}
+
+function userConfigFile(configHome: string): string {
+  return path.join(configHome, "diffwarden", "diffwarden.config.json");
+}
+
+function makeFakeExecutables(names: string[]): string {
+  const binDir = mkdtemp("diffwarden-e2e-bin-");
+  for (const name of names) {
+    const file = path.join(binDir, name);
+    writeFileSync(file, "#!/bin/sh\nexit 0\n");
+    chmodSync(file, 0o755);
+  }
+  return binDir;
 }
 
 function isolatedEnv(): NodeJS.ProcessEnv {

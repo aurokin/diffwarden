@@ -528,7 +528,9 @@ function prioritySortValue(finding: RenderFinding): number {
   return finding.priority ?? 4;
 }
 
-function createStyle(options: HumanReviewRenderOptions) {
+export type HumanStyle = ReturnType<typeof createStyle>;
+
+export function createStyle(options: HumanReviewRenderOptions) {
   const enabled = options.color === true;
   return {
     accent: (value: string) => color(value, 36, enabled),

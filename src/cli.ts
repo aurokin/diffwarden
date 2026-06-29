@@ -2,12 +2,32 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
-import { defaultReviewerModel, defaultReviewerTransport } from "./adapters/capabilities.js";
 import {
+  type ReviewerSdk,
+  defaultReviewerModel,
+  defaultReviewerTransport,
+  getTransportCapability,
+  isReviewerSdk,
+  validateReviewerCapabilityOverrides,
+} from "./adapters/capabilities.js";
+import {
+  type DiffwardenConfig,
   type LoadedDiffwardenConfig,
+  type PublicReviewerEntry,
+  addReviewerToUserConfig,
+  createDiscoveredUserConfig,
   initDiffwardenConfig,
   loadDiffwardenConfig,
+  userConfigPath,
 } from "./core/config.js";
+import {
+  type ReviewerCandidateRecommendation,
+  type ReviewerDeepPreflightTarget,
+  type ReviewerDiscoveryCandidate,
+  discoverReviewers,
+  recommendReviewerEntry,
+  renderReviewerDiscoveryText,
+} from "./core/discovery.js";
 import {
   parseTimeoutSeconds,
   resolveReviewEnvOptionsWithSettings,
@@ -23,6 +43,15 @@ import {
   renderHumanReviewSummary,
   shouldUseHumanColor,
 } from "./core/human-render.js";
+import {
+  type Prompter,
+  confirmScaffold,
+  confirmWriteEntry,
+  createReadlinePrompter,
+  isInteractiveAvailable,
+  promptSelectReviewerEntry,
+  selectScaffoldReviewers,
+} from "./core/interactive.js";
 import { type MacosDoctorReport, runMacosDoctor } from "./core/macos.js";
 import { renderJson } from "./core/render.js";
 import {
@@ -219,10 +248,33 @@ reviewCommand
 program
   .command("init")
   .description("Create a starter user config file.")
-  .action(async () => {
-    const configPath = await initDiffwardenConfig();
-    process.stdout.write(`Created ${configPath}\n`);
-  });
+  .option("--discover", "scaffold the config from reviewers discovered on this host")
+  .option("--interactive", "confirm the discovered config before writing (requires --discover)")
+  .option("--cwd <path>", "working directory", process.cwd())
+  .option("--json", "output machine-readable JSON")
+  .action(
+    async (options: {
+      discover?: boolean;
+      interactive?: boolean;
+      cwd: string;
+      json?: boolean;
+    }) => {
+      if (options.discover === true) {
+        await runInitDiscover(options);
+        return;
+      }
+      if (options.interactive === true) {
+        throw invalidCli("--interactive requires --discover");
+      }
+
+      const configPath = await initDiffwardenConfig();
+      process.stdout.write(
+        options.json === true
+          ? `${JSON.stringify({ path: configPath, created: true }, null, 2)}\n`
+          : `Created ${configPath}\n`,
+      );
+    },
+  );
 
 program
   .command("doctor")
@@ -310,6 +362,100 @@ reviewers
       options.json === true
         ? `${JSON.stringify(summary, null, 2)}\n`
         : renderReviewerListText(summary),
+    );
+  });
+
+reviewers
+  .command("discover")
+  .description(
+    "Probe the host for usable reviewer engines without running reviews or spending model budget.",
+  )
+  .option("--cwd <path>", "working directory", process.cwd())
+  .option(
+    "--deep",
+    "additionally run adapter preflight checks (may spawn CLIs or call provider APIs)",
+  )
+  .option("--json", "output machine-readable JSON")
+  .action(async (options: { cwd: string; deep?: boolean; json?: boolean }) => {
+    const result = await discoverReviewers({
+      cwd: options.cwd,
+      env: process.env,
+      ...(options.deep === true
+        ? {
+            deep: true,
+            deepPreflight: (targets) =>
+              runReviewerPreflightReport({
+                cwd: options.cwd,
+                reviewers: targets.map(deepPreflightTargetId),
+                config: deepPreflightConfig(targets),
+              }),
+          }
+        : {}),
+    });
+
+    process.stdout.write(
+      options.json === true
+        ? `${JSON.stringify(result, null, 2)}\n`
+        : renderReviewerDiscoveryText(result, {
+            color: shouldUseHumanColor({ env: process.env, stream: process.stdout }),
+          }),
+    );
+  });
+
+reviewers
+  .command("add [engine]")
+  .description("Add a reviewer to the user config (~/.config/diffwarden/diffwarden.config.json).")
+  .option("--id <id>", "reviewer id (defaults to the engine name)")
+  .option("--transport <transport>", "transport: sdk, cli, or app-server")
+  .option("--model <id>", "model for the reviewer")
+  .option("--effort <level>", "effort for the reviewer")
+  .option("--provider <name>", "provider hint for the reviewer")
+  .option("--set <name>", "also add the reviewer id to this reviewer set")
+  .option("--disabled", "write the reviewer as a disabled placeholder (enabled: false)")
+  .option("--interactive", "select and confirm the reviewer before writing (requires a TTY)")
+  .option("--cwd <path>", "working directory", process.cwd())
+  .option("--json", "output machine-readable JSON")
+  .action(async (engineArg: string | undefined, options: ReviewerAddCliOptions) => {
+    const entry =
+      options.interactive === true
+        ? await resolveInteractiveAddEntry(engineArg, options)
+        : buildRequiredAddEntry(engineArg, options);
+    if (entry === undefined) {
+      return;
+    }
+
+    // By design the write target is the env-located user config (decision: always user, never
+    // project), so it is not derived from --cwd. --cwd only scopes the shadow-config check below.
+    const result = await addReviewerToUserConfig({
+      entry,
+      env: process.env,
+      ...(options.set !== undefined ? { reviewerSet: options.set } : {}),
+    });
+
+    await warnIfProjectConfigShadows(options.cwd, result.path);
+
+    if (options.json === true) {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            path: result.path,
+            created: result.created,
+            action: result.action,
+            reviewer: entry,
+            ...(options.set !== undefined ? { reviewerSet: options.set } : {}),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return;
+    }
+
+    const verb = result.action === "updated" ? "Updated" : "Added";
+    const setSuffix =
+      options.set !== undefined ? ` and added it to reviewer set ${options.set}` : "";
+    process.stdout.write(
+      `${verb} reviewer ${entry.id} (${entry.engine})${setSuffix} in ${result.path}\n`,
     );
   });
 
@@ -679,6 +825,240 @@ function renderMacosDoctorMarkdown(report: MacosDoctorReport): string {
   }
 
   return `${lines.join("\n")}\n`;
+}
+
+type ReviewerAddCliOptions = {
+  id?: string;
+  transport?: string;
+  model?: string;
+  effort?: string;
+  provider?: string;
+  set?: string;
+  disabled?: boolean;
+  interactive?: boolean;
+  cwd: string;
+  json?: boolean;
+};
+
+function buildRequiredAddEntry(
+  engineArg: string | undefined,
+  options: ReviewerAddCliOptions,
+): PublicReviewerEntry {
+  if (engineArg === undefined) {
+    throw invalidCli("Specify a reviewer engine to add, or use --interactive");
+  }
+  return buildReviewerAddEntry(engineArg, options);
+}
+
+function assertNoEntryShapingFlags(options: ReviewerAddCliOptions): void {
+  const used = [
+    options.id !== undefined ? "--id" : undefined,
+    options.transport !== undefined ? "--transport" : undefined,
+    options.model !== undefined ? "--model" : undefined,
+    options.effort !== undefined ? "--effort" : undefined,
+    options.provider !== undefined ? "--provider" : undefined,
+    options.disabled === true ? "--disabled" : undefined,
+  ].filter((flag): flag is string => flag !== undefined);
+  if (used.length > 0) {
+    throw invalidCli(
+      `${used.join(", ")} require naming an engine. Interactive selection without an engine uses the discovered recommendation; run "diffwarden reviewers add <engine> [flags]" to customize the entry.`,
+    );
+  }
+}
+
+async function resolveInteractiveAddEntry(
+  engineArg: string | undefined,
+  options: ReviewerAddCliOptions,
+): Promise<PublicReviewerEntry | undefined> {
+  if (engineArg === undefined) {
+    // The selection path uses the discovered recommendation; entry-shaping flags would be
+    // silently dropped, so reject them instead of writing something other than what was asked.
+    assertNoEntryShapingFlags(options);
+  }
+  if (!isInteractiveAvailable(process.stdin)) {
+    throw invalidCli("--interactive requires an interactive terminal (TTY)");
+  }
+
+  // Prompts go to stderr so --json keeps stdout clean for the machine-readable result.
+  const prompter = createReadlinePrompter({ output: process.stderr });
+  try {
+    const entry =
+      engineArg !== undefined
+        ? buildReviewerAddEntry(engineArg, options)
+        : await selectInteractiveAddEntry(prompter, options.cwd);
+    if (entry === undefined) {
+      process.stdout.write("No reviewers available to add.\n");
+      return undefined;
+    }
+
+    if (!(await confirmWriteEntry(prompter, entry, userConfigPath(process.env)))) {
+      process.stdout.write("Aborted.\n");
+      return undefined;
+    }
+    return entry;
+  } finally {
+    prompter.close();
+  }
+}
+
+async function selectInteractiveAddEntry(
+  prompter: Prompter,
+  cwd: string,
+): Promise<PublicReviewerEntry | undefined> {
+  const result = await discoverReviewers({ cwd, env: process.env });
+  return promptSelectReviewerEntry(prompter, result);
+}
+
+function buildReviewerAddEntry(
+  engineArg: string,
+  options: ReviewerAddCliOptions,
+): PublicReviewerEntry {
+  if (!isReviewerSdk(engineArg) || engineArg === "fake") {
+    throw invalidCli(`Unknown reviewer engine: ${engineArg}`);
+  }
+  const engine: ReviewerSdk = engineArg;
+  const transport = resolveAddTransport(engine, options.transport);
+  const base = recommendReviewerEntry(engine, transport);
+  const model = options.model ?? base.model;
+  // Reject overrides the resolved transport cannot honor before writing, so setup fails fast
+  // instead of producing a config that only errors at review/preflight time.
+  validateReviewerCapabilityOverrides({
+    id: options.id ?? base.id,
+    sdk: engine,
+    transport,
+    ...(model !== undefined ? { model } : {}),
+    ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    readonly: true,
+  });
+  return {
+    id: options.id ?? base.id,
+    engine,
+    ...(base.transport !== undefined ? { transport: base.transport } : {}),
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    ...(options.disabled === true ? { enabled: false } : {}),
+  };
+}
+
+function resolveAddTransport(engine: ReviewerSdk, requested: string | undefined) {
+  const transport = requested ?? defaultReviewerTransport(engine) ?? "sdk";
+  if (transport !== "sdk" && transport !== "cli" && transport !== "app-server") {
+    throw invalidCli(`Invalid transport: ${requested}`);
+  }
+  if (getTransportCapability(engine, transport)?.supported !== true) {
+    throw invalidCli(`${engine} does not support ${transport} transport`);
+  }
+  return transport;
+}
+
+function deepPreflightTargetId(target: ReviewerDeepPreflightTarget): string {
+  return `discover-${target.engine}-${target.transport}`;
+}
+
+/**
+ * Build an ephemeral config so `--deep` can preflight a specific (engine, transport) pair.
+ * Bare reviewer specs resolve to an engine's default transport; pinning transport here lets
+ * deep verify non-default transports (e.g. codex app-server) instead of only the default.
+ */
+function deepPreflightConfig(targets: ReviewerDeepPreflightTarget[]): DiffwardenConfig {
+  return {
+    reviewers: targets.map((target) => ({
+      id: deepPreflightTargetId(target),
+      // Discovery never enumerates the fake engine, so this narrowing is always sound.
+      sdk: target.engine as Exclude<ReviewerSdk, "fake">,
+      transport: target.transport,
+    })),
+  };
+}
+
+async function warnIfProjectConfigShadows(cwd: string, writtenPath: string): Promise<void> {
+  // Best-effort advisory only. A malformed project config in cwd must not fail the command or
+  // suppress JSON output after the user config write already succeeded.
+  let loaded: LoadedDiffwardenConfig | undefined;
+  try {
+    loaded = await loadDiffwardenConfig({ cwd });
+  } catch {
+    return;
+  }
+  if (loaded !== undefined && path.resolve(loaded.path) !== path.resolve(writtenPath)) {
+    process.stderr.write(
+      `Note: a project config at ${loaded.path} takes precedence over ${writtenPath}; reviews run from this directory will not use reviewers added to the user config.\n`,
+    );
+  }
+}
+
+async function runInitDiscover(options: {
+  cwd: string;
+  json?: boolean;
+  interactive?: boolean;
+}): Promise<void> {
+  const result = await discoverReviewers({ cwd: options.cwd, env: process.env });
+  const discovered = selectDiscoveredReviewers(result.candidates);
+  if (discovered.length === 0) {
+    throw invalidCli(
+      "No usable reviewers found on this host. Run diffwarden reviewers discover to see options, install or authenticate an engine, then retry, or run diffwarden init for a starter config.",
+    );
+  }
+
+  let reviewers = discovered;
+  if (options.interactive === true) {
+    if (!isInteractiveAvailable(process.stdin)) {
+      throw invalidCli("--interactive requires an interactive terminal (TTY)");
+    }
+    // Prompts go to stderr so --json keeps stdout clean for the machine-readable result.
+    const prompter = createReadlinePrompter({ output: process.stderr });
+    try {
+      reviewers = await selectScaffoldReviewers(prompter, discovered);
+      if (reviewers.length === 0) {
+        process.stdout.write("No reviewers selected. Aborted.\n");
+        return;
+      }
+      if (!(await confirmScaffold(prompter, reviewers, userConfigPath(process.env)))) {
+        process.stdout.write("Aborted.\n");
+        return;
+      }
+    } finally {
+      prompter.close();
+    }
+  }
+
+  // --cwd scopes discovery (the host probe above); the scaffold always writes the env-located
+  // user config by design (decision: always user, never project), not a cwd-relative file.
+  const configPath = await createDiscoveredUserConfig({ reviewers, env: process.env });
+  process.stdout.write(
+    options.json === true
+      ? `${JSON.stringify({ path: configPath, created: true, reviewers }, null, 2)}\n`
+      : `Created ${configPath} with ${reviewers.length} reviewer${
+          reviewers.length === 1 ? "" : "s"
+        }: ${reviewers.map((reviewer) => reviewer.id).join(", ")}\n`,
+  );
+}
+
+function selectDiscoveredReviewers(
+  candidates: ReviewerDiscoveryCandidate[],
+): PublicReviewerEntry[] {
+  const byEngine = new Map<ReviewerSdk, ReviewerCandidateRecommendation>();
+  for (const candidate of candidates) {
+    if (candidate.status !== "available" || candidate.recommended === undefined) {
+      continue;
+    }
+    const existing = byEngine.get(candidate.engine);
+    // Prefer the primary transport, whose recommendation omits the transport field.
+    if (
+      existing === undefined ||
+      (existing.transport !== undefined && candidate.recommended.transport === undefined)
+    ) {
+      byEngine.set(candidate.engine, candidate.recommended);
+    }
+  }
+
+  return [...byEngine.values()].map((recommendation) => ({
+    id: recommendation.id,
+    engine: recommendation.engine,
+    ...(recommendation.transport !== undefined ? { transport: recommendation.transport } : {}),
+    ...(recommendation.model !== undefined ? { model: recommendation.model } : {}),
+  }));
 }
 
 function summarizeReviewers(loadedConfig: LoadedDiffwardenConfig): ReviewerListSummary {
