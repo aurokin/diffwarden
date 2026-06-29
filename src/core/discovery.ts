@@ -172,6 +172,9 @@ export async function discoverReviewers(
     }
   }
 
+  // Sort after deep refinement so the order reflects the final auth state / status of each candidate.
+  candidates.sort(compareDiscoveryCandidates);
+
   return {
     schema_version: 1,
     cwd: options.cwd,
@@ -511,6 +514,45 @@ const needsAttentionStatuses = new Set<ReviewerCandidateStatus>([
   "preflight_failed",
   "unsupported_host",
 ]);
+
+// Stable display/JSON order. Status group is the primary key so the flat candidates array reads
+// top-to-bottom in the same order as the grouped human output (Ready / Needs attention / Not
+// installed); these ranks mirror the render's group filters exactly.
+const statusGroupOrder: Record<ReviewerCandidateStatus, number> = {
+  available: 0,
+  missing_auth: 1,
+  requires_env: 1,
+  preflight_failed: 1,
+  unsupported_host: 1,
+  missing_executable: 2,
+};
+
+// Verified reviewers (auth we confirmed) sort ahead of delegated/unverified ones within a group.
+const authStateOrder: Record<ReviewerCandidateAuthState, number> = {
+  verified: 0,
+  not_required: 1,
+  unverified: 2,
+  missing: 3,
+};
+
+const transportOrder: Record<ReviewerTransport, number> = {
+  sdk: 0,
+  cli: 1,
+  "app-server": 2,
+};
+
+/** Sort within each status group: verified first, then engine A→Z, then native → cli → app-server. */
+function compareDiscoveryCandidates(
+  a: ReviewerDiscoveryCandidate,
+  b: ReviewerDiscoveryCandidate,
+): number {
+  return (
+    statusGroupOrder[a.status] - statusGroupOrder[b.status] ||
+    authStateOrder[a.authState] - authStateOrder[b.authState] ||
+    a.engine.localeCompare(b.engine) ||
+    transportOrder[a.transport] - transportOrder[b.transport]
+  );
+}
 
 function summarize(candidates: ReviewerDiscoveryCandidate[]): ReviewerDiscoveryResult["summary"] {
   return {

@@ -319,6 +319,40 @@ describe("discoverReviewers (shallow)", () => {
       expect(c).not.toHaveProperty("providerOptions");
     }
   });
+
+  it("orders candidates verified-first, then engine A→Z, then transport", async () => {
+    const result = await discoverReviewers({
+      cwd: "/repo",
+      env: {},
+      homeDir: HOME,
+      // codex/gemini/opencode/antigravity have readable credential files (verified); grok is
+      // present but login-delegated with no positive signal (available, but unverified).
+      probes: fakeProbes({
+        execs: ["codex", "gemini", "opencode", "grok", "agy"],
+        files: [
+          `${HOME}/.codex/auth.json`,
+          `${HOME}/.gemini/oauth_creds.json`,
+          `${HOME}/.local/share/opencode/auth.json`,
+        ],
+      }),
+    });
+
+    const available = result.candidates
+      .filter((c) => c.status === "available")
+      .map((c) => `${c.engine}:${c.transport}`);
+
+    // Verified engines first (alphabetical, codex cli before app-server), then the unverified grok.
+    expect(available).toEqual([
+      "antigravity:cli",
+      "codex:cli",
+      "codex:app-server",
+      "gemini:cli",
+      "opencode:cli",
+      "grok:cli",
+    ]);
+    // The JSON summary derives from the same sorted candidates.
+    expect(result.summary.available).toEqual(available);
+  });
 });
 
 describe("discoverReviewers (deep)", () => {
