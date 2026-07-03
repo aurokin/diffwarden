@@ -121,14 +121,24 @@ never reference a missing reviewer. Both `remove` and `set remove` refuse to lea
 by `defaultReviewerSet` empty unless you pass `--force`; removing or editing an unknown id exits
 non-zero and writes nothing. `set add` requires the id to be a configured reviewer.
 
-Interactive setup is the default in a TTY. A bare `diffwarden reviewers add` opens the
-discovered-reviewer picker, a bare `diffwarden init` runs the discover/scaffold flow, and a
-bare `reviewers remove` or `reviewers edit <field>` lets you pick which configured reviewer to
-act on (`edit` still needs at least one field flag, which chooses *what* to change). Naming a
-target — an engine, an id — passing `--json`, or running outside a TTY (CI, piped) stays fully
-declarative and never prompts; a no-target setup command in a non-TTY exits with a usage error
-rather than hanging. `--interactive` forces the guided flow for `add` and `init` even when a
-target is named, and still requires a real TTY.
+Interactive setup is the default in a TTY. A bare `diffwarden reviewers add` opens an arrow-key
+multiselect of discovered reviewers that are not already configured, then steps each selection
+through a field editor for transport, model, effort, and the reviewer id. A bare `diffwarden init`
+runs the discover/scaffold flow. A bare `reviewers edit` (or `edit <id>` with no field flags) opens
+a field editor for an existing reviewer's transport, model, effort, and enabled state, and a bare
+`reviewers remove` lets you pick a reviewer and confirm (default No). In any menu, Esc or Ctrl-C steps back one level and cancels at the top, while
+a `✕ quit` choice exits immediately. In the field editor, submitting a blank model clears the model
+override back to the engine default and choosing `default` effort clears the effort override;
+changing transport clears a now-inert model/effort. Because the interactive edit replaces the
+editor-managed fields, clearing a field in the picker removes it from config, unlike the
+declarative `reviewers edit --field value` set-only patch. Prompts render to stderr, so stdout
+stays machine-clean. Naming a target — an engine, an id — passing a field flag to `edit`, passing
+`--json`, or running outside a TTY (CI, piped) stays fully declarative and never prompts; a
+no-target setup command in a non-TTY exits with a usage error rather than hanging. `--interactive`
+forces the guided flow — the discovered picker for a bare `add`, or the discover/scaffold flow for
+`init` — and still requires a real TTY. It applies only to the no-engine `add`: combining
+`--interactive` with a named engine is rejected with a usage error, since the two express opposite
+intent (naming an engine is the declarative path).
 
 ## Disabling Configured Reviewers
 

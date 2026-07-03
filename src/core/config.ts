@@ -270,6 +270,83 @@ export async function addReviewerToUserConfig(
   return { path: configPath, created, action, sha256: sha256(serialized) };
 }
 
+export type AddReviewersToUserConfigOptions = {
+  entries: PublicReviewerEntry[];
+  reviewerSet?: string;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  /** Optimistic-concurrency token: abort if the file changed since this hash was read. */
+  expectedSha256?: string;
+  /**
+   * Optimistic-concurrency assertion for the "no config existed yet" case: abort if a config is
+   * present at write time. Set this when the caller decided (e.g. seeded reserved ids in a picker)
+   * from an *absent* config, so a config created during a long prompt window trips the guard instead
+   * of silently merging stale entries into it. Mutually exclusive with expectedSha256.
+   */
+  expectAbsent?: boolean;
+};
+
+export type AddReviewersToUserConfigResult = {
+  path: string;
+  created: boolean;
+  actions: ("added" | "updated")[];
+  sha256: string;
+};
+
+/**
+ * Merge several reviewer entries into the user config in ONE atomic read–merge–write, so an
+ * interactive multi-select add persists every chosen reviewer or none — never a partial batch on a
+ * mid-loop error. Mirrors addReviewerToUserConfig's create-or-merge and compare-and-swap; the whole
+ * batch is merged and schema-validated before the single write. `actions` is per-entry, in order.
+ */
+export async function addReviewersToUserConfig(
+  options: AddReviewersToUserConfigOptions,
+): Promise<AddReviewersToUserConfigResult> {
+  const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
+  const existingRaw = await readFileIfExists(configPath);
+
+  // The caller seeded its reserved ids from an absent config; a config that appeared during the
+  // prompt window makes that reasoning stale, so refuse rather than merge into the new file.
+  if (options.expectAbsent === true && existingRaw !== undefined) {
+    throw invalidConfig(`Config changed on disk since it was read: ${configPath}`);
+  }
+  // A supplied token means the caller read a config with this hash, so it must still exist AND match.
+  // A deletion during the prompt window (existingRaw undefined) is a change too — without the
+  // existingRaw check it would fall through to a fresh create that drops the deleted file's other
+  // reviewers, reviewer sets, and top-level fields.
+  if (
+    options.expectedSha256 !== undefined &&
+    (existingRaw === undefined || sha256(existingRaw) !== options.expectedSha256)
+  ) {
+    throw invalidConfig(`Config changed on disk since it was read: ${configPath}`);
+  }
+
+  const rawConfig = existingRaw === undefined ? {} : parseRawConfigObject(existingRaw, configPath);
+  const created = existingRaw === undefined;
+
+  const reviewers = Array.isArray(rawConfig.reviewers) ? [...rawConfig.reviewers] : [];
+  const actions: ("added" | "updated")[] = [];
+  for (const entry of options.entries) {
+    actions.push(mergeReviewerById(reviewers, entry, configPath));
+    if (options.reviewerSet !== undefined) {
+      appendToReviewerSet(rawConfig, options.reviewerSet, entry.id);
+    }
+  }
+  rawConfig.reviewers = reviewers;
+
+  assertWritableConfig(rawConfig, configPath);
+
+  const serialized = `${JSON.stringify(rawConfig, null, 2)}\n`;
+  // Compare-and-swap on every write so a concurrent setup cannot clobber the batch.
+  await atomicWrite(
+    configPath,
+    serialized,
+    existingRaw === undefined ? { expectAbsent: true } : { expectedSha256: sha256(existingRaw) },
+  );
+
+  return { path: configPath, created, actions, sha256: sha256(serialized) };
+}
+
 export type CreateDiscoveredUserConfigOptions = {
   reviewers: PublicReviewerEntry[];
   env?: NodeJS.ProcessEnv;
@@ -470,43 +547,168 @@ export async function editReviewerInUserConfig(
       merged.enabled = undefined;
     }
 
-    // Guard the engine before any capability lookup: a hand-edited/legacy config could carry an
-    // unknown engine, and capability helpers index the registry by engine — an unknown key would
-    // throw an uncaught TypeError instead of a clean, write-nothing config error.
-    const engineValue = existing.engine;
-    if (typeof engineValue !== "string" || !isReviewerSdk(engineValue)) {
-      throw invalidConfig(
-        `Reviewer "${options.id}" in ${configPath} has an unknown engine and cannot be edited: ${String(engineValue)}`,
-      );
-    }
-
-    // Reject overrides the resulting transport cannot honor before writing, so the failure is at
-    // edit time rather than at the next review/preflight. Resolve the effective transport the way
-    // resolution does (an omitted transport falls back to the engine default) so model/effort are
-    // validated against the transport that will actually run, not a phantom "sdk".
-    const engine = engineValue;
-    const effectiveTransport =
-      (typeof merged.transport === "string"
-        ? (merged.transport as "sdk" | "cli" | "app-server")
-        : undefined) ??
-      defaultReviewerTransport(engine) ??
-      "sdk";
-    validateReviewerCapabilityOverrides({
-      id: String(merged.id),
-      sdk: engine,
-      transport: effectiveTransport,
-      ...(typeof merged.model === "string" ? { model: merged.model } : {}),
-      ...(typeof merged.effort === "string"
-        ? { effort: merged.effort as EditReviewerPatch["effort"] }
-        : {}),
-      readonly: true,
-    } as Parameters<typeof validateReviewerCapabilityOverrides>[0]);
+    assertMergedReviewerCapabilities(merged, options.id, configPath);
 
     reviewers[index] = merged;
     rawConfig.reviewers = reviewers;
     return { reviewer: merged };
   });
   return { path, reviewer: result.reviewer, sha256: digest };
+}
+
+/**
+ * Validate a merged raw reviewer's transport/model/effort against the capability registry before
+ * writing, so a bad override fails at edit time rather than at the next review/preflight. Guards an
+ * unknown engine first: a hand-edited/legacy config could carry one, and capability helpers index
+ * the registry by engine — an unknown key would throw a raw TypeError instead of a clean error.
+ */
+function assertMergedReviewerCapabilities(
+  merged: Record<string, unknown>,
+  id: string,
+  configPath: string,
+): void {
+  const engineValue = merged.engine;
+  if (typeof engineValue !== "string" || !isReviewerSdk(engineValue)) {
+    throw invalidConfig(
+      `Reviewer "${id}" in ${configPath} has an unknown engine and cannot be edited: ${String(engineValue)}`,
+    );
+  }
+  const engine = engineValue;
+  // Resolve the effective transport the way resolution does (an omitted transport falls back to the
+  // engine default) so model/effort are validated against the transport that will actually run.
+  const effectiveTransport =
+    (typeof merged.transport === "string"
+      ? (merged.transport as "sdk" | "cli" | "app-server")
+      : undefined) ??
+    defaultReviewerTransport(engine) ??
+    "sdk";
+  validateReviewerCapabilityOverrides({
+    id: String(merged.id),
+    sdk: engine,
+    transport: effectiveTransport,
+    ...(typeof merged.model === "string" ? { model: merged.model } : {}),
+    ...(typeof merged.effort === "string"
+      ? { effort: merged.effort as EditReviewerPatch["effort"] }
+      : {}),
+    readonly: true,
+  } as Parameters<typeof validateReviewerCapabilityOverrides>[0]);
+}
+
+export type SetReviewerInUserConfigOptions = {
+  id: string;
+  entry: PublicReviewerEntry;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  expectedSha256?: string;
+};
+
+/**
+ * Replace the editor-managed fields (transport/provider/model/effort/enabled) of a reviewer with the
+ * given entry, preserving keys the editor does not touch (sdkOptions, cliOptions, …). Unlike the
+ * set-only patch in editReviewerInUserConfig, omitting a managed field here CLEARS it — so the
+ * interactive editor's "blank = default" actually removes the override. Validates before writing.
+ */
+export async function setReviewerInUserConfig(
+  options: SetReviewerInUserConfigOptions,
+): Promise<EditReviewerInUserConfigResult> {
+  const {
+    path,
+    sha256: digest,
+    result,
+  } = await mutateUserConfig(options, (rawConfig, configPath) => {
+    const reviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
+    const index = findReviewerIndexById(reviewers, options.id);
+    if (index < 0) {
+      throw invalidConfig(`No reviewer with id "${options.id}" in ${configPath}`);
+    }
+    const existing = reviewers[index];
+    const preserved = isRecord(existing) ? omitManagedReviewerKeys(existing) : {};
+    const merged: Record<string, unknown> = {
+      ...preserved,
+      ...buildReviewerEntryObject(options.entry),
+    };
+    assertMergedReviewerCapabilities(merged, options.id, configPath);
+    reviewers[index] = merged;
+    rawConfig.reviewers = reviewers;
+    return { reviewer: merged };
+  });
+  return { path, reviewer: result.reviewer, sha256: digest };
+}
+
+/** Drop the keys buildReviewerEntryObject re-emits, so a cleared override does not survive the merge. */
+function omitManagedReviewerKeys(raw: Record<string, unknown>): Record<string, unknown> {
+  const managed = new Set([
+    "id",
+    "engine",
+    "transport",
+    "profile",
+    "provider",
+    "model",
+    "effort",
+    "enabled",
+  ]);
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!managed.has(key)) {
+      rest[key] = value;
+    }
+  }
+  return rest;
+}
+
+/**
+ * Read the configured reviewers as full public entries (id/engine/transport/model/effort/…), so the
+ * interactive `edit` picker can list them and seed the field editor from the chosen one. Read-only;
+ * throws the same missing-config error as the mutators. Entries without a string id or a known engine
+ * are skipped — they cannot be capability-edited anyway.
+ */
+export async function loadUserConfigReviewerEntries(options: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): Promise<{ path: string; entries: PublicReviewerEntry[]; sha256: string }> {
+  const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
+  const existingRaw = await readFileIfExists(configPath);
+  if (existingRaw === undefined) {
+    throw invalidConfig(
+      `No diffwarden user config at ${configPath}. Run diffwarden init or diffwarden reviewers add <engine> first.`,
+    );
+  }
+  const rawConfig = parseRawConfigObject(existingRaw, configPath);
+  const rawReviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
+  const entries: PublicReviewerEntry[] = [];
+  for (const reviewer of rawReviewers) {
+    const entry = rawReviewerToPublicEntry(reviewer);
+    if (entry !== undefined) {
+      entries.push(entry);
+    }
+  }
+  // Return the read-time hash so a caller with a human-length edit window (the interactive editor)
+  // can pass it back as expectedSha256 and trip the concurrency guard instead of clobbering a
+  // change made while the prompt was open.
+  return { path: configPath, entries, sha256: sha256(existingRaw) };
+}
+
+function rawReviewerToPublicEntry(raw: unknown): PublicReviewerEntry | undefined {
+  if (!isRecord(raw) || typeof raw.id !== "string") {
+    return undefined;
+  }
+  const engine = raw.engine;
+  if (typeof engine !== "string" || !isReviewerSdk(engine)) {
+    return undefined;
+  }
+  const { transport } = raw;
+  return {
+    id: raw.id,
+    engine,
+    ...(transport === "sdk" || transport === "cli" || transport === "app-server"
+      ? { transport }
+      : {}),
+    ...(typeof raw.profile === "string" ? { profile: raw.profile } : {}),
+    ...(typeof raw.provider === "string" ? { provider: raw.provider } : {}),
+    ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
+    ...(typeof raw.model === "string" ? { model: raw.model } : {}),
+    ...(typeof raw.effort === "string" ? { effort: raw.effort } : {}),
+  };
 }
 
 /** A configured reviewer in summary form for interactive pickers (id + engine + enabled state). */
@@ -525,7 +727,7 @@ export type ConfiguredReviewerSummary = {
 export async function listUserConfigReviewers(options: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
-}): Promise<{ path: string; reviewers: ConfiguredReviewerSummary[] }> {
+}): Promise<{ path: string; reviewers: ConfiguredReviewerSummary[]; sha256: string }> {
   const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
   const existingRaw = await readFileIfExists(configPath);
   if (existingRaw === undefined) {
@@ -546,7 +748,9 @@ export async function listUserConfigReviewers(options: {
       enabled: reviewer.enabled !== false,
     });
   }
-  return { path: configPath, reviewers };
+  // Read-time hash so an interactive flow with a prompt window (the add picker) can pass it back as
+  // expectedSha256 and abort instead of merging its stale entries over a concurrent change.
+  return { path: configPath, reviewers, sha256: sha256(existingRaw) };
 }
 
 export type ReviewerSetMembershipOptions = {

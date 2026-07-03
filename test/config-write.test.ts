@@ -5,12 +5,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   addReviewerToSetInUserConfig,
   addReviewerToUserConfig,
+  addReviewersToUserConfig,
   createDiscoveredUserConfig,
   editReviewerInUserConfig,
   listUserConfigReviewers,
   loadDiffwardenConfig,
+  loadUserConfigReviewerEntries,
   removeReviewerFromSetInUserConfig,
   removeReviewerFromUserConfig,
+  setReviewerInUserConfig,
   userConfigPath,
 } from "../src/core/config.js";
 
@@ -513,5 +516,441 @@ describe("listUserConfigReviewers", () => {
     const { env } = setup();
 
     await expect(listUserConfigReviewers({ env })).rejects.toThrow(/No diffwarden user config/);
+  });
+});
+
+describe("addReviewersToUserConfig", () => {
+  it("adds several reviewers in one write, creating the file, with per-entry actions", async () => {
+    const { env, configPath } = setup();
+
+    const result = await addReviewersToUserConfig({
+      entries: [
+        { id: "codex", engine: "codex" },
+        { id: "grok", engine: "grok" },
+      ],
+      env,
+    });
+
+    expect(result.created).toBe(true);
+    expect(result.actions).toEqual(["added", "added"]);
+    const reviewers = readRaw(configPath).reviewers as Record<string, unknown>[];
+    expect(reviewers.map((r) => r.id)).toEqual(["codex", "grok"]);
+  });
+
+  it("appends every id to a named reviewer set without touching the default", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      defaultReviewerSet: "main",
+      reviewerSets: { main: ["codex"] },
+      reviewers: [{ id: "codex", engine: "codex" }],
+    });
+
+    await addReviewersToUserConfig({
+      entries: [
+        { id: "grok", engine: "grok" },
+        { id: "claude", engine: "claude" },
+      ],
+      reviewerSet: "extra",
+      env,
+    });
+
+    const raw = readRaw(configPath);
+    expect(raw.defaultReviewerSet).toBe("main");
+    expect((raw.reviewerSets as Record<string, string[]>).extra).toEqual(["grok", "claude"]);
+  });
+
+  it("is atomic: a mid-batch failure persists nothing (all-or-none)", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      reviewers: [{ id: "pi-a", engine: "pi", profile: "shared" }],
+    });
+    const before = readFileSync(configPath, "utf8");
+
+    // The second entry collides on engine:profile under a different id, so mergeReviewerById throws
+    // mid-batch. The first entry must NOT be persisted — the whole write is rolled back.
+    await expect(
+      addReviewersToUserConfig({
+        entries: [
+          { id: "codex", engine: "codex" },
+          { id: "pi-b", engine: "pi", profile: "shared" },
+        ],
+        env,
+      }),
+    ).rejects.toThrow();
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  it("creates the file under expectAbsent when the config is genuinely absent", async () => {
+    const { env, configPath } = setup();
+
+    const result = await addReviewersToUserConfig({
+      entries: [{ id: "codex", engine: "codex" }],
+      env,
+      expectAbsent: true,
+    });
+
+    expect(result.created).toBe(true);
+    expect((readRaw(configPath).reviewers as Record<string, unknown>[]).map((r) => r.id)).toEqual([
+      "codex",
+    ]);
+  });
+
+  it("aborts under expectAbsent when a config appeared during the prompt window, writing nothing", async () => {
+    const { env, configPath } = setup();
+    // Simulate a concurrent `init`/`add` that created the config while the picker was open: the
+    // caller seeded reserved ids from an absent config, so the write must refuse to merge into it.
+    writeExisting(configPath, { reviewers: [{ id: "codex", engine: "codex" }] });
+    const before = readFileSync(configPath, "utf8");
+
+    await expect(
+      addReviewersToUserConfig({
+        entries: [{ id: "grok", engine: "grok" }],
+        env,
+        expectAbsent: true,
+      }),
+    ).rejects.toThrow(/Config changed on disk since it was read/);
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  it("aborts when a token's config was deleted during the window, recreating nothing", async () => {
+    const { env, configPath } = setup();
+    // A config with a reviewer set existed when the picker opened; capture its real hash.
+    const seeded = await addReviewersToUserConfig({
+      entries: [{ id: "codex", engine: "codex" }],
+      reviewerSet: "main",
+      env,
+    });
+    // Another process deletes the config while the picker is open.
+    rmSync(configPath);
+
+    await expect(
+      addReviewersToUserConfig({
+        entries: [{ id: "grok", engine: "grok" }],
+        env,
+        expectedSha256: seeded.sha256,
+      }),
+    ).rejects.toThrow(/Config changed on disk since it was read/);
+    // It must NOT recreate a partial file that silently drops the prior reviewer and its set.
+    expect(existsSync(configPath)).toBe(false);
+  });
+});
+
+describe("setReviewerInUserConfig", () => {
+  it("replaces the model and clears the transport/effort/provider the entry omits", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      reviewers: [
+        {
+          id: "pi",
+          engine: "pi",
+          transport: "cli",
+          model: "anthropic/claude-sonnet",
+          effort: "high",
+          provider: "openrouter",
+          sdkOptions: { authSource: "shared" },
+        },
+      ],
+    });
+
+    const result = await setReviewerInUserConfig({
+      id: "pi",
+      entry: { id: "pi", engine: "pi", model: "gpt-5.5" },
+      env,
+    });
+
+    const expected = {
+      id: "pi",
+      engine: "pi",
+      model: "gpt-5.5",
+      sdkOptions: { authSource: "shared" },
+    };
+    expect(result.reviewer).toEqual(expected);
+    const reviewer = readRaw(configPath).reviewers as Record<string, unknown>[];
+    expect(reviewer[0]).toEqual(expected);
+    expect(reviewer[0]).not.toHaveProperty("transport");
+    expect(reviewer[0]).not.toHaveProperty("effort");
+    expect(reviewer[0]).not.toHaveProperty("provider");
+  });
+
+  it("clears model, effort, and provider back to defaults when the entry carries none of them", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      reviewers: [{ id: "pi", engine: "pi", provider: "openrouter", model: "x", effort: "high" }],
+    });
+
+    await setReviewerInUserConfig({ id: "pi", entry: { id: "pi", engine: "pi" }, env });
+
+    const reviewers = readRaw(configPath).reviewers as Record<string, unknown>[];
+    expect(reviewers[0]).toEqual({ id: "pi", engine: "pi" });
+  });
+
+  it("preserves sdkOptions, cliOptions, and other unmanaged keys through the replace", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      reviewers: [
+        {
+          id: "pi",
+          engine: "pi",
+          model: "x",
+          sdkOptions: { authSource: "shared" },
+          cliOptions: { flag: true },
+          timeoutSeconds: 120,
+        },
+      ],
+    });
+
+    await setReviewerInUserConfig({
+      id: "pi",
+      entry: { id: "pi", engine: "pi", effort: "low" },
+      env,
+    });
+
+    const reviewers = readRaw(configPath).reviewers as Record<string, unknown>[];
+    expect(reviewers[0]).toEqual({
+      id: "pi",
+      engine: "pi",
+      effort: "low",
+      sdkOptions: { authSource: "shared" },
+      cliOptions: { flag: true },
+      timeoutSeconds: 120,
+    });
+  });
+
+  it("persists enabled:false for a disabled placeholder", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "pi", engine: "pi" }] });
+
+    await setReviewerInUserConfig({
+      id: "pi",
+      entry: { id: "pi", engine: "pi", enabled: false },
+      env,
+    });
+
+    const reviewers = readRaw(configPath).reviewers as Record<string, unknown>[];
+    expect(reviewers[0]).toEqual({ id: "pi", engine: "pi", enabled: false });
+  });
+
+  it("omits enabled when the entry is enabled (true) or leaves it unset", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "pi", engine: "pi", enabled: false }] });
+
+    await setReviewerInUserConfig({
+      id: "pi",
+      entry: { id: "pi", engine: "pi", enabled: true },
+      env,
+    });
+    let reviewers = readRaw(configPath).reviewers as Record<string, unknown>[];
+    expect(reviewers[0]).not.toHaveProperty("enabled");
+
+    await setReviewerInUserConfig({ id: "pi", entry: { id: "pi", engine: "pi" }, env });
+    reviewers = readRaw(configPath).reviewers as Record<string, unknown>[];
+    expect(reviewers[0]).not.toHaveProperty("enabled");
+  });
+
+  it("throws on an unknown id and writes nothing", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "pi", engine: "pi" }] });
+    const before = readFileSync(configPath, "utf8");
+
+    await expect(
+      setReviewerInUserConfig({ id: "ghost", entry: { id: "ghost", engine: "pi" }, env }),
+    ).rejects.toThrow(/No reviewer with id "ghost"/);
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  it("rejects an effort the effective (default) transport cannot honor and writes nothing", async () => {
+    // gemini omits transport, so the validator resolves its engine-default cli transport, whose
+    // supportsEffort is false. (This rejection only fires for cli/app-server transports —
+    // validateReviewerCapabilityOverrides returns early for native/sdk transport.)
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "gem", engine: "gemini" }] });
+    const before = readFileSync(configPath, "utf8");
+
+    await expect(
+      setReviewerInUserConfig({
+        id: "gem",
+        entry: { id: "gem", engine: "gemini", effort: "high" },
+        env,
+      }),
+    ).rejects.toThrow(/does not support/);
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  it("rejects a reviewer whose entry-supplied engine is unknown, writing nothing", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "legacy", engine: "pi" }] });
+    const before = readFileSync(configPath, "utf8");
+
+    await expect(
+      setReviewerInUserConfig({
+        id: "legacy",
+        entry: { id: "legacy", engine: "bogus" as never },
+        env,
+      }),
+    ).rejects.toThrow(/unknown engine/);
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  it("leaves defaultReviewerSet, reviewerSets, and sibling reviewers untouched", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      defaultReviewerSet: "main",
+      reviewerSets: { main: ["pi", "codex"] },
+      reviewers: [
+        { id: "pi", engine: "pi", model: "x" },
+        { id: "codex", engine: "codex" },
+      ],
+    });
+
+    await setReviewerInUserConfig({ id: "pi", entry: { id: "pi", engine: "pi", model: "y" }, env });
+
+    const raw = readRaw(configPath);
+    expect(raw.defaultReviewerSet).toBe("main");
+    expect(raw.reviewerSets).toEqual({ main: ["pi", "codex"] });
+    const reviewers = raw.reviewers as Record<string, unknown>[];
+    expect(reviewers[1]).toEqual({ id: "codex", engine: "codex" });
+    expect(reviewers[0]).toMatchObject({ id: "pi", model: "y" });
+  });
+
+  it("aborts on a sha256 mismatch and writes nothing", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "pi", engine: "pi" }] });
+    const before = readFileSync(configPath, "utf8");
+
+    await expect(
+      setReviewerInUserConfig({
+        id: "pi",
+        entry: { id: "pi", engine: "pi", model: "x" },
+        env,
+        expectedSha256: "0".repeat(64),
+      }),
+    ).rejects.toThrow(/changed on disk/);
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  it("throws when no user config exists yet", async () => {
+    const { env } = setup();
+
+    await expect(
+      setReviewerInUserConfig({ id: "pi", entry: { id: "pi", engine: "pi" }, env }),
+    ).rejects.toThrow(/No diffwarden user config/);
+  });
+});
+
+describe("loadUserConfigReviewerEntries", () => {
+  it("returns full public entries with every editor-visible field, plus the config path", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      reviewers: [
+        {
+          id: "pi",
+          engine: "pi",
+          transport: "cli",
+          model: "anthropic/claude-sonnet",
+          effort: "high",
+          provider: "openrouter",
+          profile: "p1",
+          enabled: false,
+        },
+      ],
+    });
+
+    const { path, entries } = await loadUserConfigReviewerEntries({ env });
+
+    expect(path).toBe(configPath);
+    expect(entries).toEqual([
+      {
+        id: "pi",
+        engine: "pi",
+        transport: "cli",
+        profile: "p1",
+        provider: "openrouter",
+        enabled: false,
+        model: "anthropic/claude-sonnet",
+        effort: "high",
+      },
+    ]);
+  });
+
+  it("skips reviewers without a string id", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ engine: "codex" }, { id: "ok", engine: "codex" }] });
+
+    const { entries } = await loadUserConfigReviewerEntries({ env });
+
+    expect(entries).toEqual([{ id: "ok", engine: "codex" }]);
+  });
+
+  it("skips reviewers whose engine is unknown to the registry", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      reviewers: [
+        { id: "legacy", engine: "bogus" },
+        { id: "ok", engine: "pi" },
+      ],
+    });
+
+    const { entries } = await loadUserConfigReviewerEntries({ env });
+
+    expect(entries).toEqual([{ id: "ok", engine: "pi" }]);
+  });
+
+  it("drops a transport that is not a recognized transport string", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "pi", engine: "pi", transport: "bogus" }] });
+
+    const { entries } = await loadUserConfigReviewerEntries({ env });
+
+    expect(entries[0]).toEqual({ id: "pi", engine: "pi" });
+  });
+
+  it("returns an empty entries array when the config has no reviewers key", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { defaultReviewerSet: "1" });
+
+    const { path, entries } = await loadUserConfigReviewerEntries({ env });
+
+    expect(path).toBe(configPath);
+    expect(entries).toEqual([]);
+  });
+
+  it("throws when no user config exists", async () => {
+    const { env } = setup();
+
+    await expect(loadUserConfigReviewerEntries({ env })).rejects.toThrow(
+      /No diffwarden user config/,
+    );
+  });
+
+  it("returns a sha256 that round-trips as the setReviewerInUserConfig concurrency token", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: [{ id: "pi", engine: "pi", model: "x" }] });
+
+    // The just-read hash lets a save through — this is what the interactive editor passes back.
+    const loaded = await loadUserConfigReviewerEntries({ env });
+    await expect(
+      setReviewerInUserConfig({
+        id: "pi",
+        entry: { id: "pi", engine: "pi", model: "y" },
+        env,
+        expectedSha256: loaded.sha256,
+      }),
+    ).resolves.toMatchObject({ reviewer: { model: "y" } });
+
+    // A concurrent external write makes an earlier hash stale, so a save with it is rejected instead
+    // of clobbering the newer state — the guard the interactive edit flow needs across its prompt window.
+    const staleToken = (await loadUserConfigReviewerEntries({ env })).sha256;
+    writeExisting(configPath, { reviewers: [{ id: "pi", engine: "pi", model: "z" }] });
+    await expect(
+      setReviewerInUserConfig({
+        id: "pi",
+        entry: { id: "pi", engine: "pi", model: "w" },
+        env,
+        expectedSha256: staleToken,
+      }),
+    ).rejects.toThrow(/changed on disk/);
+    expect((readRaw(configPath).reviewers as Record<string, unknown>[])[0]).toMatchObject({
+      model: "z",
+    });
   });
 });

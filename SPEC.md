@@ -224,16 +224,26 @@ manages set membership; `set add` requires the id to be a configured reviewer. `
 given, and editing/removing an unknown id exits non-zero and writes nothing. None of these
 commands changes `defaultReviewerSet` for an existing config. `init --discover` scaffolds a fresh
 config from discovered ready-to-use reviewers with a `defaultReviewerSet` and `readonly: true`,
-and refuses to overwrite an existing config.
+and refuses to overwrite an existing config. The interactive picker these commands drop into
+(built on @clack/prompts) is the only place Diffwarden uses raw-mode arrow-key input, and it is
+reachable only behind the TTY gate; the review renderer never enters raw mode (see ADR 0001).
 
 Setup is interactive-by-default in a TTY. With stdin attached to a terminal, a bare
-`diffwarden init` runs the discover/scaffold flow, a bare `reviewers add` opens the discovered
-picker, and a bare `reviewers remove`/`edit` lets the user pick which configured reviewer to act
-on (`edit` still requires at least one field flag, validated before the picker). Naming a target
-(an engine for `add`, an id for `remove`/`edit`), passing `--json`, or running without a TTY
-stays fully declarative; a no-target setup command without a TTY exits `2` with a usage error
-rather than blocking on input, and `--json` never prompts. `--interactive` (on `reviewers add`
-and `init`) forces the guided flow and requires a TTY, exiting `2` when stdin is not interactive.
+`diffwarden init` runs the discover/scaffold flow, a bare `reviewers add` opens an arrow-key
+multiselect of discovered reviewers that are not already configured followed by a per-reviewer
+field editor for transport, model, effort, and the reviewer id, a bare `reviewers edit` (or
+`edit <id>` with no field flags) opens a field editor for a configured reviewer's transport,
+model, effort, and enabled state, and a bare `reviewers remove` lets the user pick a reviewer and
+confirm (default No). Esc/Ctrl-C steps back one menu level (cancelling at the top) and a `✕ quit`
+option exits immediately; submitting a blank model or choosing `default` effort clears that
+override, and the interactive edit replaces the editor-managed fields (so a cleared field is
+removed) rather than applying the declarative set-only patch. Prompts render to stderr so stdout stays machine-clean. Naming a target (an engine
+for `add`, an id for `remove`/`edit`), passing at least one field flag to `edit`, passing `--json`,
+or running without a TTY stays fully declarative; a no-target setup command without a TTY exits `2`
+with a usage error rather than blocking on input, and `--json` never prompts. `--interactive` (on
+`reviewers add` and `init`) forces the guided flow and requires a TTY, exiting `2` when stdin is
+not interactive. For `reviewers add` it applies only to the no-engine form; combining it with a
+named engine exits `2`, since a named engine is the declarative path and has nothing to pick.
 
 Reviewer specs should stay compact and SDK-agnostic at the public boundary:
 

@@ -140,7 +140,7 @@ diffwarden review --target uncommitted --reviewer fake --agent
   explicitly asks you to change reviewer setup. `remove` and `set remove` refuse to empty the
   `defaultReviewerSet` without `--force`. These commands are interactive-by-default only in a TTY;
   when you do run them, always name the target explicitly (the engine for `add`, the id for
-  `remove`/`edit`), since a no-target invocation in your non-TTY session exits non-zero instead of
-  prompting.
+  `remove`/`edit`) and pass at least one field flag for `edit`, since a bare or no-field setup
+  command in your non-TTY session exits non-zero instead of opening the interactive picker.
 - Droid users should prefer configured `droid-cli` reviewers for routine reviews when Factory
   UI session history matters.

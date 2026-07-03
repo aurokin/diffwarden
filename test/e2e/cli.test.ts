@@ -986,6 +986,45 @@ describe("diffwarden discovery & setup e2e", () => {
     );
   });
 
+  it("guards the bare add clack flow in a non-TTY and lets --json win over --interactive", async () => {
+    // --interactive forces the guided add flow, which needs a real TTY. In a non-TTY (this child)
+    // it must error before ever constructing a clack prompt — a regression that built the prompt
+    // would block on the non-TTY pipe forever, so the bounded timeout turns a hang into a failure.
+    await expect(
+      runDiffwarden(process.cwd(), ["reviewers", "add", "--interactive"], {
+        XDG_CONFIG_HOME: mkdtemp("diffwarden-e2e-xdg-"),
+      }),
+    ).rejects.toMatchObject({
+      code: 2,
+      stdout: "",
+      stderr: expect.stringContaining("requires an interactive terminal (TTY)"),
+    });
+
+    // --json must win over --interactive: the json guard keeps the command declarative, so a
+    // no-engine `add --interactive --json` reports the engine hint instead of reaching the picker.
+    await expect(
+      runDiffwarden(process.cwd(), ["reviewers", "add", "--interactive", "--json"], {
+        XDG_CONFIG_HOME: mkdtemp("diffwarden-e2e-xdg-"),
+      }),
+    ).rejects.toMatchObject({
+      code: 2,
+      stdout: "",
+      stderr: expect.stringContaining("Specify a reviewer engine to add"),
+    });
+
+    // --interactive + a named engine is contradictory (the flag forces the no-engine picker), so it
+    // is rejected outright rather than silently dropping the flag and writing the named engine.
+    await expect(
+      runDiffwarden(process.cwd(), ["reviewers", "add", "codex", "--interactive"], {
+        XDG_CONFIG_HOME: mkdtemp("diffwarden-e2e-xdg-"),
+      }),
+    ).rejects.toMatchObject({
+      code: 2,
+      stdout: "",
+      stderr: expect.stringContaining("cannot be combined with a named engine"),
+    });
+  }, 20_000);
+
   it("writes a static starter config for a non-TTY init and requires a TTY for --interactive", async () => {
     const configHome = mkdtemp("diffwarden-e2e-xdg-");
     const configPath = userConfigFile(configHome);
