@@ -57,11 +57,12 @@ diffwarden reviewers discover
 ```
 
 Then create a user config so you can run Diffwarden without passing reviewers on every
-command. Scaffold it from what discovery found, or start from a hand-written template:
+command. In a terminal, a bare `diffwarden init` walks you through discovery; pass `--json` or
+run non-interactively for a static starter:
 
 ```bash
-diffwarden init --discover   # write a config from discovered, ready-to-use reviewers
-diffwarden init              # write a minimal starter config to edit by hand
+diffwarden init              # in a TTY: guided discovery; non-TTY or --json: static starter
+diffwarden init --discover   # force the discovery scaffold
 diffwarden doctor --reviewer-set 1
 diffwarden review --target base:main
 ```
@@ -128,7 +129,17 @@ diffwarden reviewers remove codex
 
 `add`, `edit`, `remove`, and `set` all write only the env-located user config (never the project
 config), atomically. Removing a reviewer also prunes it from every reviewer set; `remove` and
-`set remove` refuse to leave `defaultReviewerSet` empty unless you pass `--force`.
+`set remove` refuse to leave `defaultReviewerSet` empty unless you pass `--force`. In a TTY, the
+config-mutating commands are interactive by default: a bare `add` opens an arrow-key multiselect
+of discovered reviewers that aren't already configured and walks each through a field editor for
+transport, model, effort, and the reviewer id; a bare `edit` (or `edit <id>` with no field flags)
+opens a field editor for a configured reviewer's transport, model, effort, and enabled state; and
+`remove` picks a reviewer and confirms (default No).
+Esc or Ctrl-C steps back one level (cancelling at the top) and a `✕ quit` choice exits immediately;
+submitting a blank model or choosing `default` effort clears that override back to the engine
+default. Prompts render to stderr, so stdout stays machine-clean. Naming a target (an engine for
+`add`, an id for `remove`/`edit`), passing a field flag to `edit`, passing `--json`, or running
+non-interactively stays declarative and never prompts.
 
 Supported v1 targets:
 

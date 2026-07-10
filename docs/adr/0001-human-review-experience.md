@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted, 2026-06-13
+Accepted, 2026-06-13. Amended 2026-07-03 (AUR-583) — see [Amendment](#amendment) for the
+raw-mode carve-out that lets interactive setup commands use inline arrow-key prompts behind the
+TTY gate while the review renderer keeps the original constraint.
 
 ## Context
 
@@ -100,3 +102,82 @@ The renderer must never write ANSI presentation, icons, spinners, or progress fr
 
 - AUR-537: Make review modes explicit and add a human review experience.
 - AUR-567: Add host-aware reviewer discovery and setup flow.
+- AUR-583: Make config-mutating setup commands interactive-by-default in a TTY.
+
+## Amendment
+
+### 2026-07-03 — Interactive setup commands may use inline raw-mode prompts (AUR-583)
+
+The original Decision (2026-06-13) told the human surface to "avoid alternate screen buffers,
+raw mode, mouse handling, custom scroll regions, and mandatory keybindings," and said AUR-567
+setup could use only "plain tables, status rows, and a narrow prompt flow." AUR-583 makes the
+config-mutating setup commands interactive-by-default in a TTY, which needs arrow-key
+selection, i.e. raw-mode input. This amendment narrows the raw-mode prohibition so it still
+binds the review renderer but carves out a bounded exception for setup prompts.
+
+The key distinction is surface, not aesthetics. The **review renderer** is a long-lived,
+streaming display whose stdout may be captured by agents, CI, or `--json`/`--ndjson`/`--agent`
+consumers; raw mode there would corrupt those contracts and risk the classic tmux/SSH/CI
+failure modes. A **setup prompt** is a one-shot, human-only, explicitly-invoked config edit
+with no machine contract on the affected stream — a fundamentally safer place for interactivity.
+
+### Refined decision
+
+- The review renderer keeps the original constraint unchanged. `runReviewEvents` /
+  `runReviewBatchEvents`, the human review display, and `review show` MUST stay append-only or
+  bounded-redraw, MUST NOT enter raw mode, alternate-screen buffers, mouse handling, custom
+  scroll regions, or mandatory keybindings, and MUST degrade to plain text outside capable
+  TTYs. The renderer must never write presentation to `--agent`, `--json`, or `--ndjson`
+  stdout. Nothing here relaxes that.
+
+- The interactive setup commands — `diffwarden init`, `reviewers add`, `reviewers edit`,
+  `reviewers remove` — MAY use inline, arrow-key, raw-mode line prompts (select / multiselect /
+  text redrawn in place), but only under all four guardrails:
+
+  1. **Behind the `shouldRunInteractiveSetup` + TTY gate.** A prompt is constructed only when
+     stdin is an interactive TTY and the command was invoked without any declarative signal
+     (a named target id/engine, an `edit` field flag, or `--json`). This is a hard safety
+     property, not a convenience: @clack/prompts calls `setRawMode`, and raw mode on a
+     non-TTY pipe blocks forever. Non-TTY and `--json` paths MUST NOT reach a prompt.
+
+  2. **Degrade to a clean, deterministic error — never a hang.** A no-target setup command in
+     a non-TTY exits `2` with a usage error; `--json` never prompts and stays fully
+     declarative; `--interactive` in a non-TTY exits `2` rather than blocking. There is no
+     code path where the process waits on input that can never arrive.
+
+  3. **Render to stderr; keep stdout machine-clean.** The prompt UI, hints, and picker draw to
+     `stderr` (clack is pointed at `{ input: process.stdin, output: process.stderr }`). Stdout
+     carries only the machine-readable result (for `--json` and downstream tooling), so a
+     setup command remains scriptable even though its human path is interactive.
+
+  4. **Still no full-screen takeover.** The carve-out is for inline raw-mode line prompts only.
+     Setup commands MUST still avoid alternate-screen buffers, mouse handling, and custom
+     scroll regions. Diffwarden redraws a bounded prompt region in place; it never seizes the
+     whole terminal or leaves scrollback in an altered state.
+
+### Chosen dependency
+
+@clack/prompts (`^1.6.0`) is the picker library. It provides arrow-key `select` /
+`multiselect` / `text` prompts that redraw a bounded region in place, accept a configurable
+output stream (so prompts go to stderr), and expose a `cancel`/`isCancel` signal that
+Diffwarden maps to Esc/Ctrl-C "step back one level" and a `✕ quit` sentinel for a hard exit.
+It behaves correctly under tmux, SSH, and terminal multiplexers, where the arrow-key
+navigation Diffwarden wants is exactly what plain readline prompts cannot offer. It stays
+inside the existing package posture (small, no native renderer, Node `>=22.19.0` compatible),
+unlike a full-screen TUI framework.
+
+Full TUI frameworks (OpenTUI, Ink) remain deferred as recorded above; @clack/prompts is
+deliberately less than a framework — a prompt primitive, not a persistent-pane UI — and does
+not reopen that decision.
+
+### Consequences of the amendment
+
+- Setup becomes genuinely usable by hand (discover → pick → tune transport/model/effort/enabled
+  → confirm) while agents and scripts keep a clean declarative, non-prompting contract on the
+  same commands.
+- The raw-mode ban is now surface-specific rather than global. Reviewers of future work must
+  check which surface they are on: raw-mode input is allowed only in gated setup prompts,
+  never in the review renderer.
+- The TTY gate is load-bearing for correctness, not just UX. Any new setup entry point that
+  can reach a clack prompt must route through `shouldRunInteractiveSetup` (or an equivalent
+  TTY check) first, and non-TTY/`--json` must fail closed with an error.

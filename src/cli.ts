@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
@@ -17,12 +18,16 @@ import {
   type PublicReviewerEntry,
   addReviewerToSetInUserConfig,
   addReviewerToUserConfig,
+  addReviewersToUserConfig,
   createDiscoveredUserConfig,
   editReviewerInUserConfig,
   initDiffwardenConfig,
+  listUserConfigReviewers,
   loadDiffwardenConfig,
+  loadUserConfigReviewerEntries,
   removeReviewerFromSetInUserConfig,
   removeReviewerFromUserConfig,
+  setReviewerInUserConfig,
   userConfigPath,
 } from "./core/config.js";
 import {
@@ -48,15 +53,7 @@ import {
   renderHumanReviewSummary,
   shouldUseHumanColor,
 } from "./core/human-render.js";
-import {
-  type Prompter,
-  confirmScaffold,
-  confirmWriteEntry,
-  createReadlinePrompter,
-  isInteractiveAvailable,
-  promptSelectReviewerEntry,
-  selectScaffoldReviewers,
-} from "./core/interactive.js";
+import { isInteractiveAvailable, shouldRunInteractiveSetup } from "./core/interactive.js";
 import { type MacosDoctorReport, runMacosDoctor } from "./core/macos.js";
 import { renderJson } from "./core/render.js";
 import {
@@ -79,6 +76,12 @@ import {
   type ReviewerError,
   reviewRunArtifactSchema,
 } from "./core/schema.js";
+import {
+  runClackReviewerAdd,
+  runClackReviewerEdit,
+  runClackReviewerRemove,
+  runClackReviewerSetup,
+} from "./core/setup-clack.js";
 import { parseTargetSpec } from "./core/target.js";
 import { version } from "./version.js";
 
@@ -252,9 +255,9 @@ reviewCommand
 
 program
   .command("init")
-  .description("Create a starter user config file.")
+  .description("Create a starter user config file, or scaffold one from discovered reviewers.")
   .option("--discover", "scaffold the config from reviewers discovered on this host")
-  .option("--interactive", "confirm the discovered config before writing (requires --discover)")
+  .option("--interactive", "force the discover/scaffold flow (the default in a TTY; needs a TTY)")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
   .action(
@@ -264,12 +267,17 @@ program
       cwd: string;
       json?: boolean;
     }) => {
-      if (options.discover === true) {
-        await runInitDiscover(options);
+      // Interactive-by-default in a TTY: bare `init` at a terminal runs the discover/scaffold flow;
+      // --json or a non-TTY writes the static starter config. --discover still forces discovery even
+      // when non-interactive (e.g. `init --discover --json` scaffolds every reviewer without prompts).
+      const interactive = shouldRunInteractiveSetup(options);
+      if (interactive || options.discover === true) {
+        await runInitDiscover({
+          cwd: options.cwd,
+          interactive,
+          ...(options.json === true ? { json: true } : {}),
+        });
         return;
-      }
-      if (options.interactive === true) {
-        throw invalidCli("--interactive requires --discover");
       }
 
       const configPath = await initDiffwardenConfig();
@@ -417,17 +425,31 @@ reviewers
   .option("--provider <name>", "provider hint for the reviewer")
   .option("--set <name>", "also add the reviewer id to this reviewer set")
   .option("--disabled", "write the reviewer as a disabled placeholder (enabled: false)")
-  .option("--interactive", "select and confirm the reviewer before writing (requires a TTY)")
+  .option("--interactive", "force the discovered picker for a bare add (no engine); needs a TTY")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
   .action(async (engineArg: string | undefined, options: ReviewerAddCliOptions) => {
-    const entry =
-      options.interactive === true
-        ? await resolveInteractiveAddEntry(engineArg, options)
-        : buildRequiredAddEntry(engineArg, options);
-    if (entry === undefined) {
+    // `--interactive` forces the discovered picker, which is inherently the no-engine flow (there is
+    // nothing to discover-pick once you have named the engine). Rejecting the combination surfaces
+    // the contradictory intent instead of silently dropping the flag and writing the named engine.
+    if (engineArg !== undefined && options.interactive === true) {
+      throw invalidCli(
+        '--interactive forces the discovered picker and cannot be combined with a named engine. Run a bare "diffwarden reviewers add --interactive" to pick, or drop --interactive to add the named engine directly.',
+      );
+    }
+
+    // Interactive (clack multiselect) only when no engine is named: a bare `add` at a terminal opens
+    // the discovered picker → configure → merge each into the existing config. A named engine is
+    // always declarative (build + write that entry). A non-TTY bare `add` errors with the engine
+    // hint, and `--interactive` in a non-TTY errors rather than hanging. shouldRunInteractiveSetup
+    // already honors --interactive AND --json (json wins, so `add --interactive --json` never prompts).
+    const interactive = engineArg === undefined && shouldRunInteractiveSetup(options);
+    if (interactive) {
+      await runClackAddFlow(options);
       return;
     }
+
+    const entry = buildRequiredAddEntry(engineArg, options);
 
     // By design the write target is the env-located user config (decision: always user, never
     // project), so it is not derived from --cwd. --cwd only scopes the shadow-config check below.
@@ -465,42 +487,55 @@ reviewers
   });
 
 reviewers
-  .command("remove <id>")
+  .command("remove [id]")
   .description("Remove a reviewer from the user config and prune it from reviewer sets.")
   .option("--force", "remove even if it empties the default reviewer set")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
-  .action(async (id: string, options: { force?: boolean; cwd: string; json?: boolean }) => {
-    // By design the write target is the env-located user config (decision: always user, never
-    // project), so it is not derived from --cwd; --cwd only scopes the shadow-config check.
-    const result = await removeReviewerFromUserConfig({
-      id,
-      env: process.env,
-      ...(options.force === true ? { force: true } : {}),
-    });
+  .action(
+    async (
+      idArg: string | undefined,
+      options: { force?: boolean; cwd: string; json?: boolean },
+    ) => {
+      // Interactive-by-default in a TTY: a bare `remove` at a terminal picks the reviewer from the
+      // clack picker and confirms; naming an id stays declarative, and a non-TTY / --json bare
+      // `remove` errors instead of hanging.
+      const id = idArg ?? (await resolveClackRemoveId(options));
+      if (id === undefined) {
+        return;
+      }
 
-    await warnIfProjectConfigShadows(options.cwd, result.path);
+      // By design the write target is the env-located user config (decision: always user, never
+      // project), so it is not derived from --cwd; --cwd only scopes the shadow-config check.
+      const result = await removeReviewerFromUserConfig({
+        id,
+        env: process.env,
+        ...(options.force === true ? { force: true } : {}),
+      });
 
-    if (options.json === true) {
-      process.stdout.write(
-        `${JSON.stringify(
-          { path: result.path, removed: id, prunedFromSets: result.prunedFromSets },
-          null,
-          2,
-        )}\n`,
-      );
-      return;
-    }
+      await warnIfProjectConfigShadows(options.cwd, result.path);
 
-    const setSuffix =
-      result.prunedFromSets.length > 0
-        ? ` and pruned it from reviewer set ${result.prunedFromSets.join(", ")}`
-        : "";
-    process.stdout.write(`Removed reviewer ${id}${setSuffix} in ${result.path}\n`);
-  });
+      if (options.json === true) {
+        process.stdout.write(
+          `${JSON.stringify(
+            { path: result.path, removed: id, prunedFromSets: result.prunedFromSets },
+            null,
+            2,
+          )}\n`,
+        );
+        return;
+      }
+
+      const setSuffix =
+        result.prunedFromSets.length > 0
+          ? ` and pruned it from reviewer set ${result.prunedFromSets.join(", ")}`
+          : "";
+      process.stdout.write(`Removed reviewer ${id}${setSuffix} in ${result.path}\n`);
+    },
+  );
 
 reviewers
-  .command("edit <id>")
+  .command("edit [id]")
   .description("Edit fields on a configured reviewer in the user config.")
   .option("--transport <transport>", "transport: sdk, cli, or app-server")
   .option("--model <id>", "model for the reviewer")
@@ -510,11 +545,28 @@ reviewers
   .option("--disabled", "mark the reviewer disabled (enabled: false)")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
-  .action(async (id: string, options: ReviewerEditCliOptions) => {
+  .action(async (idArg: string | undefined, options: ReviewerEditCliOptions) => {
+    // No field flags + a real TTY ⇒ the immersive clack editor (pick the reviewer if no id, then
+    // edit transport/model/effort/enabled in the UI). Any field flag switches to the set-only patch
+    // path below (which a non-TTY / --json edit always takes).
+    if (!hasEditFieldFlags(options) && shouldRunInteractiveSetup(options)) {
+      await runClackEditFlow(idArg, options);
+      return;
+    }
+
+    // Validate the patch first so a no-field edit fails fast regardless of TTY, before the id check.
     const patch = buildReviewerEditPatch(options);
 
+    // A field flag is the declarative path: it never prompts. Naming the id is required here — to pick
+    // a reviewer interactively, run a bare `reviewers edit` (no field flags) for the clack editor.
+    if (idArg === undefined) {
+      throw invalidCli(
+        'Specify a reviewer id to edit (e.g. "diffwarden reviewers edit <id> --model ..."), or run "diffwarden reviewers edit" with no field flags to pick one interactively.',
+      );
+    }
+
     // Write target is the env-located user config by design; --cwd only scopes the shadow check.
-    const result = await editReviewerInUserConfig({ id, patch, env: process.env });
+    const result = await editReviewerInUserConfig({ id: idArg, patch, env: process.env });
 
     await warnIfProjectConfigShadows(options.cwd, result.path);
 
@@ -524,7 +576,7 @@ reviewers
       );
       return;
     }
-    process.stdout.write(`Updated reviewer ${id} in ${result.path}\n`);
+    process.stdout.write(`Updated reviewer ${idArg} in ${result.path}\n`);
   });
 
 const reviewerSet = reviewers
@@ -1034,47 +1086,162 @@ function assertNoEntryShapingFlags(options: ReviewerAddCliOptions): void {
   }
 }
 
-async function resolveInteractiveAddEntry(
-  engineArg: string | undefined,
-  options: ReviewerAddCliOptions,
-): Promise<PublicReviewerEntry | undefined> {
-  if (engineArg === undefined) {
-    // The selection path uses the discovered recommendation; entry-shaping flags would be
-    // silently dropped, so reject them instead of writing something other than what was asked.
-    assertNoEntryShapingFlags(options);
-  }
+/**
+ * The bare `reviewers add` clack flow: discover, offer the not-yet-configured reviewers in the same
+ * multiselect→configure picker as `init`, then merge each chosen entry into the user config. Reached
+ * only behind the TTY gate; entry-shaping flags are rejected because the picker uses the discovered
+ * recommendation (they would be silently dropped).
+ */
+async function runClackAddFlow(options: ReviewerAddCliOptions): Promise<void> {
   if (!isInteractiveAvailable(process.stdin)) {
     throw invalidCli("--interactive requires an interactive terminal (TTY)");
   }
+  assertNoEntryShapingFlags(options);
 
-  // Prompts go to stderr so --json keeps stdout clean for the machine-readable result.
-  const prompter = createReadlinePrompter({ output: process.stderr });
-  try {
-    const entry =
-      engineArg !== undefined
-        ? buildReviewerAddEntry(engineArg, options)
-        : await selectInteractiveAddEntry(prompter, options.cwd);
-    if (entry === undefined) {
-      process.stdout.write("No reviewers available to add.\n");
-      return undefined;
-    }
-
-    if (!(await confirmWriteEntry(prompter, entry, userConfigPath(process.env)))) {
-      process.stdout.write("Aborted.\n");
-      return undefined;
-    }
-    return entry;
-  } finally {
-    prompter.close();
+  const configPath = userConfigPath(process.env);
+  const discovery = await discoverReviewers({ cwd: options.cwd, env: process.env });
+  // Reserve EVERY id already on disk, including hand-edited/legacy rows that loadUserConfigReviewerEntries
+  // would drop (unknown engine, etc.): mergeReviewerById matches by id alone, so an in-picker rename to
+  // such an id would otherwise silently overwrite it. listUserConfigReviewers keeps every string-id row.
+  // Capture its read-time sha so the final write can abort if the config changed while the picker was open.
+  const existing = existsSync(configPath)
+    ? await listUserConfigReviewers({ env: process.env })
+    : undefined;
+  const existingIds = new Set(existing?.reviewers.map((reviewer) => reviewer.id) ?? []);
+  // selectDiscoveredReviewers curates ONE recommendation per engine (primary transport preferred) —
+  // the same set `init` offers. So the collapse happens before this existing-id filter by design: if
+  // the primary id (e.g. `codex`) is already configured, bare add won't re-offer that engine under a
+  // secondary transport (e.g. `codex-app-server`). Adding a specific non-default transport is the job
+  // of the declarative `reviewers add <engine> --transport <t>` path, not the discovery picker.
+  const ready = selectDiscoveredReviewers(discovery.candidates).filter(
+    (entry) => !existingIds.has(entry.id),
+  );
+  if (ready.length === 0) {
+    process.stdout.write(
+      "No new reviewers to add — every discovered reviewer is already configured.\n",
+    );
+    return;
   }
+
+  const sculpted = await runClackReviewerAdd({
+    ready,
+    candidates: discovery.candidates,
+    configPath,
+    reservedIds: existingIds,
+  });
+  if (sculpted === undefined || sculpted.length === 0) {
+    process.stdout.write("Aborted.\n");
+    return;
+  }
+
+  // Persist the whole batch in one atomic write so a mid-batch failure never leaves a partial add.
+  // Pass the picker's read-time sha (when the config already existed) so a config change during the
+  // prompt window trips the concurrency guard instead of merging stale entries over it; when the
+  // config did not exist, expectAbsent makes a config *created* during the window fail the same way
+  // instead of silently merging our stale reserved-id state into it.
+  await addReviewersToUserConfig({
+    entries: sculpted,
+    env: process.env,
+    ...(existing !== undefined ? { expectedSha256: existing.sha256 } : { expectAbsent: true }),
+    ...(options.set !== undefined ? { reviewerSet: options.set } : {}),
+  });
+  await warnIfProjectConfigShadows(options.cwd, configPath);
+  const ids = sculpted.map((entry) => entry.id).join(", ");
+  const setSuffix = options.set !== undefined ? ` (also added to reviewer set ${options.set})` : "";
+  process.stdout.write(
+    `Added ${sculpted.length} reviewer${sculpted.length === 1 ? "" : "s"} to ${configPath}${setSuffix}: ${ids}\n`,
+  );
 }
 
-async function selectInteractiveAddEntry(
-  prompter: Prompter,
-  cwd: string,
-): Promise<PublicReviewerEntry | undefined> {
-  const result = await discoverReviewers({ cwd, env: process.env });
-  return promptSelectReviewerEntry(prompter, result);
+/**
+ * The bare `reviewers edit` clack flow: pick which configured reviewer (when no id is named) and edit
+ * transport/model/effort/enabled in the field editor, then persist via setReviewerInUserConfig (which
+ * honors cleared overrides). Reached only behind the TTY gate.
+ */
+async function runClackEditFlow(
+  idArg: string | undefined,
+  options: ReviewerEditCliOptions,
+): Promise<void> {
+  if (!isInteractiveAvailable(process.stdin)) {
+    throw invalidCli("--interactive requires an interactive terminal (TTY)");
+  }
+  const {
+    path: configPath,
+    entries,
+    sha256: loadedSha256,
+  } = await loadUserConfigReviewerEntries({ env: process.env });
+  // Validate a named target first: `edit <id>` must report that the id cannot be edited (non-zero)
+  // even when the editable list is empty, matching the declarative path — not silently exit 0 via
+  // the empty-list message below. The bare picker (no id) is what the empty-list case belongs to.
+  if (idArg !== undefined && !entries.some((entry) => entry.id === idArg)) {
+    // An id is absent from the editable set for exactly one of two reasons: it truly does not exist,
+    // or it exists as a legacy/unknown-engine row (loadUserConfigReviewerEntries drops those,
+    // listUserConfigReviewers keeps them). Distinguish the two so a present-but-uneditable reviewer
+    // gets the same unknown-engine verdict the declarative editReviewerInUserConfig returns, instead
+    // of being misreported as missing.
+    const all = await listUserConfigReviewers({ env: process.env });
+    if (all.reviewers.some((reviewer) => reviewer.id === idArg)) {
+      throw invalidCli(
+        `Reviewer "${idArg}" has an unknown engine and cannot be edited. Fix its engine in ${configPath} or remove it with "diffwarden reviewers remove ${idArg}".`,
+      );
+    }
+    throw invalidCli(`No reviewer with id "${idArg}" to edit.`);
+  }
+  if (entries.length === 0) {
+    process.stdout.write("No configured reviewers to edit.\n");
+    return;
+  }
+
+  const discovery = await discoverReviewers({ cwd: options.cwd, env: process.env });
+  const edited = await runClackReviewerEdit({
+    entries,
+    ...(idArg !== undefined ? { targetId: idArg } : {}),
+    candidates: discovery.candidates,
+    configPath,
+  });
+  if (edited === undefined) {
+    process.stdout.write("Aborted.\n");
+    return;
+  }
+
+  // Pass the sha read when the editor opened: if another process changed the config while the prompt
+  // was open, this trips the concurrency guard ("Config changed on disk") instead of writing the
+  // stale draft's fields over the newer state. The editor was seeded from that same snapshot.
+  const result = await setReviewerInUserConfig({
+    id: edited.id,
+    entry: edited.entry,
+    env: process.env,
+    expectedSha256: loadedSha256,
+  });
+  await warnIfProjectConfigShadows(options.cwd, result.path);
+  process.stdout.write(`Updated reviewer ${edited.id} in ${result.path}\n`);
+}
+
+/** Pick a configured reviewer to remove via the clack picker; mirrors the no-id remove TTY gate. */
+async function resolveClackRemoveId(options: {
+  json?: boolean;
+  cwd: string;
+}): Promise<string | undefined> {
+  if (options.json === true || !isInteractiveAvailable(process.stdin)) {
+    throw invalidCli("Specify a reviewer id to remove (interactive selection requires a TTY).");
+  }
+  const { path: configPath, reviewers } = await listUserConfigReviewers({ env: process.env });
+  if (reviewers.length === 0) {
+    process.stdout.write("No configured reviewers to remove.\n");
+    return undefined;
+  }
+  return runClackReviewerRemove({ reviewers, configPath });
+}
+
+function hasEditFieldFlags(options: ReviewerEditCliOptions): boolean {
+  return (
+    options.transport !== undefined ||
+    options.model !== undefined ||
+    options.effort !== undefined ||
+    options.provider !== undefined ||
+    options.enabled === true ||
+    options.disabled === true
+  );
 }
 
 function buildReviewerAddEntry(
@@ -1159,36 +1326,33 @@ async function warnIfProjectConfigShadows(cwd: string, writtenPath: string): Pro
 async function runInitDiscover(options: {
   cwd: string;
   json?: boolean;
-  interactive?: boolean;
+  interactive: boolean;
 }): Promise<void> {
   const result = await discoverReviewers({ cwd: options.cwd, env: process.env });
   const discovered = selectDiscoveredReviewers(result.candidates);
   if (discovered.length === 0) {
     throw invalidCli(
-      "No usable reviewers found on this host. Run diffwarden reviewers discover to see options, install or authenticate an engine, then retry, or run diffwarden init for a starter config.",
+      "No usable reviewers found on this host. Run diffwarden reviewers discover to see options, install or authenticate an engine, then retry, or run diffwarden init --json to write a static starter config without discovery.",
     );
   }
 
   let reviewers = discovered;
-  if (options.interactive === true) {
+  if (options.interactive) {
     if (!isInteractiveAvailable(process.stdin)) {
       throw invalidCli("--interactive requires an interactive terminal (TTY)");
     }
-    // Prompts go to stderr so --json keeps stdout clean for the machine-readable result.
-    const prompter = createReadlinePrompter({ output: process.stderr });
-    try {
-      reviewers = await selectScaffoldReviewers(prompter, discovered);
-      if (reviewers.length === 0) {
-        process.stdout.write("No reviewers selected. Aborted.\n");
-        return;
-      }
-      if (!(await confirmScaffold(prompter, reviewers, userConfigPath(process.env)))) {
-        process.stdout.write("Aborted.\n");
-        return;
-      }
-    } finally {
-      prompter.close();
+    // The picker uses @clack/prompts (raw-mode), reached only behind this TTY gate so agents/--json
+    // never construct it; clack renders to stderr, keeping stdout clean for the result line.
+    const sculpted = await runClackReviewerSetup({
+      ready: discovered,
+      candidates: result.candidates,
+      configPath: userConfigPath(process.env),
+    });
+    if (sculpted === undefined || sculpted.length === 0) {
+      process.stdout.write("Aborted.\n");
+      return;
     }
+    reviewers = sculpted;
   }
 
   // --cwd scopes discovery (the host probe above); the scaffold always writes the env-located

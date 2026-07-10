@@ -986,24 +986,67 @@ describe("diffwarden discovery & setup e2e", () => {
     );
   });
 
-  it("creates a starter user config with init and guards --interactive", async () => {
-    const configHome = mkdtemp("diffwarden-e2e-xdg-");
-    const configPath = userConfigFile(configHome);
-
-    const result = await runDiffwarden(process.cwd(), ["init", "--json"], {
-      XDG_CONFIG_HOME: configHome,
-    });
-    expect(JSON.parse(result.stdout)).toMatchObject({ path: configPath, created: true });
-    expect(existsSync(configPath)).toBe(true);
-
-    // --interactive only applies to the discovery scaffold; it must error on its own.
+  it("guards the bare add clack flow in a non-TTY and lets --json win over --interactive", async () => {
+    // --interactive forces the guided add flow, which needs a real TTY. In a non-TTY (this child)
+    // it must error before ever constructing a clack prompt — a regression that built the prompt
+    // would block on the non-TTY pipe forever, so the bounded timeout turns a hang into a failure.
     await expect(
-      runDiffwarden(process.cwd(), ["init", "--interactive"], {
+      runDiffwarden(process.cwd(), ["reviewers", "add", "--interactive"], {
         XDG_CONFIG_HOME: mkdtemp("diffwarden-e2e-xdg-"),
       }),
     ).rejects.toMatchObject({
       code: 2,
-      stderr: expect.stringContaining("--interactive requires --discover"),
+      stdout: "",
+      stderr: expect.stringContaining("requires an interactive terminal (TTY)"),
+    });
+
+    // --json must win over --interactive: the json guard keeps the command declarative, so a
+    // no-engine `add --interactive --json` reports the engine hint instead of reaching the picker.
+    await expect(
+      runDiffwarden(process.cwd(), ["reviewers", "add", "--interactive", "--json"], {
+        XDG_CONFIG_HOME: mkdtemp("diffwarden-e2e-xdg-"),
+      }),
+    ).rejects.toMatchObject({
+      code: 2,
+      stdout: "",
+      stderr: expect.stringContaining("Specify a reviewer engine to add"),
+    });
+
+    // --interactive + a named engine is contradictory (the flag forces the no-engine picker), so it
+    // is rejected outright rather than silently dropping the flag and writing the named engine.
+    await expect(
+      runDiffwarden(process.cwd(), ["reviewers", "add", "codex", "--interactive"], {
+        XDG_CONFIG_HOME: mkdtemp("diffwarden-e2e-xdg-"),
+      }),
+    ).rejects.toMatchObject({
+      code: 2,
+      stdout: "",
+      stderr: expect.stringContaining("cannot be combined with a named engine"),
+    });
+  }, 20_000);
+
+  it("writes a static starter config for a non-TTY init and requires a TTY for --interactive", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const configPath = userConfigFile(configHome);
+
+    // A bare init in a non-TTY (the child process here) stays declarative: static starter, no prompt.
+    const result = await runDiffwarden(process.cwd(), ["init"], {
+      XDG_CONFIG_HOME: configHome,
+    });
+    expect(result.stdout).toContain(`Created ${configPath}`);
+    expect(existsSync(configPath)).toBe(true);
+
+    // --interactive forces the guided flow, which needs a real TTY; a non-TTY must error, not hang.
+    // A discoverable engine ensures we reach the TTY guard rather than the empty-discovery error.
+    const binDir = makeFakeExecutables(["grok"]);
+    await expect(
+      runDiffwarden(process.cwd(), ["init", "--interactive"], {
+        XDG_CONFIG_HOME: mkdtemp("diffwarden-e2e-xdg-"),
+        PATH: binDir,
+      }),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("requires an interactive terminal (TTY)"),
     });
   });
 
@@ -1078,6 +1121,31 @@ describe("diffwarden reviewer mutation e2e", () => {
     await expect(
       runDiffwarden(process.cwd(), ["reviewers", "edit", "codex"], env),
     ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("Specify at least one field to edit"),
+    });
+  });
+
+  it("requires an id for a no-id remove/edit in a non-TTY", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const env = { XDG_CONFIG_HOME: configHome };
+    await runDiffwarden(process.cwd(), ["reviewers", "add", "codex", "--json"], env);
+
+    // No id + non-TTY: the picker would hang, so both commands error with an actionable hint.
+    await expect(runDiffwarden(process.cwd(), ["reviewers", "remove"], env)).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("Specify a reviewer id to remove"),
+    });
+
+    await expect(
+      runDiffwarden(process.cwd(), ["reviewers", "edit", "--disabled"], env),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("Specify a reviewer id to edit"),
+    });
+
+    // The patch is still validated first: a no-field edit reports the missing field, not the id.
+    await expect(runDiffwarden(process.cwd(), ["reviewers", "edit"], env)).rejects.toMatchObject({
       code: 2,
       stderr: expect.stringContaining("Specify at least one field to edit"),
     });
