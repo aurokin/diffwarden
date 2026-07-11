@@ -118,13 +118,7 @@ export function providerQualifiedModel(reviewer: ReviewReviewerConfig): string |
 }
 
 export function claudeCliEffort(effort: string): string {
-  if (effort === "minimal") {
-    return "low";
-  }
-  if (effort === "xhigh") {
-    return "max";
-  }
-  return effort;
+  return effort === "minimal" ? "low" : effort;
 }
 
 export function grokCliEffort(effort: string): string {

@@ -646,7 +646,7 @@ describe("claudeAdapter", () => {
         reviewer: {
           id: "claude",
           sdk: "claude",
-          model: "sonnet",
+          model: "default",
           effort: "xhigh",
           readonly: true,
         },
@@ -670,8 +670,8 @@ describe("claudeAdapter", () => {
       requestedEffort: "xhigh",
       resolvedEffort: "xhigh",
       effortResolutionSource: "requested",
-      requestedModel: "sonnet",
-      resolvedModel: "sonnet",
+      requestedModel: "default",
+      resolvedModel: "default",
       modelResolutionSource: "requested",
     });
   });

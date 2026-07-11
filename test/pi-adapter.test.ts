@@ -1124,6 +1124,43 @@ describe("piAdapter", () => {
     });
   });
 
+  it("maps max effort to xhigh while reporting the public requested value", async () => {
+    const reasoningModel = {
+      provider: "test",
+      id: "reasoning-model",
+      reasoning: true,
+      thinkingLevelMap: { xhigh: "max" },
+    };
+    const { adapter, calls } = createMockPiAdapter([reasoningModel], {
+      async prompt({ tool }) {
+        await tool.execute("tool-call-1", validReview());
+      },
+    });
+
+    const output = await adapter.run(
+      input({
+        reviewer: {
+          id: "pi",
+          sdk: "pi",
+          readonly: true,
+          effort: "max",
+        },
+      }),
+    );
+
+    expect(calls.createAgentSession[0]).toMatchObject({
+      model: reasoningModel,
+      thinkingLevel: "xhigh",
+    });
+    expect(output.metadata).toMatchObject({
+      requestedEffort: "max",
+      resolvedEffort: "xhigh",
+      effortResolutionSource: "adapter-selection",
+      effectiveEffort: "xhigh",
+      effort: "xhigh",
+    });
+  });
+
   it("rejects unavailable requested Pi models", async () => {
     const { adapter } = createMockPiAdapter([{ provider: "openai", id: "gpt-test" }]);
 
