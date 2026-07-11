@@ -96,7 +96,7 @@ describe("loadDiffwardenConfig", () => {
   it("rejects unsupported configured effort values", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {
-      reviewers: [{ id: "pi", engine: "pi", effort: "max" }],
+      reviewers: [{ id: "pi", engine: "pi", effort: "ultra" }],
     });
 
     await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toMatchObject({

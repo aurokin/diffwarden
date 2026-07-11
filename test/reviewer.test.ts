@@ -44,10 +44,11 @@ describe("parseReviewEffort", () => {
     expect(parseReviewEffort("medium")).toBe("medium");
     expect(parseReviewEffort("high")).toBe("high");
     expect(parseReviewEffort("xhigh")).toBe("xhigh");
+    expect(parseReviewEffort("max")).toBe("max");
   });
 
   it("rejects unsupported effort values", () => {
-    expect(() => parseReviewEffort("max")).toThrow("Invalid --effort value: max");
+    expect(() => parseReviewEffort("ultra")).toThrow("Invalid --effort value: ultra");
     expect(() => parseReviewEffort("")).toThrow("Invalid --effort value: ");
   });
 });

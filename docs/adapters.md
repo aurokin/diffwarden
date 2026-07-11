@@ -743,8 +743,11 @@ the guarantees still depend on Antigravity's settings and permission engine.
 CLI model and effort metadata is conservative. Diffwarden records requested and resolved fields
 for values it explicitly passes, including provider-qualified model strings such as
 `openrouter/anthropic/claude-sonnet`. Effort mappings follow the invocation arguments: Claude
-maps `minimal` to `low` and `xhigh` to `max`; Droid and Grok map `minimal` to `low`; Codex, Pi,
-OpenCode, Gemini, and Cursor record exact requested values where those overrides are supported.
+maps `minimal` to `low` and passes `low` through `max` verbatim on the CLI transport (the SDK
+transport resolves `xhigh`/`max` against the model catalog at preflight); Droid and Grok map
+`minimal` to `low`; engines without a distinct `max` level (Codex, Droid, Grok, Copilot, Pi)
+treat `max` as `xhigh`; Codex, Pi, OpenCode, Gemini, and Cursor otherwise record exact requested
+values where those overrides are supported.
 If stdout contains stable JSON or JSONL runtime fields such as `model`, `modelId`,
 `reasoningEffort`, or `model_reasoning_effort`, those provider-observed values replace the
 deterministic resolved values. Droid CLI stdout does not currently include these fields, so

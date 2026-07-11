@@ -285,6 +285,27 @@ describe("createCodexAppServerAdapter", () => {
     expect(invocation.config).not.toContain("[projects.");
   });
 
+  it("maps max effort to xhigh through native protocol fields", async () => {
+    const harness = createHarness();
+    const adapter = createCodexAppServerAdapter();
+    const reviewer = createReviewer(harness.executable, {
+      model: "gpt-test",
+      effort: "max",
+    });
+
+    const output = await adapter.run(createInput(reviewer, harness));
+    const invocation = harness.readInvocation();
+
+    expect(invocation.turnStart).toMatchObject({
+      effort: "xhigh",
+    });
+    expect(output.metadata).toMatchObject({
+      requestedEffort: "max",
+      resolvedEffort: "xhigh",
+      effortResolutionSource: "adapter-selection",
+    });
+  });
+
   it("supports Codex app-server web search overrides", async () => {
     const harness = createHarness({
       sourceConfig: [

@@ -69,9 +69,13 @@ export function codexGlobalArgs(reviewer: ReviewReviewerConfig): string[] {
     args.push("-c", `web_search="${webSearch}"`);
   }
   if (reviewer.effort !== undefined && reviewer.effort !== "off") {
-    args.push("-c", `model_reasoning_effort="${reviewer.effort}"`);
+    args.push("-c", `model_reasoning_effort="${codexCliEffort(reviewer.effort)}"`);
   }
   return args;
+}
+
+function codexCliEffort(effort: string): string {
+  return effort === "max" ? "xhigh" : effort;
 }
 
 export function pushModelAndEffort(
@@ -114,26 +118,29 @@ export function providerQualifiedModel(reviewer: ReviewReviewerConfig): string |
 }
 
 export function claudeCliEffort(effort: string): string {
-  if (effort === "minimal") {
-    return "low";
-  }
-  if (effort === "xhigh") {
-    return "max";
-  }
-  return effort;
+  return effort === "minimal" ? "low" : effort;
 }
 
 export function grokCliEffort(effort: string): string {
-  return effort === "minimal" ? "low" : effort;
+  if (effort === "minimal") {
+    return "low";
+  }
+  return effort === "max" ? "xhigh" : effort;
 }
 
 export function droidCliEffort(effort: string): string {
-  return effort === "minimal" ? "low" : effort;
+  if (effort === "minimal") {
+    return "low";
+  }
+  return effort === "max" ? "xhigh" : effort;
 }
 
 export function copilotCliEffort(effort: string): string {
   if (effort === "off") {
     return "none";
   }
-  return effort === "minimal" ? "low" : effort;
+  if (effort === "minimal") {
+    return "low";
+  }
+  return effort === "max" ? "xhigh" : effort;
 }

@@ -39,9 +39,12 @@ type ClaudeAdapterDependencies = {
   ) => Promise<ClaudeRuntime>;
 };
 
+type ClaudeNativeEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
 type ClaudeRunContext = {
   kind: "claude";
   runtime: ClaudeRuntime;
+  resolvedEffort?: ClaudeNativeEffort;
 };
 
 const defaultClaudeAdapterDependencies: ClaudeAdapterDependencies = {
@@ -62,14 +65,16 @@ export function createClaudeAdapter(
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
       const { query } = await dependencies.loadSdk();
-      const runtime =
-        claudeRunContext(input.runContext)?.runtime ?? (await dependencies.resolveRuntime(input));
+      const runContext = claudeRunContext(input.runContext);
+      const runtime = runContext?.runtime ?? (await dependencies.resolveRuntime(input));
+      const resolvedEffort = runContext?.resolvedEffort;
 
       try {
         const structuredResult = await runClaudeQuery({
           query,
           input,
           runtime,
+          resolvedEffort,
           outputFormat: true,
         });
 
@@ -81,6 +86,7 @@ export function createClaudeAdapter(
                 input,
                 result: structuredResult,
                 runtime,
+                resolvedEffort,
                 captureMode: "native-structured",
               }),
             },
@@ -90,6 +96,7 @@ export function createClaudeAdapter(
               input,
               result: structuredResult,
               runtime,
+              resolvedEffort,
               captureMode: "native-structured",
               structured: structuredOutput.structured,
             });
@@ -99,12 +106,14 @@ export function createClaudeAdapter(
             query,
             input,
             runtime,
+            resolvedEffort,
             outputFormat: false,
           });
           return buildClaudeTextOutput({
             input,
             result: textResult,
             runtime,
+            resolvedEffort,
             fallbackReason: "invalid_structured_output",
             previousResult: structuredResult,
           });
@@ -115,12 +124,14 @@ export function createClaudeAdapter(
             query,
             input,
             runtime,
+            resolvedEffort,
             outputFormat: false,
           });
           return buildClaudeTextOutput({
             input,
             result: textResult,
             runtime,
+            resolvedEffort,
             fallbackReason: structuredResult.subtype,
             previousResult: structuredResult,
           });
@@ -194,20 +205,21 @@ async function prepareClaudeAdapter(
         ...(modelPreflight.model.supportedEffortLevels !== undefined
           ? { supportedEffortLevels: modelPreflight.model.supportedEffortLevels }
           : {}),
-        ...claudeEffortMetadata(input.reviewer),
+        ...claudeEffortMetadata(input.reviewer, modelPreflight.resolvedEffort),
         authMode: runtime.authMode,
         authPreference: runtime.authPreference,
         authMethod: runtime.authMethod,
         apiProvider: runtime.apiProvider,
         subscriptionType: runtime.subscriptionType,
-        tokenSource: runtime.tokenSource,
-        apiKeySource: runtime.apiKeySource,
         executable: runtime.executable,
       }),
     },
     runContext: {
       kind: "claude",
       runtime,
+      ...(modelPreflight.resolvedEffort !== undefined
+        ? { resolvedEffort: modelPreflight.resolvedEffort }
+        : {}),
     },
   };
 }
@@ -232,6 +244,7 @@ type RunClaudeQueryInput = {
   query: ClaudeSdk["query"];
   input: ReviewAdapterInput;
   runtime: ClaudeRuntime;
+  resolvedEffort?: ClaudeNativeEffort | undefined;
   outputFormat: boolean;
 };
 
@@ -283,7 +296,7 @@ async function preflightClaudeModel(options: {
   input: ReviewAdapterPreflightInput;
   runtime: ClaudeRuntime;
   model: string;
-}): Promise<{ model: ClaudeModelInfo }> {
+}): Promise<{ model: ClaudeModelInfo; resolvedEffort?: ClaudeNativeEffort }> {
   const abortBridge = createAbortBridge(options.input.signal);
   const query = options.query({
     prompt: emptyClaudeStreamingInput(),
@@ -309,9 +322,12 @@ async function preflightClaudeModel(options: {
       );
     }
 
-    assertClaudeEffortSupported(model, options.input.reviewer.effort);
+    const resolvedEffort = resolveClaudeModelEffort(model, options.input.reviewer.effort);
 
-    return { model };
+    return {
+      model,
+      ...(resolvedEffort !== undefined ? { resolvedEffort } : {}),
+    };
   } catch (error) {
     if (error instanceof DiffwardenError) {
       throw error;
@@ -363,12 +379,12 @@ function buildClaudeModelPreflightOptions(
 
 async function* emptyClaudeStreamingInput(): AsyncIterable<unknown> {}
 
-function assertClaudeEffortSupported(
+function resolveClaudeModelEffort(
   model: ClaudeModelInfo,
   requestedEffort: string | undefined,
-): void {
+): ClaudeNativeEffort | undefined {
   if (requestedEffort === undefined || requestedEffort === "off") {
-    return;
+    return undefined;
   }
 
   if (model.supportsEffort !== true) {
@@ -380,16 +396,25 @@ function assertClaudeEffortSupported(
   }
 
   const nativeEffort = claudeNativeEffort(requestedEffort);
-  if (
-    model.supportedEffortLevels !== undefined &&
-    !model.supportedEffortLevels.includes(nativeEffort)
-  ) {
-    throw new DiffwardenError(
-      "invalid_effort",
-      `Claude model ${model.value} does not support effort: ${nativeEffort}`,
-      2,
-    );
+  const supportedLevels = model.supportedEffortLevels;
+  if (supportedLevels === undefined || supportedLevels.includes(nativeEffort)) {
+    return nativeEffort;
   }
+
+  // The catalog's top-tier composition varies (sonnet has been observed both
+  // with and without xhigh); substitute within the top tier instead of failing.
+  if (nativeEffort === "xhigh" && supportedLevels.includes("max")) {
+    return "max";
+  }
+  if (nativeEffort === "max" && supportedLevels.includes("xhigh")) {
+    return "xhigh";
+  }
+
+  throw new DiffwardenError(
+    "invalid_effort",
+    `Claude model ${model.value} does not support effort: ${nativeEffort}`,
+    2,
+  );
 }
 
 type ClaudeRuntime =
@@ -401,8 +426,6 @@ type ClaudeRuntime =
       authMethod?: undefined;
       apiProvider?: undefined;
       subscriptionType?: undefined;
-      tokenSource?: undefined;
-      apiKeySource?: undefined;
     }
   | {
       authMode: "claude-code";
@@ -412,8 +435,6 @@ type ClaudeRuntime =
       authMethod?: string;
       apiProvider?: string;
       subscriptionType?: string;
-      tokenSource?: string;
-      apiKeySource?: string;
     };
 
 type ClaudeAuthPreference = "auto" | "api-key" | "claude-code";
@@ -426,8 +447,6 @@ type ClaudeAuthStatus = {
   orgId?: unknown;
   orgName?: unknown;
   subscriptionType?: unknown;
-  tokenSource?: unknown;
-  apiKeySource?: unknown;
 };
 
 type ClaudeSdkMessage =
@@ -496,7 +515,7 @@ function buildClaudeQueryOptions(
     mcpServers: {},
     strictMcpConfig: true,
     persistSession: false,
-    ...claudeQueryEffortOptions(options.input.reviewer.effort),
+    ...claudeQueryEffortOptions(options.input.reviewer.effort, options.resolvedEffort),
   };
 
   if (abortController !== undefined) {
@@ -549,6 +568,7 @@ function buildClaudeTextOutput(options: {
   input: ReviewAdapterInput;
   result: ClaudeResultMessage;
   runtime: ClaudeRuntime;
+  resolvedEffort?: ClaudeNativeEffort | undefined;
   fallbackReason: string;
   previousResult?: ClaudeResultMessage;
 }): ReviewAdapterOutput {
@@ -565,6 +585,10 @@ function buildClaudeTextOutput(options: {
     fallbackReason: options.fallbackReason,
   };
 
+  if (options.resolvedEffort !== undefined) {
+    outputOptions.resolvedEffort = options.resolvedEffort;
+  }
+
   if (options.previousResult !== undefined) {
     outputOptions.previousResult = options.previousResult;
   }
@@ -579,6 +603,7 @@ function claudeOutputMetadata(options: {
   input: ReviewAdapterInput;
   result: ClaudeResultMessage;
   runtime: ClaudeRuntime;
+  resolvedEffort?: ClaudeNativeEffort | undefined;
   captureMode: "native-structured" | "text";
   fallbackReason?: string;
   previousResult?: ClaudeResultMessage;
@@ -589,7 +614,7 @@ function claudeOutputMetadata(options: {
     sessionId: options.result.session_id,
     model,
     ...claudeModelResolutionMetadata(options.input.reviewer, model),
-    ...claudeEffortMetadata(options.input.reviewer),
+    ...claudeEffortMetadata(options.input.reviewer, options.resolvedEffort),
     durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
     totalCostUsd: sumKnownNumbers(
       options.previousResult?.total_cost_usd,
@@ -600,8 +625,6 @@ function claudeOutputMetadata(options: {
     authMethod: options.runtime.authMethod,
     apiProvider: options.runtime.apiProvider,
     subscriptionType: options.runtime.subscriptionType,
-    tokenSource: options.runtime.tokenSource,
-    apiKeySource: options.runtime.apiKeySource,
     executable: options.runtime.executable,
   });
 
@@ -631,6 +654,7 @@ function buildClaudeOutput(options: {
   input: ReviewAdapterInput;
   result: ClaudeResultMessage;
   runtime: ClaudeRuntime;
+  resolvedEffort?: ClaudeNativeEffort | undefined;
   captureMode: "native-structured" | "text";
   structured?: unknown;
   text?: string;
@@ -653,7 +677,10 @@ function buildClaudeOutput(options: {
   });
 }
 
-function claudeQueryEffortOptions(effort: string | undefined): Partial<ClaudeQueryOptions> {
+function claudeQueryEffortOptions(
+  effort: string | undefined,
+  modelResolvedEffort?: ClaudeNativeEffort,
+): Partial<ClaudeQueryOptions> {
   if (effort === undefined) {
     return {};
   }
@@ -665,18 +692,20 @@ function claudeQueryEffortOptions(effort: string | undefined): Partial<ClaudeQue
   }
 
   return {
-    effort: claudeNativeEffort(effort),
+    effort: modelResolvedEffort ?? claudeNativeEffort(effort),
   };
 }
 
 function claudeEffortMetadata(
   reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+  modelResolvedEffort?: ClaudeNativeEffort,
 ): Record<string, string> {
   const effort = reviewer.effort;
   if (effort === undefined) {
     return {};
   }
-  const resolvedEffort = effort === "off" ? "off" : claudeNativeEffort(effort);
+  const resolvedEffort =
+    effort === "off" ? "off" : (modelResolvedEffort ?? claudeNativeEffort(effort));
 
   return {
     effort: resolvedEffort,
@@ -691,7 +720,7 @@ function claudeEffortMetadata(
   };
 }
 
-function claudeNativeEffort(effort: string): "low" | "medium" | "high" | "max" {
+function claudeNativeEffort(effort: string): ClaudeNativeEffort {
   if (effort === "minimal" || effort === "low") {
     return "low";
   }
@@ -700,8 +729,8 @@ function claudeNativeEffort(effort: string): "low" | "medium" | "high" | "max" {
     return "medium";
   }
 
-  if (effort === "xhigh") {
-    return "max";
+  if (effort === "xhigh" || effort === "max") {
+    return effort;
   }
 
   return "high";
@@ -879,8 +908,6 @@ function claudeCodeStatusMetadata(status: ClaudeAuthStatus): {
   authMethod?: string;
   apiProvider?: string;
   subscriptionType?: string;
-  tokenSource?: string;
-  apiKeySource?: string;
 } {
   return {
     ...(typeof status.authMethod === "string" ? { authMethod: status.authMethod } : {}),
@@ -888,8 +915,6 @@ function claudeCodeStatusMetadata(status: ClaudeAuthStatus): {
     ...(typeof status.subscriptionType === "string"
       ? { subscriptionType: status.subscriptionType }
       : {}),
-    ...(typeof status.tokenSource === "string" ? { tokenSource: status.tokenSource } : {}),
-    ...(typeof status.apiKeySource === "string" ? { apiKeySource: status.apiKeySource } : {}),
   };
 }
 

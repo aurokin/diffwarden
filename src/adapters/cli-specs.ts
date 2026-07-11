@@ -1157,7 +1157,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         args.push("--model", model);
       }
       if (input.reviewer.effort !== undefined) {
-        args.push("--thinking", input.reviewer.effort);
+        args.push("--thinking", input.reviewer.effort === "max" ? "xhigh" : input.reviewer.effort);
       }
 
       return {

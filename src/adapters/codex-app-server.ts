@@ -1429,11 +1429,13 @@ function codexAppServerEffort(effort: string): string {
   if (effort === "off") {
     return "none";
   }
-  return effort;
+  return effort === "max" ? "xhigh" : effort;
 }
 
 function codexAppServerEffortSource(reviewer: ReviewReviewerConfig): ResolutionSource {
-  return reviewer.effort === "off" ? "adapter-selection" : (reviewer.effortSource ?? "requested");
+  return reviewer.effort === "off" || reviewer.effort === "max"
+    ? "adapter-selection"
+    : (reviewer.effortSource ?? "requested");
 }
 
 function codexAppServerRunContext(value: unknown): CodexAppServerRunContext | undefined {

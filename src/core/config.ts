@@ -15,7 +15,7 @@ import { invalidConfig } from "./errors.js";
 import { reviewerSdkSchema } from "./schema.js";
 
 const configFileName = "diffwarden.config.json";
-const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const effortSchema = z.enum(effortValues);
 const transportSchema = z.enum(["sdk", "cli", "app-server"]);
 const reportingScopeSchema = z.enum(["global", "repo"]);

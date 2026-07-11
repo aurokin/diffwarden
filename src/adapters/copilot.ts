@@ -1239,7 +1239,10 @@ function copilotSdkEffort(effort: string | undefined): CopilotReasoningEffort | 
   if (effort === undefined || effort === "off") {
     return undefined;
   }
-  return (effort === "minimal" ? "low" : effort) as CopilotReasoningEffort;
+  if (effort === "minimal") {
+    return "low";
+  }
+  return (effort === "max" ? "xhigh" : effort) as CopilotReasoningEffort;
 }
 
 function requiredCopilotBaseDirectory(

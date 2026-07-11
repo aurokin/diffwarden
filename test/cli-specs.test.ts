@@ -1541,6 +1541,39 @@ describe("cliSpecs", () => {
     }
   });
 
+  it("maps max effort to each CLI's strongest supported value", async () => {
+    const cases = [
+      { engine: "codex", flag: "-c", expected: 'model_reasoning_effort="xhigh"' },
+      { engine: "droid", flag: "--spec-reasoning-effort", expected: "xhigh" },
+      { engine: "grok", flag: "--reasoning-effort", expected: "xhigh" },
+      { engine: "pi", flag: "--thinking", expected: "xhigh" },
+      { engine: "opencode", flag: "--variant", expected: "max" },
+    ] as const;
+
+    for (const { engine, flag, expected } of cases) {
+      const invocation = await cliSpecs[engine].buildInvocation(
+        createInput(createReviewer(engine, { effort: "max" })),
+        createTempDir(),
+      );
+      const flagIndex = invocation.args.lastIndexOf(flag);
+      expect(flagIndex, `${engine} should pass ${flag}`).toBeGreaterThanOrEqual(0);
+      expect(invocation.args[flagIndex + 1], engine).toBe(expected);
+    }
+  });
+
+  it("passes max effort through to the Claude CLI", async () => {
+    const invocation = await cliSpecs.claude.buildInvocation(
+      createInput(
+        createReviewer("claude", { effort: "max", sdkOptions: { authMode: "api-key" } }),
+        { env: { ANTHROPIC_API_KEY: "test-key" } },
+      ),
+      createTempDir(),
+    );
+
+    const flagIndex = invocation.args.lastIndexOf("--effort");
+    expect(invocation.args[flagIndex + 1]).toBe("max");
+  });
+
   it("keeps Pi off effort because the CLI accepts it", async () => {
     const invocation = await cliSpecs.pi.buildInvocation(
       createInput(createReviewer("pi", { effort: "off" })),

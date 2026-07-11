@@ -942,19 +942,22 @@ function resolvePiEffort(
   requestedEffort: string | undefined,
   source: ReviewReviewerValueSource | undefined,
 ): {
-  requested?: PiThinkingLevel;
+  requested?: PiThinkingLevel | "max";
   effective?: PiThinkingLevel;
   supported?: PiThinkingLevel[];
   source?: Extract<ReviewReviewerValueSource, "config" | "env" | "requested">;
 } {
-  if (!isPiThinkingLevel(requestedEffort)) {
+  // Pi has no max thinking level; clamp with xhigh but report the public
+  // requested value so the down-mapping stays visible in metadata.
+  const piEffort = requestedEffort === "max" ? "xhigh" : requestedEffort;
+  if (!isPiThinkingLevel(piEffort)) {
     return {};
   }
 
   const supported = supportedPiThinkingLevels(model);
   return {
-    requested: requestedEffort,
-    effective: clampPiThinkingLevel(supported, requestedEffort),
+    requested: requestedEffort === "max" ? "max" : piEffort,
+    effective: clampPiThinkingLevel(supported, piEffort),
     supported,
     ...(source === "config" || source === "env" || source === "requested" ? { source } : {}),
   };
@@ -967,7 +970,7 @@ function piSessionEffortOptions(effort: {
 }
 
 function piEffortMetadata(effort: {
-  requested?: PiThinkingLevel;
+  requested?: PiThinkingLevel | "max";
   effective?: PiThinkingLevel;
   supported?: PiThinkingLevel[];
   source?: Extract<ReviewReviewerValueSource, "config" | "env" | "requested">;
