@@ -424,6 +424,64 @@ describe("runReview", () => {
     expect(reviewer?.raw_text).toBe(garbled);
   });
 
+  it("sums engine-reported spend across the attempt and the repair request", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    const adapter = createRepairScenarioAdapter({
+      runOutputs: [
+        {
+          text: "not json",
+          metadata: { captureMode: "text", durationMs: 1000, totalCostUsd: 0.2 },
+        },
+      ],
+      repairOutput: {
+        structured: { fixable: true, confidence: "high", review: validRepairReview() },
+        metadata: { durationMs: 300, totalCostUsd: 0.05 },
+      },
+    });
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      adapters: { pi: adapter },
+    });
+
+    expect(artifact.reviewers?.[0]?.adapter_metadata).toMatchObject({
+      captureMode: "repaired",
+      durationMs: 1300,
+      totalCostUsd: 0.25,
+    });
+  });
+
+  it("sums engine-reported spend across both attempts of a labeled re-run", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    const adapter = createRepairScenarioAdapter({
+      runOutputs: [
+        {
+          text: "not json",
+          metadata: { captureMode: "text", durationMs: 1000, totalCostUsd: 0.2 },
+        },
+        {
+          structured: validRepairReview(),
+          metadata: { captureMode: "native-structured", durationMs: 400, totalCostUsd: 0.1 },
+        },
+      ],
+    });
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      adapters: { pi: adapter },
+    });
+
+    const metadata = artifact.reviewers?.[0]?.adapter_metadata;
+    expect(metadata).toMatchObject({ attempts: 2, durationMs: 1400 });
+    expect(metadata?.totalCostUsd).toBeCloseTo(0.3);
+  });
+
   it("falls back to a labeled re-run when the repair confidence is low", async () => {
     repo = createWorkspace();
     const resolved = createResolvedTarget(repo);

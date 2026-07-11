@@ -200,11 +200,16 @@ export function createClaudeAdapter(
             `Claude structured query failed: ${formatClaudeResultError(result)}`,
           );
         }
+        const metadata = {
+          ...(result.duration_ms !== undefined ? { durationMs: result.duration_ms } : {}),
+          ...(result.total_cost_usd !== undefined ? { totalCostUsd: result.total_cost_usd } : {}),
+        };
         return {
           ...(result.structured_output !== undefined
             ? { structured: result.structured_output }
             : {}),
           ...(result.result !== undefined ? { text: result.result } : {}),
+          ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
         };
       } finally {
         abortBridge.dispose();
@@ -654,8 +659,8 @@ async function runClaudeQuery(options: RunClaudeQueryInput): Promise<ClaudeResul
     throw reviewerFailed("Claude reviewer did not return a result");
   }
 
-  // Checked here so budget exhaustion during a text-fallback retry gets the
-  // same budget-specific error as the initial structured query.
+  // Budget exhaustion gets its own message so the failure names the limit
+  // the user configured instead of a generic non-success error.
   if (result.subtype === "error_max_budget_usd") {
     throw reviewerFailed(
       "Claude reviewer stopped: the configured maxBudgetUsd was exhausted before the review completed",

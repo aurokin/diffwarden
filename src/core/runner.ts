@@ -817,7 +817,8 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
         options,
         attempt: first,
         material,
-        repaired,
+        repaired: repaired.evaluation,
+        ...(repaired.metadata !== undefined ? { repairMetadata: repaired.metadata } : {}),
         failureReason,
         timingMs: Date.now() - start,
       });
@@ -829,6 +830,7 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
   // producing valid output — a silent second run would hide exactly that.
   const second = await runReviewerAttempt(options, remainingAfter(options, start));
   return buildReviewerArtifact(options, second, Date.now() - start, {
+    ...summedInvocationMetadata(first.output.metadata, second.output.metadata),
     attempts: 2,
     firstAttemptFailureReason: failureReason,
   });
@@ -902,7 +904,7 @@ async function tryStructuredRepair(input: {
   options: SingleReviewerOptions;
   material: string;
   remainingTimeoutMs: number | undefined;
-}): Promise<RepairEvaluation | undefined> {
+}): Promise<{ evaluation: RepairEvaluation; metadata?: Record<string, unknown> } | undefined> {
   const runStructured = input.options.adapter.runStructured;
   if (runStructured === undefined) {
     return undefined;
@@ -930,11 +932,37 @@ async function tryStructuredRepair(input: {
       input.options.reviewer.id,
       "run",
     );
-    return evaluateRepairResponse(output);
+    const evaluation = evaluateRepairResponse(output);
+    if (evaluation === undefined) {
+      return undefined;
+    }
+    return {
+      evaluation,
+      ...(output.metadata !== undefined ? { metadata: output.metadata } : {}),
+    };
   } catch {
     // A failed repair request is never fatal; the labeled re-run is the recovery path.
     return undefined;
   }
+}
+
+/**
+ * Engine-reported spend summed across every invocation the pipeline made, so a repaired or
+ * retried artifact reports the reviewer's full cost instead of only the last invocation's.
+ */
+function summedInvocationMetadata(
+  ...sources: (Record<string, unknown> | undefined)[]
+): Record<string, unknown> {
+  const summed: Record<string, unknown> = {};
+  for (const key of ["durationMs", "totalCostUsd"]) {
+    const values = sources
+      .map((source) => source?.[key])
+      .filter((value): value is number => typeof value === "number");
+    if (values.length > 0) {
+      summed[key] = values.reduce((total, value) => total + value, 0);
+    }
+  }
+  return summed;
 }
 
 function remainingAfter(options: SingleReviewerOptions, start: number): number | undefined {
@@ -990,6 +1018,7 @@ function buildRepairedReviewerArtifact(input: {
   attempt: ReviewerAttempt;
   material: string;
   repaired: RepairEvaluation;
+  repairMetadata?: Record<string, unknown>;
   failureReason: string;
   timingMs: number;
 }): ReviewReviewerArtifact {
@@ -1009,6 +1038,7 @@ function buildRepairedReviewerArtifact(input: {
     raw_text: input.material,
     adapter_metadata: {
       ...input.attempt.output.metadata,
+      ...summedInvocationMetadata(input.attempt.output.metadata, input.repairMetadata),
       captureMode: "repaired",
       repairConfidence: input.repaired.confidence,
       repairFailureReason: input.failureReason,

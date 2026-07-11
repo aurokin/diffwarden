@@ -854,6 +854,7 @@ describe("claudeAdapter", () => {
 
     expect(output).toEqual({
       structured: { fixable: true, confidence: "high", review: null },
+      metadata: { durationMs: 8, totalCostUsd: 0.02 },
     });
     expect(calls[0]?.prompt).toBe("repair this");
     expect(calls[0]?.options).toMatchObject({
