@@ -611,6 +611,7 @@ export async function runReviewerPreflightReport(
     ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
     ...(options.effort !== undefined ? { effort: options.effort } : {}),
     ...(options.effortSource !== undefined ? { effortSource: options.effortSource } : {}),
+    ...(options.fallbackModel !== undefined ? { fallbackModel: options.fallbackModel } : {}),
     ...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
     ...(options.config !== undefined ? { config: options.config } : {}),
   });
