@@ -32,6 +32,9 @@ export const claudeCliReviewPolicyCliFlags = [
   "--json-schema",
 ] as const;
 
+/** Probed against `--help`; absence degrades behavior instead of failing preflight. */
+export const claudeCliOptionalCliFlags = ["--system-prompt", "--bare"] as const;
+
 export function claudeReviewToolList(): string[] {
   return [...claudeReviewTools];
 }

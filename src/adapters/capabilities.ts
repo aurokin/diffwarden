@@ -1,4 +1,5 @@
 import { invalidCli } from "../core/errors.js";
+import { claudeReviewTools } from "./claude-tool-policy.js";
 import type { ReviewAdapterOutput, ReviewReviewerConfig } from "./types.js";
 
 export const reviewerSdkValues = [
@@ -32,6 +33,10 @@ export type ReviewerTransportCapability = {
   supportsEffort: boolean;
   /** Effort diffwarden passes when the reviewer configuration leaves effort unset. */
   defaultEffort?: string;
+  /** Whether diffwarden can deliver its stable review contract as the engine's system prompt. */
+  supportsSystemPrompt?: boolean;
+  /** Read-only tools described in the contract when diffwarden controls the engine toolset. */
+  systemPromptTools?: readonly string[];
   captureMode: CaptureMode;
   readonlyCapability: ReadonlyCapability;
 };
@@ -130,6 +135,8 @@ const reviewerCapabilityDefinitions = {
         supportsModel: true,
         supportsEffort: true,
         defaultEffort: "high",
+        supportsSystemPrompt: true,
+        systemPromptTools: claudeReviewTools,
         captureMode: "native-structured",
         readonlyCapability: "tool-restricted",
       },
@@ -140,6 +147,8 @@ const reviewerCapabilityDefinitions = {
         supportsModel: true,
         supportsEffort: true,
         defaultEffort: "high",
+        supportsSystemPrompt: true,
+        systemPromptTools: claudeReviewTools,
         captureMode: "native-structured",
         readonlyCapability: "tool-restricted",
       },
@@ -371,6 +380,18 @@ export function reviewerDefaultEffort(
 ): string | undefined {
   const effectiveTransport = transport ?? defaultReviewerTransport(sdk) ?? "sdk";
   return getTransportCapability(sdk, effectiveTransport)?.defaultEffort;
+}
+
+export function reviewerSystemPromptSupport(
+  sdk: ReviewerSdk,
+  transport: ReviewerTransport | undefined,
+): { tools?: readonly string[] } | undefined {
+  const effectiveTransport = transport ?? defaultReviewerTransport(sdk) ?? "sdk";
+  const capability = getTransportCapability(sdk, effectiveTransport);
+  if (capability?.supportsSystemPrompt !== true) {
+    return undefined;
+  }
+  return capability.systemPromptTools !== undefined ? { tools: capability.systemPromptTools } : {};
 }
 
 export function reviewerSdkPackage(sdk: ReviewerSdk): string | undefined {

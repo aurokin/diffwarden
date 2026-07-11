@@ -1,3 +1,4 @@
+import { reviewerSystemPromptSupport } from "../adapters/capabilities.js";
 import { claudeAdapter } from "../adapters/claude.js";
 import { createCliAdapter } from "../adapters/cli.js";
 import { createCodexAppServerAdapter } from "../adapters/codex-app-server.js";
@@ -25,7 +26,7 @@ import type { ReviewErrorCode } from "./errors.js";
 import type { ResolvedDiff } from "./git.js";
 import { tryGetRepoRoot } from "./git.js";
 import { parseReviewOutput } from "./parse.js";
-import { buildReviewPrompt } from "./prompt.js";
+import { buildReviewPrompt, buildReviewPromptParts } from "./prompt.js";
 import { type ReviewerOverrideSource, resolveReviewerConfigs } from "./reviewer.js";
 import type {
   ParseMode,
@@ -107,9 +108,6 @@ export async function* runReviewEvents(
 ): AsyncGenerator<ReviewEvent, ReviewArtifact | undefined, void> {
   const reviewers = resolveRunReviewers(options);
   const start = Date.now();
-  const prompt = buildReviewPrompt(options.resolved.target, options.resolved.diff, {
-    ...(options.promptFocus !== undefined ? { focus: options.promptFocus } : {}),
-  });
   const changedLineRanges = parseChangedLineRanges(options.resolved.diff);
   const env = options.env ?? process.env;
 
@@ -129,7 +127,6 @@ export async function* runReviewEvents(
       preflightOutcomes,
       reviewerArtifacts,
       options,
-      prompt,
       changedLineRanges,
       env,
     });
@@ -437,19 +434,11 @@ async function* runPhase(params: {
   preflightOutcomes: PreflightOutcome[];
   reviewerArtifacts: ReviewReviewerArtifact[];
   options: RunReviewOptions;
-  prompt: string;
   changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
   env: NodeJS.ProcessEnv;
 }): AsyncGenerator<ReviewEvent, void, void> {
-  const {
-    reviewers,
-    preflightOutcomes,
-    reviewerArtifacts,
-    options,
-    prompt,
-    changedLineRanges,
-    env,
-  } = params;
+  const { reviewers, preflightOutcomes, reviewerArtifacts, options, changedLineRanges, env } =
+    params;
 
   const runnable: Array<{ index: number; outcome: PreflightOutcome }> = [];
   preflightOutcomes.forEach((outcome, index) => {
@@ -470,7 +459,7 @@ async function* runPhase(params: {
         outcome,
         cwd: options.cwd,
         resolved: options.resolved,
-        prompt,
+        ...(options.promptFocus !== undefined ? { promptFocus: options.promptFocus } : {}),
         changedLineRanges,
         env,
       }).then((artifact) => ({ originalIndex: index, artifact })),
@@ -708,7 +697,7 @@ async function runReviewerOutcome(options: {
   outcome: PreflightOutcome;
   cwd: string;
   resolved: ResolvedDiff;
-  prompt: string;
+  promptFocus?: string;
   changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
   env: NodeJS.ProcessEnv;
 }): Promise<ReviewReviewerArtifact> {
@@ -728,7 +717,11 @@ async function runReviewerOutcome(options: {
       ...(context.remainingTimeoutMs !== undefined
         ? { remainingTimeoutMs: context.remainingTimeoutMs }
         : {}),
-      prompt: options.prompt,
+      promptSelection: reviewerPromptSelection(
+        context.reviewer,
+        options.resolved,
+        options.promptFocus,
+      ),
       changedLineRanges: options.changedLineRanges,
       env: options.env,
     });
@@ -746,6 +739,35 @@ async function runReviewerOutcome(options: {
   }
 }
 
+type ReviewerPromptSelection = {
+  prompt: string;
+  systemPrompt?: string;
+};
+
+/**
+ * Pick the prompt shape for one reviewer: transports that support a system
+ * prompt get the stable diffwarden contract as `systemPrompt` and only the
+ * per-run engagement as `prompt`; everything else gets today's single
+ * concatenated prompt unchanged.
+ */
+function reviewerPromptSelection(
+  reviewer: ReviewReviewerConfig,
+  resolved: ResolvedDiff,
+  promptFocus: string | undefined,
+): ReviewerPromptSelection {
+  const focusOptions = promptFocus !== undefined ? { focus: promptFocus } : {};
+  const support = reviewerSystemPromptSupport(reviewer.sdk, reviewer.transport);
+  if (support === undefined) {
+    return { prompt: buildReviewPrompt(resolved.target, resolved.diff, focusOptions) };
+  }
+
+  const parts = buildReviewPromptParts(resolved.target, resolved.diff, {
+    ...focusOptions,
+    ...(support.tools !== undefined ? { tools: support.tools } : {}),
+  });
+  return { prompt: parts.user, systemPrompt: parts.system };
+}
+
 type SingleReviewerOptions = {
   cwd: string;
   resolved: ResolvedDiff;
@@ -754,7 +776,7 @@ type SingleReviewerOptions = {
   preflight?: Awaited<ReturnType<NonNullable<ReviewAdapter["preflight"]>>>;
   runContext?: unknown;
   remainingTimeoutMs?: number;
-  prompt: string;
+  promptSelection: ReviewerPromptSelection;
   changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
   env: NodeJS.ProcessEnv;
 };
@@ -768,7 +790,10 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
     target: options.resolved.target,
     diff: options.resolved.diff,
     changedFiles: options.resolved.target.changed_files,
-    prompt: options.prompt,
+    prompt: options.promptSelection.prompt,
+    ...(options.promptSelection.systemPrompt !== undefined
+      ? { systemPrompt: options.promptSelection.systemPrompt }
+      : {}),
     ...(options.remainingTimeoutMs !== undefined ? { timeoutMs: options.remainingTimeoutMs } : {}),
     signal: abortController.signal,
     readonly: true,

@@ -13,6 +13,9 @@ export type CliInvocation = {
   outputPath?: string;
   droidLogGroupId?: string | undefined;
   droidSessionDirectory?: string;
+  claudeAuthMode?: "api-key" | "claude-code";
+  /** Invocation-level metadata merged into the run output metadata. */
+  metadata?: Record<string, string>;
   captureMode: NonNullable<ReviewAdapterOutput["metadata"]>["captureMode"];
 };
 

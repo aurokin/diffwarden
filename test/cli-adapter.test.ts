@@ -12,7 +12,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { antigravityCliReviewDeniedPermissions } from "../src/adapters/antigravity-tool-policy.js";
-import { claudeCliReviewPolicyCliFlags } from "../src/adapters/claude-tool-policy.js";
+import {
+  claudeCliOptionalCliFlags,
+  claudeCliReviewPolicyCliFlags,
+} from "../src/adapters/claude-tool-policy.js";
 import { createCliAdapter } from "../src/adapters/cli.js";
 import {
   copilotCliReviewDeniedToolPatterns,
@@ -1233,6 +1236,80 @@ describe("createCliAdapter", () => {
     expect(invocation.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
   });
 
+  it("passes the diffwarden contract via --system-prompt when the Claude CLI supports it", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, {
+      sdkOptions: { authMode: "api-key" },
+    });
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      systemPrompt: "stable diffwarden contract",
+      env: {
+        ...harness.env,
+        ANTHROPIC_API_KEY: "test-key",
+        DIFFWARDEN_FAKE_CLAUDE_OPTIONAL_HELP: "1",
+      },
+    });
+    const invocation = harness.readInvocation();
+
+    const flagIndex = invocation.args.indexOf("--system-prompt");
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(invocation.args[flagIndex + 1]).toBe("stable diffwarden contract");
+    expect(invocation.stdin).toBe("review prompt");
+    expect(invocation.args).toContain("--bare");
+    expect(output.metadata).toMatchObject({
+      systemPromptMode: "system-prompt",
+      bare: "true",
+    });
+  });
+
+  it("concatenates the contract into stdin when the Claude CLI lacks --system-prompt", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, {
+      sdkOptions: { authMode: "api-key" },
+    });
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      systemPrompt: "stable diffwarden contract",
+      env: {
+        ...harness.env,
+        ANTHROPIC_API_KEY: "test-key",
+      },
+    });
+    const invocation = harness.readInvocation();
+
+    expect(invocation.args).not.toContain("--system-prompt");
+    expect(invocation.args).not.toContain("--bare");
+    expect(invocation.stdin).toBe("stable diffwarden contract\n\nreview prompt");
+    expect(output.metadata).toMatchObject({
+      systemPromptMode: "concatenated",
+      bare: "false",
+    });
+  });
+
+  it("does not pass --bare for Claude Code delegated auth", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable);
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_CLAUDE_OPTIONAL_HELP: "1",
+      },
+    });
+    const invocation = harness.readInvocation();
+
+    expect(invocation.args).not.toContain("--bare");
+    expect(output.metadata).toMatchObject({ bare: "false" });
+    expect(output.metadata).not.toHaveProperty("systemPromptMode");
+  });
+
   it("fails Claude CLI preflight when the executable lacks review policy flags", async () => {
     const harness = createHarness("claude");
     const adapter = createCliAdapter("claude");
@@ -1863,6 +1940,10 @@ if (engine === "claude" && process.argv[2] === "auth" && process.argv[3] === "st
 if (engine === "claude" && process.argv.includes("--help")) {
   if (process.env.DIFFWARDEN_FAKE_OLD_CLAUDE_HELP === "1") {
     process.stdout.write("--tools --disallowedTools --permission-mode");
+  } else if (process.env.DIFFWARDEN_FAKE_CLAUDE_OPTIONAL_HELP === "1") {
+    process.stdout.write(${JSON.stringify(
+      [...claudeCliReviewPolicyCliFlags, ...claudeCliOptionalCliFlags].join(" "),
+    )});
   } else {
     process.stdout.write(${JSON.stringify(claudeCliReviewPolicyCliFlags.join(" "))});
   }

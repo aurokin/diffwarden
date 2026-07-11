@@ -7,6 +7,7 @@ import {
   reviewerCapabilities,
   reviewerSdkPackage,
   reviewerSdkValues,
+  reviewerSystemPromptSupport,
 } from "../src/adapters/capabilities.js";
 import { resolveReviewerConfig } from "../src/core/reviewer.js";
 
@@ -44,6 +45,24 @@ describe("reviewerCapabilities", () => {
     expect(defaultReviewerTransport("grok")).toBe("cli");
     expect(defaultReviewerTransport("antigravity")).toBe("cli");
     expect(defaultReviewerTransport("claude")).toBeUndefined();
+  });
+
+  it("declares system-prompt support only for claude transports", () => {
+    expect(reviewerSystemPromptSupport("claude", undefined)).toEqual({
+      tools: ["Read", "Grep", "Glob"],
+    });
+    expect(reviewerSystemPromptSupport("claude", "sdk")).toEqual({
+      tools: ["Read", "Grep", "Glob"],
+    });
+    expect(reviewerSystemPromptSupport("claude", "cli")).toEqual({
+      tools: ["Read", "Grep", "Glob"],
+    });
+    for (const sdk of expectedReviewerSdks) {
+      if (sdk === "claude") {
+        continue;
+      }
+      expect(reviewerSystemPromptSupport(sdk, undefined)).toBeUndefined();
+    }
   });
 
   it("matches reviewer resolution defaults", () => {

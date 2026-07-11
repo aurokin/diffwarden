@@ -10,6 +10,7 @@ import {
 } from "../core/errors.js";
 import { reviewResultJsonSchema } from "../core/schema.js";
 import {
+  claudeCliOptionalCliFlags,
   claudeDisallowedToolList,
   claudeReviewToolList,
   claudeSdkReviewPolicyCliFlags,
@@ -294,6 +295,7 @@ type ClaudeQueryOptions = {
   allowedTools?: string[];
   disallowedTools?: string[];
   permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
+  systemPrompt?: string;
   settingSources?: Array<"user" | "project" | "local">;
   mcpServers?: Record<string, unknown>;
   strictMcpConfig?: boolean;
@@ -546,6 +548,9 @@ function buildClaudeQueryOptions(
   const queryOptions: ClaudeQueryOptions = {
     cwd: options.input.cwd,
     model: options.input.reviewer.model ?? defaultClaudeModel,
+    ...(options.input.systemPrompt !== undefined
+      ? { systemPrompt: options.input.systemPrompt }
+      : {}),
     tools: claudeReviewToolList(),
     allowedTools: claudeReviewToolList(),
     disallowedTools: claudeDisallowedToolList(),
@@ -662,6 +667,7 @@ function claudeOutputMetadata(options: {
     model,
     ...claudeModelResolutionMetadata(options.input.reviewer, model),
     ...claudeEffortMetadata(options.input.reviewer, options.resolvedEffort, options.effortDropped),
+    ...(options.input.systemPrompt !== undefined ? { systemPromptMode: "system-prompt" } : {}),
     durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
     totalCostUsd: sumKnownNumbers(
       options.previousResult?.total_cost_usd,
@@ -862,7 +868,7 @@ export async function assertClaudeExecutableSupportsReviewPolicy(
   executable: string,
   env: NodeJS.ProcessEnv | undefined,
   requiredFlags: readonly string[] = claudeSdkReviewPolicyCliFlags,
-): Promise<void> {
+): Promise<string> {
   let stdout: string;
   try {
     ({ stdout } = await execCliFile(executable, ["--help"], {
@@ -880,6 +886,17 @@ export async function assertClaudeExecutableSupportsReviewPolicy(
       `Claude executable does not support Diffwarden review policy flags: ${missingFlags.join(", ")}. Upgrade Claude Code or use sdkOptions.authMode "api-key".`,
     );
   }
+
+  return stdout;
+}
+
+/**
+ * Optional Claude CLI flags probed against `--help` output. Unlike the review
+ * policy flags, a missing optional flag degrades behavior instead of failing
+ * preflight, so older-but-working CLIs keep running.
+ */
+export function claudeCliOptionalFlagSupport(helpOutput: string): string[] {
+  return claudeCliOptionalCliFlags.filter((flag) => helpOutput.includes(flag));
 }
 
 async function getClaudeCodeAuthStatus(
