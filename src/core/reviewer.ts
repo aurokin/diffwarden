@@ -11,7 +11,7 @@ import type { ReviewReviewerConfig, ReviewReviewerValueSource } from "../adapter
 import type { DiffwardenConfig } from "./config.js";
 import { invalidCli, invalidConfig } from "./errors.js";
 
-const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export type ReviewEffort = (typeof effortValues)[number];
 

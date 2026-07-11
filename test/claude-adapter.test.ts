@@ -318,6 +318,100 @@ describe("claudeAdapter", () => {
     expect(closeCalls()).toBe(1);
   });
 
+  it("keeps xhigh unclamped when the model catalog lists it", async () => {
+    const { adapter } = createMockClaudePreflightAdapter([
+      {
+        value: "default",
+        displayName: "Default",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      },
+    ]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "default",
+        effort: "xhigh",
+        effortSource: "config",
+        readonly: true,
+      },
+      readonly: true,
+      env: { ANTHROPIC_API_KEY: "test-key" },
+    });
+
+    expect(preflight?.metadata).toMatchObject({
+      effort: "xhigh",
+      requestedEffort: "xhigh",
+      resolvedEffort: "xhigh",
+      effortResolutionSource: "config",
+    });
+  });
+
+  it("clamps max to xhigh when the model catalog lists only xhigh", async () => {
+    const { adapter } = createMockClaudePreflightAdapter([
+      {
+        value: "legacy",
+        displayName: "Legacy",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh"],
+      },
+    ]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "legacy",
+        effort: "max",
+        effortSource: "config",
+        readonly: true,
+      },
+      readonly: true,
+      env: { ANTHROPIC_API_KEY: "test-key" },
+    });
+
+    expect(preflight?.metadata).toMatchObject({
+      effort: "xhigh",
+      requestedEffort: "max",
+      resolvedEffort: "xhigh",
+      effortResolutionSource: "adapter-selection",
+    });
+  });
+
+  it("rejects top-tier effort when the model catalog supports neither xhigh nor max", async () => {
+    const { adapter } = createMockClaudePreflightAdapter([
+      {
+        value: "basic",
+        displayName: "Basic",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high"],
+      },
+    ]);
+
+    await expect(
+      adapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "basic",
+          effort: "max",
+          effortSource: "config",
+          readonly: true,
+        },
+        readonly: true,
+        env: { ANTHROPIC_API_KEY: "test-key" },
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_effort",
+      exitCode: 2,
+    });
+  });
+
   it("rejects unavailable Claude models during preflight", async () => {
     const { adapter, closeCalls } = createMockClaudePreflightAdapter([
       {
@@ -568,17 +662,58 @@ describe("claudeAdapter", () => {
       mcpServers: {},
       strictMcpConfig: true,
       persistSession: false,
-      effort: "max",
+      effort: "xhigh",
     });
     expect(calls[0]?.options).not.toHaveProperty("maxTurns");
+    expect(output.metadata).toMatchObject({
+      effort: "xhigh",
+      requestedEffort: "xhigh",
+      resolvedEffort: "xhigh",
+      effortResolutionSource: "requested",
+      requestedModel: "sonnet",
+      resolvedModel: "sonnet",
+      modelResolutionSource: "requested",
+    });
+  });
+
+  it("prefers the preflight-resolved effort from the run context", async () => {
+    const { adapter, calls } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "success",
+        structured_output: validReview(),
+        duration_ms: 12,
+        total_cost_usd: 0.1,
+        session_id: "structured-session",
+      },
+    ]);
+
+    const output = await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "sonnet",
+          effort: "xhigh",
+          readonly: true,
+        },
+        runContext: {
+          kind: "claude",
+          runtime: { authMode: "api-key", authPreference: "auto" },
+          resolvedEffort: "max",
+        },
+      }),
+    );
+
+    expect(calls[0]?.options).toMatchObject({
+      effort: "max",
+    });
     expect(output.metadata).toMatchObject({
       effort: "max",
       requestedEffort: "xhigh",
       resolvedEffort: "max",
       effortResolutionSource: "adapter-selection",
-      requestedModel: "sonnet",
-      resolvedModel: "sonnet",
-      modelResolutionSource: "requested",
     });
   });
 

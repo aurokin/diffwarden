@@ -947,14 +947,15 @@ function resolvePiEffort(
   supported?: PiThinkingLevel[];
   source?: Extract<ReviewReviewerValueSource, "config" | "env" | "requested">;
 } {
-  if (!isPiThinkingLevel(requestedEffort)) {
+  const piEffort = requestedEffort === "max" ? "xhigh" : requestedEffort;
+  if (!isPiThinkingLevel(piEffort)) {
     return {};
   }
 
   const supported = supportedPiThinkingLevels(model);
   return {
-    requested: requestedEffort,
-    effective: clampPiThinkingLevel(supported, requestedEffort),
+    requested: piEffort,
+    effective: clampPiThinkingLevel(supported, piEffort),
     supported,
     ...(source === "config" || source === "env" || source === "requested" ? { source } : {}),
   };

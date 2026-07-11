@@ -25,6 +25,8 @@ Use the official docs and cookbook examples for current SDK usage, authenticatio
 - Implemented adapter dependency on 2026-05-18: `@anthropic-ai/claude-agent-sdk@0.3.143`.
 - Local inspection on 2026-05-19: Claude Code `2.1.143` supports `claude -p` and `claude auth status --json`; SDK `query()` can use local Claude Code auth by setting `pathToClaudeCodeExecutable: "claude"`.
 - Claude native structured output implemented on 2026-05-19 through `options.outputFormat: { type: "json_schema", schema }`; live smoke required `maxTurns` above `1` for the SDK's schema-validation flow.
+- Local inspection on 2026-07-10: Claude Code `2.1.206` `auth status --json` emits `loggedIn`, `authMethod`, `apiProvider`, `email`, `orgId`, `orgName`, and `subscriptionType`; the previously parsed `tokenSource` field is gone and `apiKeySource` appears only under api-key auth, which the claude-code status path never exercises. `--effort` accepts `low, medium, high, xhigh, max`.
+- Live `query.supportedModels()` catalog on 2026-07-10 (SDK `0.3.167`): `default` lists `supportedEffortLevels` `low, medium, high, xhigh, max`; `sonnet` and `sonnet[1m]` list `low, medium, high, max` (no `xhigh`); `haiku` reports no effort support. Catalogs expose at most one of the two top levels, so the adapter substitutes within the top tier at preflight instead of failing.
 
 Use upstream docs for current `query()` options, structured output support, tool permissions, authentication behavior, and SDK version notes.
 

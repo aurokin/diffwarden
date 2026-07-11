@@ -296,7 +296,7 @@ Rules:
 - `--model` applies to single-reviewer runs.
 - Multi-reviewer runs should put model selection in named reviewer profiles.
 - If more than one reviewer is selected and `--model` or `--effort` is provided, exit `2`.
-- `--effort` is a closed public enum aligned with Pi's thinking levels. Initial values: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+- `--effort` is a closed public enum aligned with Pi's thinking levels plus Claude's top tier. Values: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
 - Invalid effort values fail during CLI/config validation with exit `2`.
 - Invalid model values fail gracefully with a specific error. Prefer local validation against the selected reviewer/profile model catalog; if the SDK/provider rejects the model during preflight or execution, surface that as a reviewer setup/execution failure with exit `3`.
 - Effort is best understood as requested reasoning intensity. Adapters may record a different effective effort when the SDK or model maps/clamps the requested value.
@@ -307,7 +307,7 @@ Pi effort handling is the reference implementation:
 - Pi model metadata includes `reasoning` and optional `thinkingLevelMap` values.
 - Pi's `getSupportedThinkingLevels()` and `clampThinkingLevel()` in `/Users/auro/code/upstream/pi-mono/packages/ai/src/models.ts` compute model-supported levels and map unsupported requests to a nearby supported value.
 - `diffwarden` passes Pi profiles a requested thinking level, clamps it through model metadata, sends the effective `thinkingLevel`, and records requested/effective/supported effort metadata. Provider-specific effort tables must stay inside the adapter/SDK metadata path.
-- Claude maps `off` to disabled thinking, `minimal` and `low` to native `low`, `medium` to native `medium`, `high` to native `high`, and `xhigh` to native `max`. Adapter metadata records both requested and effective values.
+- Claude maps `off` to disabled thinking and `minimal` to native `low`; `low`, `medium`, `high`, `xhigh`, and `max` pass through natively. SDK preflight resolves `xhigh`/`max` against the model catalog's `supportedEffortLevels` and substitutes within the top tier when the model exposes only one of the two (for example `xhigh` resolves to `max` on models that list only `max`); the CLI transport statically maps `xhigh` to `max` because it has no catalog access. Adapter metadata records both requested and effective values.
 - Cursor reports effort as `ignored` with the requested value because the current Cursor SDK path does not expose a concrete reasoning-control option.
 
 Adapters should implement a preflight step before running review:
@@ -557,7 +557,7 @@ export type ReviewReviewerConfig = {
   model?: string;
   effort?: string;
   modelCatalog?: string[];
-  effortCatalog?: Array<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | string>;
+  effortCatalog?: Array<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | string>;
   timeoutMs?: number;
   readonly: boolean;
   cliOptions?: Record<string, unknown>;
@@ -571,7 +571,7 @@ Rules:
 - `model` is the model identifier passed to the adapter when supported.
 - `modelCatalog` is an optional allow-list used for local validation. If present, a model outside the list is an exit `2` configuration error.
 - `effort` is a normalized intent, not a guaranteed cross-SDK value. Each adapter maps it to the closest SDK-specific setting and records requested/effective values in verbose metadata when possible.
-- `effortCatalog` defaults to `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. Values outside the selected catalog are an exit `2` configuration error.
+- `effortCatalog` defaults to `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Values outside the selected catalog are an exit `2` configuration error.
 - `provider` and `providerOptions` are mainly for SDKs that route through configurable providers, such as Pi profiles that target OpenRouter or other backends.
 - `sdkOptions` is an escape hatch for version-sensitive adapter configuration. Keep it out of the public CLI unless a specific option becomes common enough to promote.
 
@@ -948,7 +948,7 @@ Findings:
 - Current Claude docs describe `allowedTools` as approval rules only. Use `tools` to constrain built-in tool availability and pair `allowedTools` with `permissionMode: "dontAsk"` for locked-down SDK agents.
 - Local Claude Code executable auth is only used when `claude --help` advertises the policy flags Diffwarden passes. This makes newer flag requirements explicit during preflight instead of allowing unknown-option failures during review execution.
 - The SDK may spawn a native Claude Code binary through optional per-platform dependencies. Preflight must check runtime/package/binary availability.
-- The local changelog exports an `EffortLevel` type with `low`, `medium`, `high`, and `max`; it also exposes model capability metadata such as supported effort levels. The CLI's public `xhigh` maps to Claude `max`.
+- The SDK exports an `EffortLevel` type with `low`, `medium`, `high`, `xhigh`, and `max`; it also exposes model capability metadata such as supported effort levels. Model catalogs list at most one of the two top levels (the 2026-07 catalog lists `xhigh` for `default` and `max` for `sonnet`), so preflight substitutes within the top tier instead of failing.
 
 #### Pi Agent SDK
 
@@ -1255,10 +1255,10 @@ Rules:
 - Secrets in config must be env var references only. Do not support literal API keys in committed or user config.
 - Pi is the recommended default reviewer profile because it supports the broadest provider surface. Claude subscription users should configure a Claude profile, Cursor subscription users should configure a Cursor profile, and other provider routes should generally use Pi profiles.
 
-The public `effort` vocabulary follows Pi thinking levels: `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. Adapter mappings are:
+The public `effort` vocabulary follows Pi thinking levels plus Claude's top tier: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Engines without a distinct `max` level treat `max` as `xhigh` (OpenCode passes it through verbatim because its effort values are model variant names). Adapter mappings are:
 
-- Pi: clamp the requested level through model metadata, send the effective `thinkingLevel`, and record requested/effective/supported effort metadata.
-- Claude: `off` disables thinking; `minimal` and `low` map to `low`; `medium` maps to `medium`; `high` maps to `high`; `xhigh` maps to `max`.
+- Pi: treat `max` as `xhigh`, clamp the requested level through model metadata, send the effective `thinkingLevel`, and record requested/effective/supported effort metadata.
+- Claude: `off` disables thinking; `minimal` maps to `low`; `low` through `max` pass through natively, with SDK preflight substituting within the top tier (`xhigh`/`max`) when the model catalog exposes only one of the two.
 - Cursor: record the requested value as ignored until the SDK exposes an effort control.
 - Droid: omit `off`, map `minimal` to `low`, and pass other supported values through as `specModeReasoningEffort` for spec-mode reviews.
 

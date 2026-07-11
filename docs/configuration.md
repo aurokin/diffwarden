@@ -344,6 +344,7 @@ Public effort values:
 - `medium`
 - `high`
 - `xhigh`
+- `max`
 
 ## Pi Provider Profile Example
 

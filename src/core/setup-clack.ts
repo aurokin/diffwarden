@@ -30,7 +30,7 @@ import type { ReviewerDiscoveryCandidate } from "./discovery.js";
 // they do not silently fall back to stdout.
 const io = { input: process.stdin, output: process.stderr };
 
-const effortChoices = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const effortChoices = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /** Sentinel value for the always-visible "✕ quit" option, distinct from any real field value. */
 const QUIT = "__quit__" as const;
