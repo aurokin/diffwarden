@@ -852,9 +852,10 @@ export async function resolveClaudeRuntime(
   }
 
   if (claudeCodeStatus === undefined && oauthToken && transport === "sdk") {
-    // `claude auth status` was unavailable, typically because no executable is
-    // on PATH. The SDK transport bundles its own Claude Code CLI, so a
-    // setup-token (`claude setup-token`) can still authenticate it directly.
+    // `claude auth status` was unavailable — no executable on PATH, or the
+    // status call failed or returned unparseable output. The SDK transport
+    // bundles its own Claude Code CLI, so a setup-token (`claude setup-token`)
+    // can still authenticate it directly, bypassing the local executable.
     return {
       authMode: "claude-code",
       authPreference,

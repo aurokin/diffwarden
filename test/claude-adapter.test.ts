@@ -293,6 +293,38 @@ describe("claudeAdapter", () => {
     });
   });
 
+  it("uses the normal executable path when a setup token and executable are both present", async () => {
+    // Mirrors real CLI behavior (verified on 2.1.206): `claude auth status`
+    // reports loggedIn true with authMethod oauth_token for any token value.
+    const fakeBin = createEnvSensitiveFakeClaudeExecutable();
+    const { adapter, calls } = createMockClaudePreflightAdapterWithRuntime([{ value: "sonnet" }]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "sonnet",
+        readonly: true,
+      },
+      readonly: true,
+      env: {
+        PATH: fakeBin,
+        CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token",
+      },
+    });
+
+    expect(preflight?.metadata).toMatchObject({
+      authMode: "claude-code",
+      authMethod: "oauth_token",
+      executable: "claude",
+    });
+    expect(calls[0]?.options?.pathToClaudeCodeExecutable).toBe("claude");
+    expect(calls[0]?.options?.env).toMatchObject({
+      CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token",
+    });
+  });
+
   it("prefers the setup token over ANTHROPIC_API_KEY in auto mode without an executable", async () => {
     const { adapter, calls } = createMockClaudePreflightAdapterWithRuntime([{ value: "sonnet" }]);
 
@@ -1247,7 +1279,9 @@ function createEnvSensitiveFakeClaudeExecutable(options: { policyFlags?: boolean
     executable,
     `#!/bin/sh
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
-  if [ -n "$ANTHROPIC_API_KEY" ]; then
+  if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+    echo '{"loggedIn":true,"authMethod":"oauth_token"}'
+  elif [ -n "$ANTHROPIC_API_KEY" ]; then
     echo '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","apiKeySource":"ANTHROPIC_API_KEY"}'
   else
     echo '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"max"}'
