@@ -142,12 +142,6 @@ export function createClaudeAdapter(
           });
         }
 
-        if (structuredResult.subtype === "error_max_budget_usd") {
-          throw reviewerFailed(
-            "Claude reviewer stopped: the configured maxBudgetUsd was exhausted before the review completed",
-          );
-        }
-
         if (structuredResult.subtype === "error_max_structured_output_retries") {
           const textResult = await runClaudeQuery({
             query,
@@ -585,6 +579,14 @@ async function runClaudeQuery(options: RunClaudeQueryInput): Promise<ClaudeResul
     throw reviewerFailed("Claude reviewer did not return a result");
   }
 
+  // Checked here so budget exhaustion during a text-fallback retry gets the
+  // same budget-specific error as the initial structured query.
+  if (result.subtype === "error_max_budget_usd") {
+    throw reviewerFailed(
+      "Claude reviewer stopped: the configured maxBudgetUsd was exhausted before the review completed",
+    );
+  }
+
   return result;
 }
 
@@ -909,12 +911,14 @@ function claudeFallbackUsageMetadata(
   return { fallbackModelUsed: used ? "true" : "false" };
 }
 
+// Strings, matching the CLI transport's Record<string, string> invocation
+// metadata so both transports report the same shape for the same keys.
 function claudeRunLimitMetadata(
   reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
-): Record<string, number> {
+): Record<string, string> {
   return {
-    ...(reviewer.maxTurns !== undefined ? { maxTurns: reviewer.maxTurns } : {}),
-    ...(reviewer.maxBudgetUsd !== undefined ? { maxBudgetUsd: reviewer.maxBudgetUsd } : {}),
+    ...(reviewer.maxTurns !== undefined ? { maxTurns: String(reviewer.maxTurns) } : {}),
+    ...(reviewer.maxBudgetUsd !== undefined ? { maxBudgetUsd: String(reviewer.maxBudgetUsd) } : {}),
   };
 }
 

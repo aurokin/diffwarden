@@ -1160,11 +1160,12 @@ describe("claudeAdapter", () => {
       maxTurns: 40,
       maxBudgetUsd: 2.5,
     });
+    // Limit metadata is stringly typed to match the CLI transport's shape.
     expect(output.metadata).toMatchObject({
       fallbackModel: "sonnet",
       fallbackModelSource: "requested",
-      maxTurns: 40,
-      maxBudgetUsd: 2.5,
+      maxTurns: "40",
+      maxBudgetUsd: "2.5",
     });
   });
 
@@ -1272,6 +1273,39 @@ describe("claudeAdapter", () => {
 
     await expect(
       adapter.run(
+        input({
+          env: { ANTHROPIC_API_KEY: "test-key" },
+          reviewer: {
+            id: "claude",
+            sdk: "claude",
+            model: "sonnet",
+            maxBudgetUsd: 2.5,
+            readonly: true,
+          },
+        }),
+      ),
+    ).rejects.toThrow("maxBudgetUsd was exhausted before the review completed");
+
+    // The budget can also run out during the text-fallback retry; that path
+    // must produce the same budget-specific error, not a generic failure.
+    const { adapter: retryAdapter } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "error_max_structured_output_retries",
+        duration_ms: 15,
+        total_cost_usd: 2.0,
+        session_id: "structured-session",
+      },
+      {
+        type: "result",
+        subtype: "error_max_budget_usd",
+        duration_ms: 10,
+        total_cost_usd: 0.5,
+        session_id: "text-session",
+      },
+    ]);
+    await expect(
+      retryAdapter.run(
         input({
           env: { ANTHROPIC_API_KEY: "test-key" },
           reviewer: {
