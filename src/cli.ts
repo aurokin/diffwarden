@@ -126,6 +126,7 @@ type ReviewCliOptions = {
   reviewerSet?: string;
   model?: string;
   effort?: string;
+  fallbackModel?: string;
   timeout?: string;
   strict?: boolean;
   failOnFindings?: string;
@@ -166,6 +167,7 @@ const reviewCommand = program
   .option("--reviewer-set <name>", "reviewer set name from config")
   .option("--model <id>", "model override for the selected reviewer")
   .option("--effort <level>", "effort override for the selected reviewer")
+  .option("--fallback-model <id>", "fallback model override for the selected reviewer")
   .option("--timeout <seconds>", "reviewer timeout in seconds")
   .option("--strict", "fail if any reviewer fails")
   .option("--fail-on-findings <priority>", "exit 1 when findings include P0, P1, P2, or P3")
@@ -301,6 +303,7 @@ program
   .option("--reviewer-set <name>", "reviewer set name from config")
   .option("--model <id>", "model override for the selected reviewer")
   .option("--effort <level>", "effort override for the selected reviewer")
+  .option("--fallback-model <id>", "fallback model override for the selected reviewer")
   .option("--timeout <seconds>", "reviewer timeout in seconds")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
@@ -310,6 +313,7 @@ program
       reviewerSet?: string;
       model?: string;
       effort?: string;
+      fallbackModel?: string;
       timeout?: string;
       cwd: string;
       json?: boolean;
@@ -329,11 +333,13 @@ program
       });
       const model = overrideSelection(options.model, envOptions.model);
       const effort = overrideSelection(options.effort, envOptions.effort);
+      const fallbackModel = options.fallbackModel ?? envOptions.fallbackModel;
       const report = await runReviewerPreflightReport({
         cwd: options.cwd,
         ...reviewerOptions,
         ...(model !== undefined ? { model: model.value, modelSource: model.source } : {}),
         ...(effort !== undefined ? { effort: effort.value, effortSource: effort.source } : {}),
+        ...(fallbackModel !== undefined ? { fallbackModel } : {}),
         ...(cliTimeoutSeconds !== undefined
           ? { timeoutSeconds: cliTimeoutSeconds }
           : envOptions.timeoutSeconds !== undefined
@@ -720,6 +726,7 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
     (reviewerOptions.reviewers === undefined ? loadedConfig?.config.defaultReviewerSet : undefined);
   const model = overrideSelection(options.model, envOptions.model);
   const effort = overrideSelection(options.effort, envOptions.effort);
+  const fallbackModel = options.fallbackModel ?? envOptions.fallbackModel;
   const timeoutSeconds = cliTimeoutSeconds ?? envOptions.timeoutSeconds;
   const reportingOptions = resolveReportingOptions({
     cwd: options.cwd,
@@ -745,6 +752,7 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
     ...reviewerOptions,
     ...(model !== undefined ? { model: model.value, modelSource: model.source } : {}),
     ...(effort !== undefined ? { effort: effort.value, effortSource: effort.source } : {}),
+    ...(fallbackModel !== undefined ? { fallbackModel } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     ...(options.strict === true ? { strict: true } : {}),
     ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),

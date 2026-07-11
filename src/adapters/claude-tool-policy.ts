@@ -33,7 +33,12 @@ export const claudeCliReviewPolicyCliFlags = [
 ] as const;
 
 /** Probed against `--help`; absence degrades behavior instead of failing preflight. */
-export const claudeCliOptionalCliFlags = ["--system-prompt", "--bare"] as const;
+export const claudeCliOptionalCliFlags = [
+  "--system-prompt",
+  "--bare",
+  "--fallback-model",
+  "--max-budget-usd",
+] as const;
 
 export function claudeReviewToolList(): string[] {
   return [...claudeReviewTools];

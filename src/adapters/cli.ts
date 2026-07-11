@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { invalidCli, reviewerFailed } from "../core/errors.js";
+import { invalidCli, missingRequirement, reviewerFailed } from "../core/errors.js";
 import { assertAntigravityExecutableSupportsReviewPolicy } from "./antigravity.js";
 import { claudeCliReviewPolicyCliFlags } from "./claude-tool-policy.js";
 import {
   assertClaudeExecutableSupportsReviewPolicy,
   claudeCliOptionalFlagSupport,
+  claudeDefaultFallbackModel,
 } from "./claude.js";
 import {
   claudeCliEffort,
@@ -787,6 +788,35 @@ function applyClaudeCliOptionalFlags(
     metadata.bare = "true";
   } else {
     metadata.bare = "false";
+  }
+
+  const requestedFallback = input.reviewer.fallbackModel;
+  const fallbackModel =
+    requestedFallback ??
+    (input.reviewer.model !== undefined
+      ? claudeDefaultFallbackModel(input.reviewer.model)
+      : undefined);
+  if (fallbackModel !== undefined) {
+    if (supportedFlags.has("--fallback-model")) {
+      invocation.args.push("--fallback-model", fallbackModel);
+      metadata.fallbackModel = fallbackModel;
+      metadata.fallbackModelSource =
+        requestedFallback !== undefined ? "requested" : "diffwarden-default";
+    } else if (requestedFallback !== undefined) {
+      // Fallback is an availability optimization; degrade but say so.
+      metadata.fallbackModelDropped = "cli-unsupported";
+    }
+  }
+
+  if (input.reviewer.maxBudgetUsd !== undefined) {
+    if (!supportedFlags.has("--max-budget-usd")) {
+      // Never silently drop a spend cap.
+      throw missingRequirement(
+        "Claude executable does not support --max-budget-usd; upgrade Claude Code or remove maxBudgetUsd",
+      );
+    }
+    invocation.args.push("--max-budget-usd", String(input.reviewer.maxBudgetUsd));
+    metadata.maxBudgetUsd = String(input.reviewer.maxBudgetUsd);
   }
 
   invocation.metadata = { ...invocation.metadata, ...metadata };

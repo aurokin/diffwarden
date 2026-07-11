@@ -5,6 +5,7 @@ export type ReviewEnvOptions = {
   reviewerSet?: string;
   model?: string;
   effort?: string;
+  fallbackModel?: string;
   timeoutSeconds?: number;
 };
 
@@ -58,6 +59,10 @@ export function resolveReviewEnvOptionsWithSettings(
   const effort = stringEnvOption(env.DIFFWARDEN_EFFORT);
   if (effort !== undefined) {
     options.effort = effort;
+  }
+  const fallbackModel = stringEnvOption(env.DIFFWARDEN_FALLBACK_MODEL);
+  if (fallbackModel !== undefined) {
+    options.fallbackModel = fallbackModel;
   }
   if (settings.includeTimeout) {
     const timeoutSeconds = parseTimeoutSeconds(

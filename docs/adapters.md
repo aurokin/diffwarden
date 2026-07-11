@@ -369,11 +369,25 @@ for any token value without validating it, so token auth is only proven on the f
 `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` from claude-code runs deliberately preserves
 `CLAUDE_CODE_OAUTH_TOKEN`.
 
-Diffwarden does not set Claude SDK `maxTurns` for review runs; only a configured reviewer
-timeout limits the run. Claude-native limits can still stop or shape a run, including model
-context
-limits, structured-output retry behavior, provider output limits, and built-in tool result
-limits such as Glob result caps.
+Diffwarden sets no Claude run limits by default; only a configured reviewer timeout caps the
+run. Reviewer config can opt into `maxTurns` (SDK transport only — the Claude CLI has no
+`--max-turns` flag) and `maxBudgetUsd`. An exhausted budget surfaces as a budget-specific
+reviewer failure instead of a partial review, and a Claude CLI executable without
+`--max-budget-usd` fails the run rather than silently dropping a spend cap. Claude-native
+limits can still stop or shape a run, including model context limits, structured-output
+retry behavior, provider output limits, and built-in tool result limits such as Glob result
+caps.
+
+Claude reviewers also support `fallbackModel` (config, `--fallback-model`, or
+`DIFFWARDEN_FALLBACK_MODEL`) for primary-model overload. When unset and the primary is not
+Sonnet-family, diffwarden defaults the fallback to Sonnet; Sonnet primaries and unrecognized
+model ids get no default, and the default never selects Haiku. SDK preflight validates the
+fallback against the model catalog and run metadata records `fallbackModel`,
+`fallbackModelSource` (`requested` or `diffwarden-default`), and — when the result's
+`modelUsage` can prove it — `fallbackModelUsed`. The CLI transport probes `--fallback-model`
+against `--help`: an explicit fallback on an older executable is dropped with
+`fallbackModelDropped: "cli-unsupported"` metadata, while a diffwarden-default fallback is
+silently skipped.
 
 Both Claude transports declare the `supportsSystemPrompt` capability: the stable diffwarden
 review contract (rubric, read-only tools section, output-shape instructions) is delivered as

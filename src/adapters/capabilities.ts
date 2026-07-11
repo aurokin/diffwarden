@@ -37,6 +37,10 @@ export type ReviewerTransportCapability = {
   supportsSystemPrompt?: boolean;
   /** Read-only tools described in the contract when diffwarden controls the engine toolset. */
   systemPromptTools?: readonly string[];
+  /** Whether the transport accepts a fallback model for overload/unavailability switching. */
+  supportsFallbackModel?: boolean;
+  supportsMaxTurns?: boolean;
+  supportsMaxBudgetUsd?: boolean;
   captureMode: CaptureMode;
   readonlyCapability: ReadonlyCapability;
 };
@@ -137,6 +141,9 @@ const reviewerCapabilityDefinitions = {
         defaultEffort: "high",
         supportsSystemPrompt: true,
         systemPromptTools: claudeReviewTools,
+        supportsFallbackModel: true,
+        supportsMaxTurns: true,
+        supportsMaxBudgetUsd: true,
         captureMode: "native-structured",
         readonlyCapability: "tool-restricted",
       },
@@ -149,6 +156,9 @@ const reviewerCapabilityDefinitions = {
         defaultEffort: "high",
         supportsSystemPrompt: true,
         systemPromptTools: claudeReviewTools,
+        supportsFallbackModel: true,
+        // The Claude CLI exposes --max-budget-usd but no --max-turns flag.
+        supportsMaxBudgetUsd: true,
         captureMode: "native-structured",
         readonlyCapability: "tool-restricted",
       },
@@ -414,9 +424,42 @@ export function reviewerTransportDefaults(
   return reviewerDefaultTransport(sdk);
 }
 
+export function reviewerLimitCapabilityErrors(reviewer: {
+  sdk: ReviewerSdk;
+  transport?: ReviewerTransport | undefined;
+  fallbackModel?: string | undefined;
+  maxTurns?: number | undefined;
+  maxBudgetUsd?: number | undefined;
+}): string[] {
+  // Config parsing can hand this a raw pre-transform entry (zod still runs
+  // top-level refinements when only item-level refinement checks failed), so
+  // tolerate a missing sdk and let schema validation report the real error.
+  if (reviewerCapabilities[reviewer.sdk] === undefined) {
+    return [];
+  }
+  const effectiveTransport = reviewer.transport ?? defaultReviewerTransport(reviewer.sdk) ?? "sdk";
+  const capability = getTransportCapability(reviewer.sdk, effectiveTransport);
+  const errors: string[] = [];
+  if (reviewer.fallbackModel !== undefined && capability?.supportsFallbackModel !== true) {
+    errors.push(`${reviewer.sdk} ${effectiveTransport} transport does not support fallbackModel`);
+  }
+  if (reviewer.maxTurns !== undefined && capability?.supportsMaxTurns !== true) {
+    errors.push(`${reviewer.sdk} ${effectiveTransport} transport does not support maxTurns`);
+  }
+  if (reviewer.maxBudgetUsd !== undefined && capability?.supportsMaxBudgetUsd !== true) {
+    errors.push(`${reviewer.sdk} ${effectiveTransport} transport does not support maxBudgetUsd`);
+  }
+  return errors;
+}
+
 export function validateReviewerCapabilityOverrides(
   reviewer: ReviewReviewerConfig,
 ): ReviewReviewerConfig {
+  const limitError = reviewerLimitCapabilityErrors(reviewer)[0];
+  if (limitError !== undefined) {
+    throw invalidCli(limitError);
+  }
+
   const transport = reviewer.transport ?? "sdk";
   if (transport !== "cli" && transport !== "app-server") {
     return reviewer;

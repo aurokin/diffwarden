@@ -123,7 +123,7 @@ Expected behavior:
 diffwarden
 diffwarden review [options]
 diffwarden review show <path> [--agent|--json]
-diffwarden doctor [--reviewer <spec>|--reviewer-set <name>] [--model <id>] [--effort <level>] [--timeout <seconds>] [--cwd <path>] [--json]
+diffwarden doctor [--reviewer <spec>|--reviewer-set <name>] [--model <id>] [--fallback-model <id>] [--effort <level>] [--timeout <seconds>] [--cwd <path>] [--json]
 diffwarden reviewers list [--cwd <path>] [--json]
 diffwarden reviewers discover [--deep] [--cwd <path>] [--json]
 diffwarden reviewers add [engine] [--id <id>] [--transport <transport>] [--model <id>] [--effort <level>] [--provider <name>] [--set <name>] [--disabled] [--interactive] [--cwd <path>] [--json]
@@ -142,6 +142,7 @@ diffwarden init [--discover] [--interactive] [--cwd <path>] [--json]
 --reviewer-set <name|count>        Named or count-based reviewer set from config.
 --cwd <path>                      Working directory. Default: process.cwd().
 --model <id>                      Model override for single-reviewer runs.
+--fallback-model <id>             Fallback model override for single-reviewer runs (Claude only).
 --effort <level>                  Reasoning/effort override for single-reviewer runs.
 --agent                           Emit plain text optimized for coding agents.
 --json                            Emit final review artifact JSON.
@@ -311,6 +312,29 @@ Pi effort handling is the reference implementation:
 - Claude maps `off` to disabled thinking and `minimal` to native `low`; `low`, `medium`, `high`, `xhigh`, and `max` pass through natively. SDK preflight resolves `xhigh`/`max` against the model catalog's `supportedEffortLevels` and substitutes within the top tier when the model exposes only one of the two (for example `xhigh` resolves to `max` on models that list only `max`); the CLI transport has no catalog access and passes the requested level through, leaving unsupported-level resolution to the platform. Adapter metadata records both requested and effective values.
 - Cursor reports effort as `ignored` with the requested value because the current Cursor SDK path does not expose a concrete reasoning-control option.
 
+### 5.4 Fallback model and run limits (Claude)
+
+Claude reviewers accept three additional reviewer config fields, validated against the
+capability matrix at config load (`supportsFallbackModel`, `supportsMaxTurns`,
+`supportsMaxBudgetUsd`) so unsupported engines fail with exit `2` instead of silently
+ignoring them:
+
+- `fallbackModel` (also `--fallback-model` and `DIFFWARDEN_FALLBACK_MODEL` for
+  single-reviewer runs): retry model for primary-model overload. When unset and the primary
+  is not Sonnet-family, diffwarden defaults to Sonnet (`fallbackModelSource:
+  "diffwarden-default"`); Sonnet primaries and unrecognized model ids get no default, and no
+  default ever selects Haiku. SDK preflight validates the fallback (explicit or default)
+  against the model catalog; runs report `fallbackModelUsed` when result `modelUsage` can
+  prove whether the fallback family served the run. The CLI transport probes
+  `--fallback-model` against `--help`: explicit-but-unsupported degrades with
+  `fallbackModelDropped: "cli-unsupported"`, a default is silently skipped.
+- `maxTurns`: agentic turn cap, SDK transport only (the Claude CLI has no `--max-turns`
+  flag, so CLI-transport configs with `maxTurns` are rejected).
+- `maxBudgetUsd`: hard spend cap. An exhausted budget (`error_max_budget_usd`) fails the
+  reviewer with a budget-specific error rather than returning a partial review, and a Claude
+  CLI executable lacking `--max-budget-usd` fails the run — a spend cap is never silently
+  dropped.
+
 Adapters should implement a preflight step before running review:
 
 1. Verify SDK package/runtime requirements are available.
@@ -319,7 +343,7 @@ Adapters should implement a preflight step before running review:
 4. Verify selected provider/profile options are coherent.
 5. Verify selected model and effort can be mapped or rejected with a clear message.
 
-### 5.4 Target syntax
+### 5.5 Target syntax
 
 ```text
 uncommitted                       Review staged, unstaged, and untracked local changes.
@@ -338,7 +362,7 @@ Focus lanes are not custom targets. They reuse one resolved diff-backed target, 
 patch fence and provenance in every lane prompt, and still validate findings against changed
 files and changed-line ranges. Reject `--focus` with `custom:<text>`.
 
-### 5.5 Initial v1 targets
+### 5.6 Initial v1 targets
 
 Implement in v1:
 

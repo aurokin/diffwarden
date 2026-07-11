@@ -55,6 +55,7 @@ export type RunReviewOptions = {
   modelSource?: ReviewerOverrideSource;
   effort?: string;
   effortSource?: ReviewerOverrideSource;
+  fallbackModel?: string;
   timeoutSeconds?: number;
   strict?: boolean;
   config?: DiffwardenConfig;
@@ -238,6 +239,7 @@ function resolveRunReviewers(options: RunReviewOptions): ReviewReviewerConfig[] 
     ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
     ...(options.effort !== undefined ? { effort: options.effort } : {}),
     ...(options.effortSource !== undefined ? { effortSource: options.effortSource } : {}),
+    ...(options.fallbackModel !== undefined ? { fallbackModel: options.fallbackModel } : {}),
     ...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
     ...(options.config !== undefined ? { config: options.config } : {}),
   });

@@ -9,6 +9,7 @@ import {
   defaultReviewerTransport,
   getTransportCapability,
   isReviewerSdk,
+  reviewerLimitCapabilityErrors,
   validateReviewerCapabilityOverrides,
 } from "../adapters/capabilities.js";
 import { invalidConfig } from "./errors.js";
@@ -48,6 +49,9 @@ const reviewerConfigSchema = z
     enabled: z.boolean().optional(),
     model: z.string().min(1).optional(),
     effort: effortSchema.optional(),
+    fallbackModel: z.string().min(1).optional(),
+    maxTurns: z.number().int().positive().optional(),
+    maxBudgetUsd: z.number().positive().optional(),
     modelCatalog: z.array(z.string().min(1)).optional(),
     effortCatalog: z.array(effortSchema).optional(),
     timeoutSeconds: z.number().positive().optional(),
@@ -118,6 +122,14 @@ export const diffwardenConfigSchema = z
           code: "custom",
           message: `Reviewer ${reviewer.id} does not support ${reviewer.transport} transport for engine: ${reviewer.sdk}`,
           path: ["reviewers", index, "transport"],
+        });
+      }
+
+      for (const limitError of reviewerLimitCapabilityErrors(reviewer)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `Reviewer ${reviewer.id}: ${limitError}`,
+          path: ["reviewers", index],
         });
       }
 

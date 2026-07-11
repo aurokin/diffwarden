@@ -174,6 +174,7 @@ CLI flags take precedence over environment defaults.
 DIFFWARDEN_REVIEWERS=cursor,claude,pi:openrouter-high
 DIFFWARDEN_REVIEWER_SET=2
 DIFFWARDEN_MODEL=anthropic/claude-sonnet-4-5
+DIFFWARDEN_FALLBACK_MODEL=sonnet
 DIFFWARDEN_EFFORT=high
 # Optional: only set this when a review should have a wall-clock cap.
 DIFFWARDEN_TIMEOUT_SECONDS=1800
@@ -356,6 +357,46 @@ is silently dropped (recorded as `effortDropped: "model-unsupported"`) instead o
 the run. The Claude CLI transport has no model catalog access, so it passes `--effort high`
 through and leaves unsupported-level resolution to the platform, matching how it already
 handles explicit efforts.
+
+## Fallback Model And Run Limits (Claude)
+
+Claude reviewers support a fallback model plus optional run limits. Other engines reject
+these fields at config load time, and `maxTurns` is rejected for the Claude CLI transport
+because the Claude CLI exposes no `--max-turns` flag.
+
+```json
+{
+  "reviewers": [
+    {
+      "id": "claude-opus",
+      "engine": "claude",
+      "model": "opus",
+      "fallbackModel": "sonnet",
+      "maxTurns": 60,
+      "maxBudgetUsd": 2.5
+    }
+  ]
+}
+```
+
+- `fallbackModel` — model to retry with when the primary model is overloaded. Single-reviewer
+  runs can override it with `--fallback-model <id>` or `DIFFWARDEN_FALLBACK_MODEL`. When the
+  primary model is not a Sonnet-family model and no fallback is configured, Diffwarden
+  defaults to Sonnet (reported as `fallbackModelSource: "diffwarden-default"`); Sonnet
+  primaries get no default. On the SDK transport, preflight validates the fallback against
+  the model catalog and reports `fallbackModelUsed` after the run when usage data can prove
+  whether the fallback served it. On the CLI transport the flag is probed against `--help`:
+  an explicit fallback on an older CLI is dropped with
+  `fallbackModelDropped: "cli-unsupported"` metadata, while the diffwarden default is
+  silently skipped.
+- `maxTurns` — hard cap on agentic turns (SDK transport only).
+- `maxBudgetUsd` — hard spend cap for the run. Exhausting it fails the reviewer with a
+  budget-specific error instead of returning a partial review. A Claude CLI executable that
+  lacks `--max-budget-usd` fails the run rather than silently dropping a spend cap.
+
+Note: the config schema is strict, so older diffwarden versions that predate these fields
+reject a shared user config (`~/.config/diffwarden`) that uses them. Keep every diffwarden
+install that reads a shared config at least as new as the newest field you configure.
 
 ## Pi Provider Profile Example
 

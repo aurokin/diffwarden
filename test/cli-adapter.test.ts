@@ -1314,6 +1314,139 @@ describe("createCliAdapter", () => {
     expect(output.metadata).not.toHaveProperty("systemPromptMode");
   });
 
+  it("passes an explicit fallback model via --fallback-model when the Claude CLI supports it", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, {
+      model: "opus",
+      fallbackModel: "sonnet",
+    });
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_CLAUDE_OPTIONAL_HELP: "1",
+      },
+    });
+    const invocation = harness.readInvocation();
+
+    const flagIndex = invocation.args.indexOf("--fallback-model");
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(invocation.args[flagIndex + 1]).toBe("sonnet");
+    expect(output.metadata).toMatchObject({
+      fallbackModel: "sonnet",
+      fallbackModelSource: "requested",
+    });
+  });
+
+  it("derives a default sonnet fallback for non-sonnet Claude CLI models", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, { model: "opus" });
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_CLAUDE_OPTIONAL_HELP: "1",
+      },
+    });
+    const invocation = harness.readInvocation();
+
+    const flagIndex = invocation.args.indexOf("--fallback-model");
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(invocation.args[flagIndex + 1]).toBe("sonnet");
+    expect(output.metadata).toMatchObject({
+      fallbackModel: "sonnet",
+      fallbackModelSource: "diffwarden-default",
+    });
+  });
+
+  it("omits the fallback when the Claude CLI model is already sonnet", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, { model: "sonnet" });
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_CLAUDE_OPTIONAL_HELP: "1",
+      },
+    });
+    const invocation = harness.readInvocation();
+
+    expect(invocation.args).not.toContain("--fallback-model");
+    expect(output.metadata).not.toHaveProperty("fallbackModel");
+    expect(output.metadata).not.toHaveProperty("fallbackModelDropped");
+  });
+
+  it("drops an explicit fallback with metadata when the Claude CLI lacks --fallback-model", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, {
+      model: "opus",
+      fallbackModel: "sonnet",
+    });
+
+    const output = await adapter.run(createInput(reviewer, harness));
+    const invocation = harness.readInvocation();
+
+    expect(invocation.args).not.toContain("--fallback-model");
+    expect(output.metadata).toMatchObject({ fallbackModelDropped: "cli-unsupported" });
+    expect(output.metadata).not.toHaveProperty("fallbackModel");
+  });
+
+  it("silently skips the default fallback when the Claude CLI lacks --fallback-model", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, { model: "opus" });
+
+    const output = await adapter.run(createInput(reviewer, harness));
+    const invocation = harness.readInvocation();
+
+    expect(invocation.args).not.toContain("--fallback-model");
+    expect(output.metadata).not.toHaveProperty("fallbackModel");
+    expect(output.metadata).not.toHaveProperty("fallbackModelDropped");
+  });
+
+  it("passes --max-budget-usd when the Claude CLI supports it", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, {
+      model: "sonnet",
+      maxBudgetUsd: 2.5,
+    });
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: {
+        ...harness.env,
+        DIFFWARDEN_FAKE_CLAUDE_OPTIONAL_HELP: "1",
+      },
+    });
+    const invocation = harness.readInvocation();
+
+    const flagIndex = invocation.args.indexOf("--max-budget-usd");
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(invocation.args[flagIndex + 1]).toBe("2.5");
+    expect(output.metadata).toMatchObject({ maxBudgetUsd: "2.5" });
+  });
+
+  it("fails instead of silently dropping maxBudgetUsd on an old Claude CLI", async () => {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, {
+      model: "sonnet",
+      maxBudgetUsd: 2.5,
+    });
+
+    await expect(adapter.run(createInput(reviewer, harness))).rejects.toThrow(
+      "does not support --max-budget-usd",
+    );
+  });
+
   it("fails Claude CLI preflight when the executable lacks review policy flags", async () => {
     const harness = createHarness("claude");
     const adapter = createCliAdapter("claude");

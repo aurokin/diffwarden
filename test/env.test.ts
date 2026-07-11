@@ -7,12 +7,14 @@ describe("resolveReviewEnvOptions", () => {
       resolveReviewEnvOptions({
         DIFFWARDEN_REVIEWERS: "cursor, claude, pi:openrouter-high",
         DIFFWARDEN_MODEL: "anthropic/claude-sonnet",
+        DIFFWARDEN_FALLBACK_MODEL: "sonnet",
         DIFFWARDEN_EFFORT: "high",
         DIFFWARDEN_TIMEOUT_SECONDS: "30",
       }),
     ).toEqual({
       reviewers: ["cursor", "claude", "pi:openrouter-high"],
       model: "anthropic/claude-sonnet",
+      fallbackModel: "sonnet",
       effort: "high",
       timeoutSeconds: 30,
     });
