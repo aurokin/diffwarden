@@ -3,9 +3,15 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReviewAdapter } from "../src/adapters/types.js";
+import type {
+  ReviewAdapter,
+  ReviewAdapterOutput,
+  RunStructuredInput,
+  RunStructuredOutput,
+} from "../src/adapters/types.js";
 import { reviewerEnvironmentFailed } from "../src/core/errors.js";
 import type { ResolvedDiff } from "../src/core/git.js";
+import { repairResponseJsonSchema } from "../src/core/repair.js";
 import { runReview, runReviewerPreflightReport } from "../src/core/runner.js";
 import { reviewArtifactSchema } from "../src/core/schema.js";
 
@@ -352,6 +358,238 @@ describe("runReview", () => {
     });
 
     expect(piAdapter.repoRoots).toEqual([realpathSync(repo)]);
+  });
+
+  it("repairs schema-invalid structured output with one short structured request", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    const malformed = { findings: "oops", overall_correctness: "patch is correct" };
+    const adapter = createRepairScenarioAdapter({
+      runOutputs: [{ structured: malformed, metadata: { captureMode: "native-structured" } }],
+      repairOutput: {
+        structured: { fixable: true, confidence: "high", review: validRepairReview() },
+      },
+    });
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      adapters: { pi: adapter },
+    });
+    const reviewer = artifact.reviewers?.[0];
+
+    expect(adapter.runCalls).toBe(1);
+    expect(adapter.repairCalls).toHaveLength(1);
+    expect(adapter.repairCalls[0]?.prompt).toContain(JSON.stringify(malformed));
+    expect(adapter.repairCalls[0]?.schema).toEqual(repairResponseJsonSchema);
+    expect(reviewer?.result?.overall_explanation).toBe("Repaired review.");
+    expect(reviewer?.validation?.valid_schema).toBe(true);
+    expect(reviewer?.adapter_metadata).toMatchObject({
+      captureMode: "repaired",
+      repairConfidence: "high",
+      repairFailureReason: "invalid_structured_output",
+    });
+    // The malformed original stays auditable.
+    expect(reviewer?.raw_text).toBe(JSON.stringify(malformed));
+    expect(() => reviewArtifactSchema.parse(artifact)).not.toThrow();
+  });
+
+  it("repairs unparseable text output using the raw text as material", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    const garbled = "review: everything looked fine, no JSON today";
+    const adapter = createRepairScenarioAdapter({
+      runOutputs: [{ text: garbled, metadata: { captureMode: "text" } }],
+      repairOutput: {
+        text: JSON.stringify({ fixable: true, confidence: "medium", review: validRepairReview() }),
+      },
+    });
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      adapters: { pi: adapter },
+    });
+    const reviewer = artifact.reviewers?.[0];
+
+    expect(adapter.runCalls).toBe(1);
+    expect(adapter.repairCalls[0]?.prompt).toContain(garbled);
+    expect(reviewer?.adapter_metadata).toMatchObject({
+      captureMode: "repaired",
+      repairConfidence: "medium",
+      repairFailureReason: "unparseable_text_output",
+    });
+    expect(reviewer?.raw_text).toBe(garbled);
+  });
+
+  it("falls back to a labeled re-run when the repair confidence is low", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    const adapter = createRepairScenarioAdapter({
+      runOutputs: [
+        { text: "not json", metadata: { captureMode: "text" } },
+        { structured: validRepairReview(), metadata: { captureMode: "native-structured" } },
+      ],
+      repairOutput: {
+        structured: { fixable: true, confidence: "low", review: validRepairReview() },
+      },
+    });
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      adapters: { pi: adapter },
+    });
+    const reviewer = artifact.reviewers?.[0];
+
+    expect(adapter.runCalls).toBe(2);
+    expect(adapter.repairCalls).toHaveLength(1);
+    expect(reviewer?.validation?.valid_schema).toBe(true);
+    expect(reviewer?.adapter_metadata).toMatchObject({
+      captureMode: "native-structured",
+      attempts: 2,
+      firstAttemptFailureReason: "unparseable_text_output",
+    });
+    expect(() => reviewArtifactSchema.parse(artifact)).not.toThrow();
+  });
+
+  it("re-runs without repair when the adapter exposes no runStructured", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    const adapter = createRepairScenarioAdapter({
+      runOutputs: [
+        { text: "not json", metadata: { captureMode: "text" } },
+        { structured: validRepairReview(), metadata: { captureMode: "native-structured" } },
+      ],
+    });
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      adapters: { pi: adapter },
+    });
+
+    expect(adapter.runCalls).toBe(2);
+    expect(artifact.reviewers?.[0]?.adapter_metadata).toMatchObject({
+      attempts: 2,
+      firstAttemptFailureReason: "unparseable_text_output",
+    });
+  });
+
+  it("goes straight to the labeled re-run when no repair material survives", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    const adapter = createRepairScenarioAdapter({
+      runOutputs: [
+        {
+          text: "",
+          metadata: {
+            captureMode: "text",
+            fallbackReason: "error_max_structured_output_retries",
+          },
+        },
+        { structured: validRepairReview(), metadata: { captureMode: "native-structured" } },
+      ],
+      repairOutput: {
+        structured: { fixable: true, confidence: "high", review: validRepairReview() },
+      },
+    });
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      adapters: { pi: adapter },
+    });
+
+    expect(adapter.repairCalls).toHaveLength(0);
+    expect(adapter.runCalls).toBe(2);
+    // The adapter-supplied failure label is preserved over the generic empty_output.
+    expect(artifact.reviewers?.[0]?.adapter_metadata).toMatchObject({
+      attempts: 2,
+      firstAttemptFailureReason: "error_max_structured_output_retries",
+    });
+  });
+
+  it("never repairs a repair: an invalid repair response falls through to one re-run", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    const adapter = createRepairScenarioAdapter({
+      runOutputs: [
+        { text: "not json", metadata: { captureMode: "text" } },
+        { text: "still not json", metadata: { captureMode: "text" } },
+      ],
+      repairOutput: {
+        structured: { fixable: true, confidence: "high", review: { totally: "invalid" } },
+      },
+    });
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      adapters: { pi: adapter },
+    });
+    const reviewer = artifact.reviewers?.[0];
+
+    // Exactly one repair request and exactly one re-run, even though both attempts failed.
+    expect(adapter.repairCalls).toHaveLength(1);
+    expect(adapter.runCalls).toBe(2);
+    expect(reviewer?.validation?.valid_schema).toBe(false);
+    expect(reviewer?.validation?.parse_mode).toBe("fallback-text");
+    expect(reviewer?.adapter_metadata).toMatchObject({
+      attempts: 2,
+      firstAttemptFailureReason: "unparseable_text_output",
+    });
+  });
+
+  it("never triggers repair for semantic validation failures", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    // Schema-valid review whose finding points outside the changed files.
+    const adapter = createRepairScenarioAdapter({
+      runOutputs: [
+        {
+          structured: {
+            ...validRepairReview(),
+            findings: [
+              {
+                title: "[P2] Out of range",
+                body: "Points at an unchanged file.",
+                confidence_score: 0.8,
+                priority: 2,
+                code_location: {
+                  absolute_file_path: path.join(repo, "unrelated.txt"),
+                  line_range: { start: 1, end: 1 },
+                },
+              },
+            ],
+          },
+          metadata: { captureMode: "native-structured" },
+        },
+      ],
+      repairOutput: {
+        structured: { fixable: true, confidence: "high", review: validRepairReview() },
+      },
+    });
+
+    const artifact = await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      adapters: { pi: adapter },
+    });
+    const reviewer = artifact.reviewers?.[0];
+
+    expect(adapter.runCalls).toBe(1);
+    expect(adapter.repairCalls).toHaveLength(0);
+    expect(reviewer?.validation?.valid_schema).toBe(true);
+    expect(reviewer?.validation?.valid_locations).toBe(false);
+    expect(reviewer?.adapter_metadata).not.toHaveProperty("attempts");
   });
 
   it("threads --fallback-model into standalone reviewer preflight reports", async () => {
@@ -1015,6 +1253,48 @@ function createMockAdapter(
       };
     },
   };
+}
+
+function validRepairReview() {
+  return {
+    findings: [],
+    overall_correctness: "patch is correct",
+    overall_explanation: "Repaired review.",
+    overall_confidence_score: 0.9,
+  };
+}
+
+/**
+ * Adapter whose run() replays scripted outputs (attempt 1, attempt 2, ...) and whose optional
+ * runStructured returns a fixed repair response — the whole repair pipeline drives off these.
+ */
+function createRepairScenarioAdapter(options: {
+  runOutputs: ReviewAdapterOutput[];
+  repairOutput?: RunStructuredOutput;
+}): ReviewAdapter & { runCalls: number; repairCalls: RunStructuredInput[] } {
+  const pendingOutputs = [...options.runOutputs];
+  const repairCalls: RunStructuredInput[] = [];
+  const adapter: ReviewAdapter & { runCalls: number; repairCalls: RunStructuredInput[] } = {
+    name: "pi",
+    runCalls: 0,
+    repairCalls,
+    async run() {
+      adapter.runCalls += 1;
+      const output = pendingOutputs.shift();
+      if (output === undefined) {
+        throw new Error("createRepairScenarioAdapter ran out of scripted outputs");
+      }
+      return output;
+    },
+  };
+  if (options.repairOutput !== undefined) {
+    const repairOutput = options.repairOutput;
+    adapter.runStructured = async (input) => {
+      repairCalls.push(input);
+      return repairOutput;
+    };
+  }
+  return adapter;
 }
 
 function createPreflightInputCaptureAdapter(

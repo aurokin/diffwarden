@@ -763,62 +763,51 @@ describe("claudeAdapter", () => {
     });
   });
 
-  it("falls back to text when native structured output fails local schema validation", async () => {
+  it("passes schema-invalid structured output through for the core repair stage", async () => {
+    const malformed = {
+      findings: [
+        {
+          title: "Bad range",
+          body: "The native result is malformed.",
+          confidence_score: 0.9,
+          code_location: {
+            absolute_file_path: "/tmp/file.ts",
+            line_range: {
+              start: 5,
+              end: 1,
+            },
+          },
+        },
+      ],
+      overall_correctness: "patch is incorrect",
+      overall_explanation: "Malformed location.",
+      overall_confidence_score: 0.8,
+    };
     const { adapter, calls } = createMockClaudeAdapter([
       {
         type: "result",
         subtype: "success",
-        structured_output: {
-          findings: [
-            {
-              title: "Bad range",
-              body: "The native result is malformed.",
-              confidence_score: 0.9,
-              code_location: {
-                absolute_file_path: "/tmp/file.ts",
-                line_range: {
-                  start: 5,
-                  end: 1,
-                },
-              },
-            },
-          ],
-          overall_correctness: "patch is incorrect",
-          overall_explanation: "Malformed location.",
-          overall_confidence_score: 0.8,
-        },
+        structured_output: malformed,
         duration_ms: 12,
         total_cost_usd: 0.1,
         session_id: "structured-session",
-      },
-      {
-        type: "result",
-        subtype: "success",
-        result: validReviewText(),
-        duration_ms: 20,
-        total_cost_usd: 0.2,
-        session_id: "text-session",
       },
     ]);
 
     const output = await adapter.run(input({ env: { ANTHROPIC_API_KEY: "test-key" } }));
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.options?.outputFormat).toMatchObject({ type: "json_schema" });
-    expect(calls[1]?.options?.outputFormat).toBeUndefined();
-    expect(output.structured).toBeUndefined();
-    expect(output.text).toBe(validReviewText());
+    // One query only — validation and repair belong to core, not the adapter.
+    expect(calls).toHaveLength(1);
+    expect(output.structured).toEqual(malformed);
     expect(output.metadata).toMatchObject({
-      captureMode: "text",
-      fallbackReason: "invalid_structured_output",
-      sessionId: "text-session",
-      durationMs: 32,
+      captureMode: "native-structured",
+      sessionId: "structured-session",
+      durationMs: 12,
       authMode: "api-key",
     });
-    expect(output.metadata?.totalCostUsd).toBeCloseTo(0.3);
   });
 
-  it("falls back to text when Claude reaches structured output retry limits", async () => {
+  it("returns labeled empty output when Claude reaches structured output retry limits", async () => {
     const { adapter, calls } = createMockClaudeAdapter([
       {
         type: "result",
@@ -827,28 +816,78 @@ describe("claudeAdapter", () => {
         total_cost_usd: 0.15,
         session_id: "structured-session",
       },
-      {
-        type: "result",
-        subtype: "success",
-        result: validReviewText(),
-        duration_ms: 25,
-        total_cost_usd: 0.25,
-        session_id: "text-session",
-      },
     ]);
 
     const output = await adapter.run(input({ env: { ANTHROPIC_API_KEY: "test-key" } }));
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.options?.outputFormat).toMatchObject({ type: "json_schema" });
-    expect(calls[1]?.options?.outputFormat).toBeUndefined();
-    expect(output.text).toBe(validReviewText());
+    // This subtype carries no repair material; the label sends core to its retry, not repair.
+    expect(calls).toHaveLength(1);
+    expect(output.structured).toBeUndefined();
+    expect(output.text).toBe("");
     expect(output.metadata).toMatchObject({
       captureMode: "text",
       fallbackReason: "error_max_structured_output_retries",
-      durationMs: 40,
+      durationMs: 15,
     });
-    expect(output.metadata?.totalCostUsd).toBeCloseTo(0.4);
+  });
+
+  it("runs one-shot structured queries with the most restricted invocation", async () => {
+    const { adapter, calls } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "success",
+        structured_output: { fixable: true, confidence: "high", review: null },
+        duration_ms: 8,
+        total_cost_usd: 0.02,
+        session_id: "repair-session",
+      },
+    ]);
+    const schema = { type: "object", properties: { fixable: { type: "boolean" } } };
+
+    const output = await adapter.runStructured?.({
+      cwd: process.cwd(),
+      reviewer: { id: "claude", sdk: "claude", model: "sonnet", readonly: true },
+      prompt: "repair this",
+      schema,
+      env: { ANTHROPIC_API_KEY: "test-key" },
+    });
+
+    expect(output).toEqual({
+      structured: { fixable: true, confidence: "high", review: null },
+    });
+    expect(calls[0]?.prompt).toBe("repair this");
+    expect(calls[0]?.options).toMatchObject({
+      tools: [],
+      allowedTools: [],
+      permissionMode: "dontAsk",
+      settingSources: [],
+      strictMcpConfig: true,
+      persistSession: false,
+      outputFormat: { type: "json_schema", schema },
+    });
+    expect(calls[0]?.options).not.toHaveProperty("systemPrompt");
+    expect(calls[0]?.options).not.toHaveProperty("effort");
+  });
+
+  it("fails one-shot structured queries loudly on non-success results", async () => {
+    const { adapter } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "error_max_structured_output_retries",
+        duration_ms: 8,
+        session_id: "repair-session",
+      },
+    ]);
+
+    await expect(
+      adapter.runStructured?.({
+        cwd: process.cwd(),
+        reviewer: { id: "claude", sdk: "claude", model: "sonnet", readonly: true },
+        prompt: "repair this",
+        schema: { type: "object" },
+        env: { ANTHROPIC_API_KEY: "test-key" },
+      }),
+    ).rejects.toThrow("Claude structured query failed");
   });
 
   it("maps public effort to Claude query options and metadata", async () => {
@@ -1273,39 +1312,6 @@ describe("claudeAdapter", () => {
 
     await expect(
       adapter.run(
-        input({
-          env: { ANTHROPIC_API_KEY: "test-key" },
-          reviewer: {
-            id: "claude",
-            sdk: "claude",
-            model: "sonnet",
-            maxBudgetUsd: 2.5,
-            readonly: true,
-          },
-        }),
-      ),
-    ).rejects.toThrow("maxBudgetUsd was exhausted before the review completed");
-
-    // The budget can also run out during the text-fallback retry; that path
-    // must produce the same budget-specific error, not a generic failure.
-    const { adapter: retryAdapter } = createMockClaudeAdapter([
-      {
-        type: "result",
-        subtype: "error_max_structured_output_retries",
-        duration_ms: 15,
-        total_cost_usd: 2.0,
-        session_id: "structured-session",
-      },
-      {
-        type: "result",
-        subtype: "error_max_budget_usd",
-        duration_ms: 10,
-        total_cost_usd: 0.5,
-        session_id: "text-session",
-      },
-    ]);
-    await expect(
-      retryAdapter.run(
         input({
           env: { ANTHROPIC_API_KEY: "test-key" },
           reviewer: {

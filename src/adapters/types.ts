@@ -63,7 +63,8 @@ export type ReviewAdapterOutput = {
   structured?: unknown;
   usage?: unknown;
   metadata?: {
-    captureMode?: "native-structured" | "tool-call" | "text";
+    /** "repaired" is set by the core repair stage, never by adapters themselves. */
+    captureMode?: "native-structured" | "tool-call" | "text" | "repaired";
     agentId?: string;
     runId?: string;
     readonlyCapability?: "enforced" | "tool-restricted" | "prompt-only";
@@ -123,6 +124,28 @@ export type ListModelsInput = {
   signal?: AbortSignal;
 };
 
+/**
+ * Input for a one-shot structured request outside the main review run (e.g. the core repair
+ * stage). The schema is the response contract; engines with native structured output enforce it
+ * natively, engines without describe it in the prompt and return text for core to unwrap.
+ */
+export type RunStructuredInput = {
+  cwd: string;
+  reviewer: ReviewReviewerConfig;
+  prompt: string;
+  schema: Record<string, unknown>;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
+  runContext?: unknown;
+};
+
+export type RunStructuredOutput = {
+  structured?: unknown;
+  text?: string;
+  metadata?: Record<string, unknown>;
+};
+
 export interface ReviewAdapter {
   name: string;
   preflight?(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult>;
@@ -130,4 +153,9 @@ export interface ReviewAdapter {
   run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput>;
   /** Live model catalog for interactive setup; only on engines whose capability declares supportsModelCatalog. */
   listModels?(input: ListModelsInput): Promise<ModelCatalogEntry[]>;
+  /**
+   * One-shot schema-constrained request with the most restricted invocation the engine supports
+   * (no tools). Used by the core structured-output repair stage; never triggers review logic.
+   */
+  runStructured?(input: RunStructuredInput): Promise<RunStructuredOutput>;
 }

@@ -1,7 +1,8 @@
 import { type ReviewResult, reviewResultSchema } from "./schema.js";
 
 export type AdapterOutputMetadata = {
-  captureMode?: "native-structured" | "tool-call" | "text";
+  /** "repaired" is set by the core repair stage, never by adapters themselves. */
+  captureMode?: "native-structured" | "tool-call" | "text" | "repaired";
   [key: string]: unknown;
 };
 
