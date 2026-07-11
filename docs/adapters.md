@@ -357,6 +357,18 @@ outdated local executable falls back to `ANTHROPIC_API_KEY` when one is availabl
 `claude-code` mode fails preflight with a missing-requirement error instead of running with a
 weaker policy.
 
+Long-lived setup tokens (`claude setup-token`, exposed as `CLAUDE_CODE_OAUTH_TOKEN`) are
+covered by the `claude-code` auth mode; no separate mode exists. With a `claude` executable
+present, `claude auth status` reports the token as logged in and the normal claude-code path
+applies. On hosts without a `claude` executable — a headless box with only the token — the
+SDK transport still proceeds in claude-code mode using the SDK's bundled Claude Code CLI,
+reporting `authMethod: "oauth_token"`; the CLI transport requires the executable and fails
+with the standard auth guidance. Two caveats: `claude auth status` reports `loggedIn: true`
+for any token value without validating it, so token auth is only proven on the first request
+(preflight says so in the auth check detail), and the credential strip that removes
+`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` from claude-code runs deliberately preserves
+`CLAUDE_CODE_OAUTH_TOKEN`.
+
 Diffwarden does not set Claude SDK `maxTurns` for review runs; only a configured reviewer
 timeout limits the run. Claude-native limits can still stop or shape a run, including model
 context

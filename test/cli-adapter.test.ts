@@ -1228,12 +1228,16 @@ describe("createCliAdapter", () => {
         ...harness.env,
         ANTHROPIC_API_KEY: "test-key",
         ANTHROPIC_AUTH_TOKEN: "test-token",
+        CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token",
       },
     });
     const invocation = harness.readInvocation();
 
     expect(invocation.env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(invocation.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+    // Setup tokens from `claude setup-token` must survive the credential strip
+    // so delegated Claude Code auth can keep using them.
+    expect(invocation.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token" });
   });
 
   it("passes the diffwarden contract via --system-prompt when the Claude CLI supports it", async () => {
@@ -2116,6 +2120,7 @@ fs.writeFileSync(invocationPath, JSON.stringify({
   env: {
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
       ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
       AGY_CLI_DISABLE_AUTO_UPDATE: process.env.AGY_CLI_DISABLE_AUTO_UPDATE,
       APPDATA: process.env.APPDATA,
       COPILOT_ALLOW_ALL: process.env.COPILOT_ALLOW_ALL,

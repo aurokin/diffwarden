@@ -259,6 +259,163 @@ describe("claudeAdapter", () => {
     }
   });
 
+  it("authenticates the SDK transport with CLAUDE_CODE_OAUTH_TOKEN without an executable", async () => {
+    const { adapter, calls } = createMockClaudePreflightAdapterWithRuntime([{ value: "sonnet" }]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "sonnet",
+        readonly: true,
+      },
+      readonly: true,
+      env: {
+        PATH: "",
+        CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token",
+      },
+    });
+
+    expect(preflight?.metadata).toMatchObject({
+      authMode: "claude-code",
+      authPreference: "auto",
+      authMethod: "oauth_token",
+    });
+    expect(preflight?.metadata?.executable).toBeUndefined();
+    expect(preflight?.checks.find((check) => check.name === "auth")).toMatchObject({
+      status: "passed",
+      detail: expect.stringContaining("not validated until the first request"),
+    });
+    expect(calls[0]?.options?.pathToClaudeCodeExecutable).toBeUndefined();
+    expect(calls[0]?.options?.env).toMatchObject({
+      CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token",
+    });
+  });
+
+  it("uses the normal executable path when a setup token and executable are both present", async () => {
+    // Mirrors real CLI behavior (verified on 2.1.206): `claude auth status`
+    // reports loggedIn true with authMethod oauth_token for any token value.
+    const fakeBin = createEnvSensitiveFakeClaudeExecutable();
+    const { adapter, calls } = createMockClaudePreflightAdapterWithRuntime([{ value: "sonnet" }]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "sonnet",
+        readonly: true,
+      },
+      readonly: true,
+      env: {
+        PATH: fakeBin,
+        CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token",
+      },
+    });
+
+    expect(preflight?.metadata).toMatchObject({
+      authMode: "claude-code",
+      authMethod: "oauth_token",
+      executable: "claude",
+    });
+    expect(calls[0]?.options?.pathToClaudeCodeExecutable).toBe("claude");
+    expect(calls[0]?.options?.env).toMatchObject({
+      CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token",
+    });
+  });
+
+  it("prefers the setup token over ANTHROPIC_API_KEY in auto mode without an executable", async () => {
+    const { adapter, calls } = createMockClaudePreflightAdapterWithRuntime([{ value: "sonnet" }]);
+
+    const preflight = await adapter.preflight?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "sonnet",
+        readonly: true,
+      },
+      readonly: true,
+      env: {
+        PATH: "",
+        CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token",
+        ANTHROPIC_API_KEY: "test-key",
+        ANTHROPIC_AUTH_TOKEN: "test-token",
+      },
+    });
+
+    expect(preflight?.metadata?.authMode).toBe("claude-code");
+    expect(calls[0]?.options?.env).toMatchObject({
+      CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token",
+    });
+    expect(calls[0]?.options?.env).not.toHaveProperty("ANTHROPIC_API_KEY");
+    expect(calls[0]?.options?.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+  });
+
+  it("lets forced api-key auth ignore the setup token", async () => {
+    const runtime = await resolveClaudeRuntime({
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "sonnet",
+        readonly: true,
+        sdkOptions: { authMode: "api-key" },
+      },
+      env: {
+        PATH: "",
+        CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token",
+        ANTHROPIC_API_KEY: "test-key",
+      },
+    });
+
+    expect(runtime).toMatchObject({ authMode: "api-key", authPreference: "api-key" });
+  });
+
+  it("does not use the setup token for the CLI transport without an executable", async () => {
+    await expect(
+      resolveClaudeRuntime(
+        {
+          reviewer: {
+            id: "claude",
+            sdk: "claude",
+            model: "sonnet",
+            readonly: true,
+          },
+          env: {
+            PATH: "",
+            CLAUDE_CODE_OAUTH_TOKEN: "test-setup-token",
+          },
+        },
+        "claude",
+        "cli",
+      ),
+    ).rejects.toMatchObject({
+      code: "missing_auth",
+      message: expect.stringContaining("CLAUDE_CODE_OAUTH_TOKEN"),
+    });
+  });
+
+  it("names every Claude auth path when none is available", async () => {
+    await expect(
+      claudeAdapter.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "sonnet",
+          readonly: true,
+        },
+        readonly: true,
+        env: { PATH: "" },
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_auth",
+      message:
+        "Missing Claude auth: set ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or log in with Claude Code",
+    });
+  });
+
   it("preflights Claude model availability through the SDK model catalog", async () => {
     const { adapter, calls, closeCalls } = createMockClaudePreflightAdapter([
       {
@@ -1122,7 +1279,9 @@ function createEnvSensitiveFakeClaudeExecutable(options: { policyFlags?: boolean
     executable,
     `#!/bin/sh
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
-  if [ -n "$ANTHROPIC_API_KEY" ]; then
+  if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+    echo '{"loggedIn":true,"authMethod":"oauth_token"}'
+  elif [ -n "$ANTHROPIC_API_KEY" ]; then
     echo '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","apiKeySource":"ANTHROPIC_API_KEY"}'
   else
     echo '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"max"}'
