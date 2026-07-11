@@ -662,6 +662,12 @@ Anthropic API credentials from the child environment when Claude Code auth is se
 keeps reviewer sets from silently consuming API credits when a local Claude Code subscription
 is available.
 
+Setup tokens minted with `claude setup-token` and exported as `CLAUDE_CODE_OAUTH_TOKEN` are
+part of the `claude-code` mode. The credential strip keeps the token in the child
+environment, and on hosts without a `claude` executable the SDK transport still runs in
+claude-code mode through the SDK's bundled CLI (`authMethod: "oauth_token"`). Note that the
+token is not validated until the first request.
+
 Use `claude-code` or `api-key` to make the choice explicit:
 
 ```json

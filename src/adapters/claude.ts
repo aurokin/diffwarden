@@ -471,7 +471,8 @@ type ClaudeRuntime =
   | {
       authMode: "claude-code";
       authPreference: ClaudeAuthPreference;
-      executable: string;
+      /** Absent when a setup-token authenticates the SDK's bundled Claude Code CLI. */
+      executable?: string;
       env: NodeJS.ProcessEnv;
       authMethod?: string;
       apiProvider?: string;
@@ -812,11 +813,13 @@ async function loadClaudeSdk(): Promise<ClaudeSdk> {
 export async function resolveClaudeRuntime(
   input: Pick<ReviewAdapterInput | ReviewAdapterPreflightInput, "env" | "reviewer">,
   executable = defaultClaudeExecutable,
+  transport: "sdk" | "cli" = "sdk",
 ): Promise<ClaudeRuntime> {
   const env = input.env;
   const effectiveEnv = env ?? process.env;
   const authPreference = claudeAuthPreference(input.reviewer);
   const apiKey = effectiveEnv.ANTHROPIC_API_KEY?.trim();
+  const oauthToken = effectiveEnv.CLAUDE_CODE_OAUTH_TOKEN?.trim();
 
   if (authPreference === "api-key") {
     if (!apiKey) {
@@ -848,9 +851,21 @@ export async function resolveClaudeRuntime(
     }
   }
 
+  if (claudeCodeStatus === undefined && oauthToken && transport === "sdk") {
+    // `claude auth status` was unavailable, typically because no executable is
+    // on PATH. The SDK transport bundles its own Claude Code CLI, so a
+    // setup-token (`claude setup-token`) can still authenticate it directly.
+    return {
+      authMode: "claude-code",
+      authPreference,
+      env: claudeCodeEnv,
+      authMethod: "oauth_token",
+    };
+  }
+
   if (authPreference === "claude-code") {
     throw missingAuth(
-      'Missing Claude Code auth: install Claude Code and log in, or set sdkOptions.authMode to "api-key"',
+      'Missing Claude Code auth: log in with Claude Code, set CLAUDE_CODE_OAUTH_TOKEN, or set sdkOptions.authMode to "api-key"',
     );
   }
 
@@ -862,7 +877,7 @@ export async function resolveClaudeRuntime(
   }
 
   throw missingAuth(
-    "Missing Claude auth: set ANTHROPIC_API_KEY or install and authenticate Claude Code",
+    "Missing Claude auth: set ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or log in with Claude Code",
   );
 }
 
@@ -996,6 +1011,11 @@ function claudeCodeStatusMetadata(status: ClaudeAuthStatus): {
 function claudeCodeAuthDetail(
   runtime: Extract<ClaudeRuntime, { authMode: "claude-code" }>,
 ): string {
+  if (runtime.authMethod === "oauth_token" && runtime.executable === undefined) {
+    // `claude auth status` reports loggedIn for any CLAUDE_CODE_OAUTH_TOKEN
+    // value without validating it, so token auth is only proven on first use.
+    return "CLAUDE_CODE_OAUTH_TOKEN is present; the token is not validated until the first request.";
+  }
   const subscription =
     runtime.subscriptionType === undefined ? "" : ` (${runtime.subscriptionType} subscription)`;
   return `Claude Code executable reports authenticated local auth${subscription}.`;

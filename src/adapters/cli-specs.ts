@@ -996,7 +996,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       ];
       pushModelAndEffort(args, input.reviewer, claudeCliEffort);
       const executable = cliExecutable(input.reviewer, defaultCliExecutable("claude"));
-      const runtime = await resolveClaudeRuntime(input, executable);
+      const runtime = await resolveClaudeRuntime(input, executable, "cli");
       const env = claudeCliEnv(runtime);
 
       return {
