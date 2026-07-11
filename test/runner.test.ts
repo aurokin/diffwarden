@@ -125,6 +125,57 @@ describe("runReview", () => {
     ]);
   });
 
+  it("splits the prompt for system-prompt transports and concatenates for the rest", async () => {
+    repo = createWorkspace();
+    const resolved = createResolvedTarget(repo);
+    const prompts = new Map<string, { prompt: string; systemPrompt?: string }>();
+    const captureAdapter = (name: string): ReviewAdapter => ({
+      name,
+      async run(input) {
+        prompts.set(name, {
+          prompt: input.prompt,
+          ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt } : {}),
+        });
+        return {
+          structured: {
+            findings: [],
+            overall_correctness: "patch is correct",
+            overall_explanation: "ok",
+            overall_confidence_score: 1,
+          },
+        };
+      },
+    });
+
+    await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "claude",
+      adapters: { claude: captureAdapter("claude:sdk") },
+    });
+    await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "pi",
+      model: "anthropic/claude-sonnet",
+      adapters: { pi: captureAdapter("pi:sdk") },
+    });
+
+    const claudePrompts = prompts.get("claude:sdk");
+    expect(claudePrompts?.systemPrompt).toContain("Review guidelines:");
+    expect(claudePrompts?.systemPrompt).toContain(
+      "You have read-only tools for this review: Read, Grep, and Glob.",
+    );
+    expect(claudePrompts?.systemPrompt).toContain("Return only a JSON object");
+    expect(claudePrompts?.prompt).toContain("Review the code changes in this repository.");
+    expect(claudePrompts?.prompt).not.toContain("Review guidelines:");
+
+    const piPrompts = prompts.get("pi:sdk");
+    expect(piPrompts?.systemPrompt).toBeUndefined();
+    expect(piPrompts?.prompt).toContain("Review guidelines:");
+    expect(piPrompts?.prompt).toContain("Review the code changes in this repository.");
+  });
+
   it("passes environment-sourced model and effort provenance to adapters", async () => {
     repo = createWorkspace();
     const resolved = createResolvedTarget(repo);

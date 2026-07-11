@@ -363,6 +363,18 @@ context
 limits, structured-output retry behavior, provider output limits, and built-in tool result
 limits such as Glob result caps.
 
+Both Claude transports declare the `supportsSystemPrompt` capability: the stable diffwarden
+review contract (rubric, read-only tools section, output-shape instructions) is delivered as
+the engine system prompt, replacing Claude Code's default, while the per-run engagement
+(target, provenance, focus, patch) stays in the user message. The SDK transport passes the
+contract as `systemPrompt` in query options (never during model preflight); runs record
+`systemPromptMode: "system-prompt"` metadata. The CLI transport probes `--system-prompt`
+against the same `--help` output the review policy check already fetches — the flag is
+optional, not policy: an executable without it falls back to the concatenated single prompt
+via stdin and records `systemPromptMode: "concatenated"`. The CLI also probes `--bare` and
+appends it only for api-key auth runs (Claude Code's `--bare` restricts auth to API keys and
+skips hooks, plugins, and other session startup), recording `bare: "true"/"false"`.
+
 Live smoke test:
 
 ```bash

@@ -625,6 +625,35 @@ The prompt should be assembled from three parts:
 2. Target-specific instructions.
 3. ReviewResult schema / structured-output instructions.
 
+### 8.1 System-prompt split
+
+Transports that let diffwarden own the engine system prompt (capability
+`supportsSystemPrompt`; today the Claude SDK and CLI transports) receive the prompt as two
+parts instead of one concatenated string:
+
+- **System prompt = the stable diffwarden contract**: rubric, a tools section describing the
+  read-only toolset when diffwarden controls it (capability `systemPromptTools`), and the
+  ReviewResult output instructions. The contract is byte-stable per engine, transport, and
+  diffwarden version, so it forms an ideal provider cache prefix.
+- **User prompt = per-run engagement**: the review request, target, patch provenance command,
+  scope rules, focus instructions when set (focus is per-run and never enters the contract),
+  and the fenced patch.
+
+Direction settled by live experiment (15 sonnet runs, 2026-07-10): Claude Code's default
+system prompt missed a planted cross-file bug in 3/5 runs (its efficiency bias suppresses
+caller exploration), while the diffwarden contract found all planted bugs with zero false
+positives. Custom-instruction targets get the same split. Every other transport keeps
+today's single concatenated prompt byte-identical.
+
+On the Claude SDK transport the contract is passed as `systemPrompt` (never during model
+preflight, which sends no prompt). On the Claude CLI transport `--system-prompt` is a probed
+optional flag: it is checked against the already-fetched `--help` output rather than added to
+the hard-failing review policy flag list, and an executable without it degrades to the
+concatenated single prompt (recorded as `systemPromptMode: "concatenated"`). The CLI also
+appends probed `--bare` (skip hooks, plugins, and session startup) only when the runtime
+selected api-key auth, because `--bare` restricts auth to API keys and does not honor
+delegated Claude Code logins; the decision is recorded as `bare: "true"/"false"` metadata.
+
 The rubric should preserve Codex's core semantics:
 
 - Find real bugs that affect correctness, performance, security, or maintainability, not broad style issues.

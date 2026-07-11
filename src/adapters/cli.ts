@@ -5,7 +5,10 @@ import path from "node:path";
 import { invalidCli, reviewerFailed } from "../core/errors.js";
 import { assertAntigravityExecutableSupportsReviewPolicy } from "./antigravity.js";
 import { claudeCliReviewPolicyCliFlags } from "./claude-tool-policy.js";
-import { assertClaudeExecutableSupportsReviewPolicy } from "./claude.js";
+import {
+  assertClaudeExecutableSupportsReviewPolicy,
+  claudeCliOptionalFlagSupport,
+} from "./claude.js";
 import {
   claudeCliEffort,
   cliCapability,
@@ -81,6 +84,7 @@ type PreparedPolicyCheckState = {
   envFingerprint: string;
   policyFingerprint?: string;
   droidPolicySupport?: DroidCliReviewPolicySupport;
+  claudeOptionalFlags?: string[];
 };
 
 const preparedPolicyChecks = new WeakMap<object, PreparedPolicyCheckState>();
@@ -151,7 +155,7 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
             invocation,
             input,
           );
-          await prepareClaudeCliInvocation(invocation, input, preparedPolicyCheck !== undefined);
+          await prepareClaudeCliInvocation(invocation, input, preparedPolicyCheck);
         }
         if (engine === "gemini") {
           const preparedPolicyCheck = await hasPreparedPolicyCheck(
@@ -210,6 +214,7 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
           {
             transport: "cli",
             ...cliExecutableMetadata(executableSelection, result.executable),
+            ...(invocation.metadata ?? {}),
             stderr: trimForMetadata(result.stderr),
           },
         );
@@ -242,13 +247,15 @@ async function prepareCliAdapter(
   let policyCheckFingerprint: string | undefined;
   let droidPolicySupport: DroidCliReviewPolicySupport | undefined;
 
+  let claudeOptionalFlags: string[] | undefined;
   if (engine === "claude") {
     const policyEnv = input.env ?? process.env;
-    await assertClaudeExecutableSupportsReviewPolicy(
+    const helpOutput = await assertClaudeExecutableSupportsReviewPolicy(
       resolvedExecutable,
       policyEnv,
       claudeCliReviewPolicyCliFlags,
     );
+    claudeOptionalFlags = claudeCliOptionalFlagSupport(helpOutput);
     policyCheckEnvFingerprint = cliPolicyEnvFingerprint(policyEnv);
     verifiedPolicyChecks.push(engine);
     policyChecks.push({
@@ -349,6 +356,7 @@ async function prepareCliAdapter(
         ? { policyFingerprint: policyCheckFingerprint }
         : {}),
       ...(droidPolicySupport !== undefined ? { droidPolicySupport } : {}),
+      ...(claudeOptionalFlags !== undefined ? { claudeOptionalFlags } : {}),
       ...(executableIdentity !== undefined
         ? { executableIdentity: { ...executableIdentity } }
         : {}),
@@ -733,19 +741,55 @@ function isNodeErrorWithCode(error: unknown, code: string): boolean {
 async function prepareClaudeCliInvocation(
   invocation: CliInvocation,
   input: ReviewAdapterInput,
-  policyAlreadyChecked = false,
+  preparedPolicyCheck: PreparedPolicyCheckState | undefined,
 ): Promise<void> {
   const env = cliInvocationEnv(invocation, input);
   invocation.resolvedExecutable =
     invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
-  if (policyAlreadyChecked) {
-    return;
+  let optionalFlags = preparedPolicyCheck?.claudeOptionalFlags;
+  if (preparedPolicyCheck === undefined || optionalFlags === undefined) {
+    const helpOutput = await assertClaudeExecutableSupportsReviewPolicy(
+      invocation.resolvedExecutable,
+      env,
+      claudeCliReviewPolicyCliFlags,
+    );
+    optionalFlags = claudeCliOptionalFlagSupport(helpOutput);
   }
-  await assertClaudeExecutableSupportsReviewPolicy(
-    invocation.resolvedExecutable,
-    env,
-    claudeCliReviewPolicyCliFlags,
-  );
+  applyClaudeCliOptionalFlags(invocation, input, new Set(optionalFlags));
+}
+
+/**
+ * Apply probed optional Claude CLI flags. A missing flag degrades: without
+ * --system-prompt the contract is concatenated back into the stdin prompt, and
+ * without --bare the invocation simply runs with the CLI's full startup.
+ */
+function applyClaudeCliOptionalFlags(
+  invocation: CliInvocation,
+  input: ReviewAdapterInput,
+  supportedFlags: Set<string>,
+): void {
+  const metadata: Record<string, string> = {};
+
+  if (input.systemPrompt !== undefined) {
+    if (supportedFlags.has("--system-prompt")) {
+      invocation.args.push("--system-prompt", input.systemPrompt);
+      metadata.systemPromptMode = "system-prompt";
+    } else {
+      invocation.stdin = `${input.systemPrompt}\n\n${input.prompt}`;
+      metadata.systemPromptMode = "concatenated";
+    }
+  }
+
+  // --bare skips hooks, plugins, and other session startup but restricts auth
+  // to API keys, so it is only safe when the runtime selected api-key auth.
+  if (invocation.claudeAuthMode === "api-key" && supportedFlags.has("--bare")) {
+    invocation.args.push("--bare");
+    metadata.bare = "true";
+  } else {
+    metadata.bare = "false";
+  }
+
+  invocation.metadata = { ...invocation.metadata, ...metadata };
 }
 
 async function prepareGeminiCliInvocation(

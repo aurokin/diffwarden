@@ -1007,6 +1007,7 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
           ? { unsetEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] }
           : {}),
         stdin: input.prompt,
+        claudeAuthMode: runtime.authMode,
         captureMode: "native-structured",
       };
     },

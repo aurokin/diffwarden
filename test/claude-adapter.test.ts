@@ -298,6 +298,7 @@ describe("claudeAdapter", () => {
       persistSession: false,
     });
     expect(calls[0]?.options).not.toHaveProperty("maxTurns");
+    expect(calls[0]?.options).not.toHaveProperty("systemPrompt");
     expect(preflight?.checks.find((check) => check.name === "model")).toMatchObject({
       status: "passed",
       detail: "Claude model is available: sonnet.",
@@ -778,6 +779,51 @@ describe("claudeAdapter", () => {
       resolvedEffort: "max",
       effortResolutionSource: "adapter-selection",
     });
+  });
+
+  it("delivers the diffwarden contract as the SDK system prompt", async () => {
+    const { adapter, calls } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "success",
+        structured_output: validReview(),
+        duration_ms: 12,
+        total_cost_usd: 0.1,
+        session_id: "structured-session",
+      },
+    ]);
+
+    const output = await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        prompt: "Review the code changes in this repository.",
+        systemPrompt: "Review guidelines: stable diffwarden contract.",
+      }),
+    );
+
+    expect(calls[0]?.options).toMatchObject({
+      systemPrompt: "Review guidelines: stable diffwarden contract.",
+    });
+    expect(calls[0]?.prompt).toBe("Review the code changes in this repository.");
+    expect(output.metadata).toMatchObject({ systemPromptMode: "system-prompt" });
+  });
+
+  it("omits the system prompt option when no contract is supplied", async () => {
+    const { adapter, calls } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "success",
+        structured_output: validReview(),
+        duration_ms: 12,
+        total_cost_usd: 0.1,
+        session_id: "structured-session",
+      },
+    ]);
+
+    const output = await adapter.run(input({ env: { ANTHROPIC_API_KEY: "test-key" } }));
+
+    expect(calls[0]?.options).not.toHaveProperty("systemPrompt");
+    expect(output.metadata).not.toHaveProperty("systemPromptMode");
   });
 
   it("omits effort entirely when the run context marks it dropped", async () => {

@@ -14,6 +14,8 @@ export type ReviewAdapterInput = {
   diff: string;
   changedFiles: string[];
   prompt: string;
+  /** Stable review contract delivered as the engine system prompt when the transport supports it. */
+  systemPrompt?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
   readonly: boolean;
