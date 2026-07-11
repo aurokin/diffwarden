@@ -245,7 +245,7 @@ const reviewReviewerArtifactBaseSchema = z
       .record(z.string(), z.unknown())
       .and(
         z.object({
-          captureMode: z.enum(["native-structured", "tool-call", "text"]).optional(),
+          captureMode: z.enum(["native-structured", "tool-call", "text", "repaired"]).optional(),
           readonlyCapability: z.enum(["enforced", "tool-restricted", "prompt-only"]).optional(),
         }),
       )

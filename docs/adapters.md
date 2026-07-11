@@ -401,6 +401,14 @@ via stdin and records `systemPromptMode: "concatenated"`. The CLI also probes `-
 appends it only for api-key auth runs (Claude Code's `--bare` restricts auth to API keys and
 skips hooks, plugins, and other session startup), recording `bare: "true"/"false"`.
 
+Schema-invalid structured output is no longer retried inside the adapter: the run passes the
+payload through unvalidated and diffwarden's core repair pipeline takes over (one short
+`runStructured` repair request against the same reviewer, then a single labeled re-run — see
+SPEC §10). The Claude adapter implements `runStructured` as a one-shot, tool-free,
+schema-constrained query; `error_max_structured_output_retries` returns labeled empty output
+(the SDK surfaces no repair material for that subtype) so core goes straight to the labeled
+retry.
+
 The Claude SDK transport declares `supportsModelCatalog`: `claudeAdapter.listModels` fetches the
 live model catalog via the same locked-down `query.supportedModels()` pattern model preflight
 uses, mapped to `ModelCatalogEntry` (value, display name, description, supported effort levels,

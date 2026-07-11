@@ -845,6 +845,14 @@ Failure behavior:
 - `--strict` makes any reviewer failure fatal.
 - `ReviewArtifact.reviewers` must preserve per-reviewer success/failure metadata so automation can decide whether partial results are acceptable.
 
+Structured-output repair (attempt-aware pipeline):
+
+- When an attempt's output fails schema parsing AND raw material survives (schema-invalid structured JSON, or unparseable text), the runner issues one short REPAIR request against the same reviewer via the optional adapter `runStructured(input)` method — a one-shot, tool-restricted, schema-constrained invocation. The repair prompt contains the malformed output plus the ReviewResult JSON schema and instructs transcription only (never invent or drop findings).
+- The repair response is wrapped — `{ fixable, confidence: high|medium|low, review|null }` — so the model's meta judgment cannot leak into the review. Accepted only when `fixable`, `confidence !== "low"`, and the review passes schema validation; accepted repairs record `captureMode: "repaired"`, `repairConfidence`, and `repairFailureReason`, and keep the malformed original as `raw_text`.
+- Anything else — no raw material (e.g. Claude's `error_max_structured_output_retries` carries no text and no structured payload), no `runStructured`, an unfixable/low-confidence/schema-invalid repair, or a repair request error — falls through to ONE full re-run explicitly labeled with `attempts: 2` and `firstAttemptFailureReason` in adapter metadata. A labeled retry beats a shaky repair: the label tells users the engine/model is not reliably producing valid output.
+- Repair triggers on schema-parse failure only, never on semantic validation failures (findings outside changed ranges) — "repairing" line numbers is fabrication. Repair never triggers another repair.
+- Adapters do not run their own recovery: the Claude adapter's former structured→text double-run collapsed into this shared pipeline. Engines without native structured output can implement `runStructured` by describing the schema in the prompt and returning text; core unwraps JSON (strict or embedded) before validation.
+
 ## 11. Engine adapters
 
 ### 11.1 Cursor adapter, v1

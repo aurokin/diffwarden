@@ -27,6 +27,12 @@ import type { ResolvedDiff } from "./git.js";
 import { tryGetRepoRoot } from "./git.js";
 import { parseReviewOutput } from "./parse.js";
 import { buildReviewPrompt, buildReviewPromptParts } from "./prompt.js";
+import {
+  type RepairEvaluation,
+  buildRepairPrompt,
+  evaluateRepairResponse,
+  repairResponseJsonSchema,
+} from "./repair.js";
 import { type ReviewerOverrideSource, resolveReviewerConfigs } from "./reviewer.js";
 import type {
   ParseMode,
@@ -784,8 +790,61 @@ type SingleReviewerOptions = {
   env: NodeJS.ProcessEnv;
 };
 
+/**
+ * Attempt-aware review pipeline. Attempt 1 runs the review; on schema-parse failure the pipeline
+ * first tries a short REPAIR request against the same engine (only when raw material survived and
+ * the adapter exposes runStructured), then falls back to ONE full re-run explicitly labeled as a
+ * retry. Repair triggers on schema-parse failure ONLY — semantic validation failures (findings
+ * outside changed ranges) are never "repaired", since fixing line numbers is fabrication.
+ */
 async function runSingleReviewer(options: SingleReviewerOptions): Promise<ReviewReviewerArtifact> {
   const start = Date.now();
+  const first = await runReviewerAttempt(options, options.remainingTimeoutMs);
+  if (first.parsed.validation.valid_schema) {
+    return buildReviewerArtifact(options, first, Date.now() - start);
+  }
+
+  const failureReason = attemptFailureReason(first.output);
+  const material = repairMaterial(first.output);
+  if (material !== undefined && options.adapter.runStructured !== undefined) {
+    const repaired = await tryStructuredRepair({
+      options,
+      material,
+      remainingTimeoutMs: remainingAfter(options, start),
+    });
+    if (repaired !== undefined) {
+      return buildRepairedReviewerArtifact({
+        options,
+        attempt: first,
+        material,
+        repaired: repaired.evaluation,
+        ...(repaired.metadata !== undefined ? { repairMetadata: repaired.metadata } : {}),
+        failureReason,
+        timingMs: Date.now() - start,
+      });
+    }
+  }
+
+  // Labeled full re-run: attempt 1 failed schema parsing and could not be repaired. The label
+  // (attempts/firstAttemptFailureReason) is the signal that the engine/model is not reliably
+  // producing valid output — a silent second run would hide exactly that.
+  const second = await runReviewerAttempt(options, remainingAfter(options, start));
+  return buildReviewerArtifact(options, second, Date.now() - start, {
+    ...summedInvocationMetadata(first.output.metadata, second.output.metadata),
+    attempts: 2,
+    firstAttemptFailureReason: failureReason,
+  });
+}
+
+type ReviewerAttempt = {
+  output: Awaited<ReturnType<ReviewAdapter["run"]>>;
+  parsed: ReturnType<typeof parseReviewOutput>;
+};
+
+async function runReviewerAttempt(
+  options: SingleReviewerOptions,
+  remainingTimeoutMs: number | undefined,
+): Promise<ReviewerAttempt> {
   const abortController = new AbortController();
   const adapterInput = {
     cwd: options.cwd,
@@ -797,7 +856,7 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
     ...(options.promptSelection.systemPrompt !== undefined
       ? { systemPrompt: options.promptSelection.systemPrompt }
       : {}),
-    ...(options.remainingTimeoutMs !== undefined ? { timeoutMs: options.remainingTimeoutMs } : {}),
+    ...(remainingTimeoutMs !== undefined ? { timeoutMs: remainingTimeoutMs } : {}),
     signal: abortController.signal,
     readonly: true,
     env: options.env,
@@ -805,7 +864,7 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
   };
   const output = await withTimeout(
     () => options.adapter.run(adapterInput),
-    options.remainingTimeoutMs,
+    remainingTimeoutMs,
     abortController,
     options.reviewer.id,
     "run",
@@ -814,14 +873,193 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
     output.structured !== undefined
       ? parseReviewOutput({ structured: output.structured })
       : parseReviewOutput({ text: output.text ?? "" });
+  return { output, parsed };
+}
+
+function attemptFailureReason(output: ReviewerAttempt["output"]): string {
+  const adapterReason = output.metadata?.fallbackReason;
+  if (typeof adapterReason === "string" && adapterReason !== "") {
+    return adapterReason;
+  }
+  if (output.structured !== undefined) {
+    return "invalid_structured_output";
+  }
+  return output.text?.trim() ? "unparseable_text_output" : "empty_output";
+}
+
+/** Raw material a repair request can transcribe; undefined means nothing survived to repair. */
+function repairMaterial(output: ReviewerAttempt["output"]): string | undefined {
+  if (output.structured !== undefined) {
+    try {
+      return JSON.stringify(output.structured);
+    } catch {
+      return undefined;
+    }
+  }
+  const text = output.text?.trim();
+  return text ? text : undefined;
+}
+
+async function tryStructuredRepair(input: {
+  options: SingleReviewerOptions;
+  material: string;
+  remainingTimeoutMs: number | undefined;
+}): Promise<{ evaluation: RepairEvaluation; metadata?: Record<string, unknown> } | undefined> {
+  const runStructured = input.options.adapter.runStructured;
+  if (runStructured === undefined) {
+    return undefined;
+  }
+  const abortController = new AbortController();
+  try {
+    const output = await withTimeout(
+      () =>
+        runStructured({
+          cwd: input.options.cwd,
+          reviewer: input.options.reviewer,
+          prompt: buildRepairPrompt(input.material),
+          schema: repairResponseJsonSchema,
+          ...(input.remainingTimeoutMs !== undefined
+            ? { timeoutMs: input.remainingTimeoutMs }
+            : {}),
+          signal: abortController.signal,
+          env: input.options.env,
+          ...(input.options.runContext !== undefined
+            ? { runContext: input.options.runContext }
+            : {}),
+        }),
+      input.remainingTimeoutMs,
+      abortController,
+      input.options.reviewer.id,
+      "run",
+    );
+    const evaluation = evaluateRepairResponse(output);
+    if (evaluation === undefined) {
+      return undefined;
+    }
+    return {
+      evaluation,
+      ...(output.metadata !== undefined ? { metadata: output.metadata } : {}),
+    };
+  } catch {
+    // A failed repair request is never fatal; the labeled re-run is the recovery path.
+    return undefined;
+  }
+}
+
+/**
+ * Engine-reported spend summed across every invocation the pipeline made, so a repaired or
+ * retried artifact reports the reviewer's full cost instead of only the last invocation's.
+ */
+function summedInvocationMetadata(
+  ...sources: (Record<string, unknown> | undefined)[]
+): Record<string, unknown> {
+  const summed: Record<string, unknown> = {};
+  for (const key of ["durationMs", "totalCostUsd"]) {
+    const values = sources
+      .map((source) => source?.[key])
+      .filter((value): value is number => typeof value === "number");
+    if (values.length > 0) {
+      summed[key] = values.reduce((total, value) => total + value, 0);
+    }
+  }
+  return summed;
+}
+
+function remainingAfter(options: SingleReviewerOptions, start: number): number | undefined {
+  return options.remainingTimeoutMs === undefined
+    ? undefined
+    : Math.max(0, options.remainingTimeoutMs - (Date.now() - start));
+}
+
+function buildReviewerArtifact(
+  options: SingleReviewerOptions,
+  attempt: ReviewerAttempt,
+  timingMs: number,
+  attemptMetadata?: Record<string, unknown>,
+): ReviewReviewerArtifact {
   const validation = validateReviewResult({
-    result: parsed.result,
+    result: attempt.parsed.result,
     target: options.resolved.target,
-    validation: parsed.validation,
+    validation: attempt.parsed.validation,
     changedLineRanges: options.changedLineRanges,
   });
-  const timingMs = Date.now() - start;
+  const metadata =
+    attemptMetadata !== undefined
+      ? { ...attempt.output.metadata, ...attemptMetadata }
+      : attempt.output.metadata;
   const reviewerArtifact: ReviewReviewerArtifact = {
+    ...reviewerArtifactBase(options),
+    result: attempt.parsed.result,
+    validation,
+    timing_ms: timingMs,
+  };
+
+  if (attempt.parsed.rawText !== undefined) {
+    reviewerArtifact.raw_text = attempt.parsed.rawText;
+  }
+
+  if (options.preflight !== undefined) {
+    reviewerArtifact.preflight = options.preflight;
+  }
+
+  if (metadata !== undefined) {
+    reviewerArtifact.adapter_metadata = metadata;
+  }
+
+  if (attempt.output.usage !== undefined) {
+    reviewerArtifact.usage = attempt.output.usage;
+  }
+
+  return reviewerArtifact;
+}
+
+function buildRepairedReviewerArtifact(input: {
+  options: SingleReviewerOptions;
+  attempt: ReviewerAttempt;
+  material: string;
+  repaired: RepairEvaluation;
+  repairMetadata?: Record<string, unknown>;
+  failureReason: string;
+  timingMs: number;
+}): ReviewReviewerArtifact {
+  const parsed = parseReviewOutput({ structured: input.repaired.review });
+  const validation = validateReviewResult({
+    result: parsed.result,
+    target: input.options.resolved.target,
+    validation: parsed.validation,
+    changedLineRanges: input.options.changedLineRanges,
+  });
+  const reviewerArtifact: ReviewReviewerArtifact = {
+    ...reviewerArtifactBase(input.options),
+    result: parsed.result,
+    validation,
+    timing_ms: input.timingMs,
+    // The malformed original stays on the artifact so a repair is auditable.
+    raw_text: input.material,
+    adapter_metadata: {
+      ...input.attempt.output.metadata,
+      ...summedInvocationMetadata(input.attempt.output.metadata, input.repairMetadata),
+      captureMode: "repaired",
+      repairConfidence: input.repaired.confidence,
+      repairFailureReason: input.failureReason,
+    },
+  };
+
+  if (input.options.preflight !== undefined) {
+    reviewerArtifact.preflight = input.options.preflight;
+  }
+
+  if (input.attempt.output.usage !== undefined) {
+    reviewerArtifact.usage = input.attempt.output.usage;
+  }
+
+  return reviewerArtifact;
+}
+
+function reviewerArtifactBase(
+  options: SingleReviewerOptions,
+): Omit<ReviewReviewerArtifact, "result" | "validation" | "timing_ms"> & { status: "success" } {
+  return {
     id: options.reviewer.id,
     engine: options.reviewer.sdk,
     status: "success",
@@ -830,28 +1068,7 @@ async function runSingleReviewer(options: SingleReviewerOptions): Promise<Review
     ...(options.reviewer.provider ? { provider: options.reviewer.provider } : {}),
     ...(options.reviewer.model ? { model: options.reviewer.model } : {}),
     ...(options.reviewer.effort ? { effort: options.reviewer.effort } : {}),
-    result: parsed.result,
-    validation,
-    timing_ms: timingMs,
   };
-
-  if (parsed.rawText !== undefined) {
-    reviewerArtifact.raw_text = parsed.rawText;
-  }
-
-  if (options.preflight !== undefined) {
-    reviewerArtifact.preflight = options.preflight;
-  }
-
-  if (output.metadata !== undefined) {
-    reviewerArtifact.adapter_metadata = output.metadata;
-  }
-
-  if (output.usage !== undefined) {
-    reviewerArtifact.usage = output.usage;
-  }
-
-  return reviewerArtifact;
 }
 
 type ReviewerContext = {

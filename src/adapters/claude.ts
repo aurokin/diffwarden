@@ -1,7 +1,4 @@
-import {
-  buildStructuredReviewAdapterOutput,
-  buildTextAdapterOutput,
-} from "../core/adapter-output.js";
+import { buildTextAdapterOutput } from "../core/adapter-output.js";
 import {
   DiffwardenError,
   missingAuth,
@@ -30,6 +27,8 @@ import type {
   ReviewAdapterOutput,
   ReviewAdapterPreflightInput,
   ReviewAdapterPreflightResult,
+  RunStructuredInput,
+  RunStructuredOutput,
 } from "./types.js";
 
 const defaultClaudeModel = "sonnet";
@@ -96,21 +95,9 @@ export function createClaudeAdapter(
         });
 
         if (structuredResult.subtype === "success") {
-          const structuredOutput = buildStructuredReviewAdapterOutput(
-            structuredResult.structured_output,
-            {
-              metadata: claudeOutputMetadata({
-                input,
-                result: structuredResult,
-                runtime,
-                resolvedEffort,
-                effortDropped,
-                fallbackModel,
-                captureMode: "native-structured",
-              }),
-            },
-          );
-          if (structuredOutput !== undefined) {
+          if (structuredResult.structured_output !== undefined) {
+            // Schema validation happens in core: an invalid payload is repair
+            // material for the shared repair stage, not an adapter concern.
             return buildClaudeOutput({
               input,
               result: structuredResult,
@@ -119,50 +106,37 @@ export function createClaudeAdapter(
               effortDropped,
               fallbackModel,
               captureMode: "native-structured",
-              structured: structuredOutput.structured,
+              structured: structuredResult.structured_output,
             });
           }
 
-          const textResult = await runClaudeQuery({
-            query,
-            input,
-            runtime,
-            resolvedEffort,
-            effortDropped,
-            fallbackModel,
-            outputFormat: false,
-          });
           return buildClaudeTextOutput({
             input,
-            result: textResult,
+            result: structuredResult,
             runtime,
             resolvedEffort,
             effortDropped,
             fallbackModel,
-            fallbackReason: "invalid_structured_output",
-            previousResult: structuredResult,
+            fallbackReason: "missing_structured_output",
           });
         }
 
         if (structuredResult.subtype === "error_max_structured_output_retries") {
-          const textResult = await runClaudeQuery({
-            query,
-            input,
-            runtime,
-            resolvedEffort,
-            effortDropped,
-            fallbackModel,
-            outputFormat: false,
-          });
-          return buildClaudeTextOutput({
-            input,
-            result: textResult,
-            runtime,
-            resolvedEffort,
-            effortDropped,
-            fallbackModel,
-            fallbackReason: structuredResult.subtype,
-            previousResult: structuredResult,
+          // This subtype carries no result text and no structured payload —
+          // nothing for the repair stage to transcribe. Return labeled empty
+          // output so core runs its single labeled retry instead of failing.
+          return buildTextAdapterOutput({
+            text: "",
+            metadata: claudeOutputMetadata({
+              input,
+              result: structuredResult,
+              runtime,
+              resolvedEffort,
+              effortDropped,
+              fallbackModel,
+              captureMode: "text",
+              fallbackReason: structuredResult.subtype,
+            }),
           });
         }
 
@@ -176,6 +150,69 @@ export function createClaudeAdapter(
 
         const detail = error instanceof Error ? error.message : String(error);
         throw reviewerFailed(`Claude reviewer failed: ${detail}`);
+      }
+    },
+    async runStructured(input: RunStructuredInput): Promise<RunStructuredOutput> {
+      const { query } = await dependencies.loadSdk();
+      const runContext = claudeRunContext(input.runContext);
+      const runtime = runContext?.runtime ?? (await dependencies.resolveRuntime(input));
+      const abortBridge = createAbortBridge(input.signal);
+      const queryOptions: ClaudeQueryOptions = {
+        cwd: input.cwd,
+        model: input.reviewer.model ?? defaultClaudeModel,
+        // Most restricted invocation: a structured one-shot reads no files and runs no tools.
+        tools: [],
+        allowedTools: [],
+        disallowedTools: claudeDisallowedToolList(),
+        permissionMode: "dontAsk",
+        settingSources: [],
+        mcpServers: {},
+        strictMcpConfig: true,
+        persistSession: false,
+        outputFormat: { type: "json_schema", schema: input.schema },
+      };
+      if (abortBridge.controller !== undefined) {
+        queryOptions.abortController = abortBridge.controller;
+      }
+      const env = claudeQueryEnv(input.env, runtime);
+      if (env !== undefined) {
+        queryOptions.env = env;
+      }
+      if (runtime.executable !== undefined) {
+        queryOptions.pathToClaudeCodeExecutable = runtime.executable;
+      }
+
+      try {
+        let result: ClaudeResultMessage | undefined;
+        for await (const message of query({ prompt: input.prompt, options: queryOptions })) {
+          if (message.type === "assistant" && message.error === "authentication_failed") {
+            throw missingAuth("Claude reviewer authentication failed");
+          }
+          if (isClaudeResultMessage(message)) {
+            result = message;
+          }
+        }
+        if (result === undefined) {
+          throw reviewerFailed("Claude structured query did not return a result");
+        }
+        if (result.subtype !== "success") {
+          throw reviewerFailed(
+            `Claude structured query failed: ${formatClaudeResultError(result)}`,
+          );
+        }
+        const metadata = {
+          ...(result.duration_ms !== undefined ? { durationMs: result.duration_ms } : {}),
+          ...(result.total_cost_usd !== undefined ? { totalCostUsd: result.total_cost_usd } : {}),
+        };
+        return {
+          ...(result.structured_output !== undefined
+            ? { structured: result.structured_output }
+            : {}),
+          ...(result.result !== undefined ? { text: result.result } : {}),
+          ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+        };
+      } finally {
+        abortBridge.dispose();
       }
     },
     async listModels(input: ListModelsInput): Promise<ModelCatalogEntry[]> {
@@ -622,8 +659,8 @@ async function runClaudeQuery(options: RunClaudeQueryInput): Promise<ClaudeResul
     throw reviewerFailed("Claude reviewer did not return a result");
   }
 
-  // Checked here so budget exhaustion during a text-fallback retry gets the
-  // same budget-specific error as the initial structured query.
+  // Budget exhaustion gets its own message so the failure names the limit
+  // the user configured instead of a generic non-success error.
   if (result.subtype === "error_max_budget_usd") {
     throw reviewerFailed(
       "Claude reviewer stopped: the configured maxBudgetUsd was exhausted before the review completed",
@@ -719,40 +756,14 @@ function buildClaudeTextOutput(options: {
   effortDropped?: boolean | undefined;
   fallbackModel?: string | undefined;
   fallbackReason: string;
-  previousResult?: ClaudeResultMessage;
 }): ReviewAdapterOutput {
   if (options.result.subtype !== "success") {
     throw reviewerFailed(`Claude reviewer failed: ${formatClaudeResultError(options.result)}`);
   }
 
-  const outputOptions: Parameters<typeof buildClaudeOutput>[0] = {
-    input: options.input,
-    result: options.result,
-    runtime: options.runtime,
-    captureMode: "text",
-    text: options.result.result ?? "",
-    fallbackReason: options.fallbackReason,
-  };
-
-  if (options.resolvedEffort !== undefined) {
-    outputOptions.resolvedEffort = options.resolvedEffort;
-  }
-
-  if (options.effortDropped !== undefined) {
-    outputOptions.effortDropped = options.effortDropped;
-  }
-
-  if (options.fallbackModel !== undefined) {
-    outputOptions.fallbackModel = options.fallbackModel;
-  }
-
-  if (options.previousResult !== undefined) {
-    outputOptions.previousResult = options.previousResult;
-  }
-
   return buildTextAdapterOutput({
-    text: outputOptions.text,
-    metadata: claudeOutputMetadata(outputOptions),
+    text: options.result.result ?? "",
+    metadata: claudeOutputMetadata({ ...options, captureMode: "text" }),
   });
 }
 
@@ -765,7 +776,6 @@ function claudeOutputMetadata(options: {
   fallbackModel?: string | undefined;
   captureMode: "native-structured" | "text";
   fallbackReason?: string;
-  previousResult?: ClaudeResultMessage;
 }): NonNullable<ReviewAdapterOutput["metadata"]> {
   const model = options.input.reviewer.model ?? defaultClaudeModel;
   const metadata = sdkOutputMetadata("claude", {
@@ -778,11 +788,8 @@ function claudeOutputMetadata(options: {
     ...claudeFallbackModelMetadata(options.input.reviewer, options.fallbackModel),
     ...claudeFallbackUsageMetadata(options.fallbackModel, model, options.result),
     ...claudeRunLimitMetadata(options.input.reviewer),
-    durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
-    totalCostUsd: sumKnownNumbers(
-      options.previousResult?.total_cost_usd,
-      options.result.total_cost_usd,
-    ),
+    durationMs: options.result.duration_ms,
+    totalCostUsd: options.result.total_cost_usd,
     authMode: options.runtime.authMode,
     authPreference: options.runtime.authPreference,
     authMethod: options.runtime.authMethod,
@@ -824,16 +831,12 @@ function buildClaudeOutput(options: {
   structured?: unknown;
   text?: string;
   fallbackReason?: string;
-  previousResult?: ClaudeResultMessage;
 }): ReviewAdapterOutput {
   const metadata = claudeOutputMetadata(options);
 
   if (options.structured !== undefined) {
-    return (
-      buildStructuredReviewAdapterOutput(options.structured, {
-        metadata,
-      }) ?? { structured: options.structured, metadata }
-    );
+    // Passed through unvalidated: core owns schema validation and repair.
+    return { structured: options.structured, metadata };
   }
 
   return buildTextAdapterOutput({
@@ -1216,13 +1219,4 @@ function formatClaudeResultError(result: ClaudeResultMessage): string {
 
 function isClaudeAuthenticationErrorDetail(detail: string): boolean {
   return /auth|api key|unauthorized|forbidden/i.test(detail);
-}
-
-function sumKnownNumbers(...values: Array<number | undefined>): number | undefined {
-  const knownValues = values.filter((value): value is number => value !== undefined);
-  if (!knownValues.length) {
-    return undefined;
-  }
-
-  return knownValues.reduce((sum, value) => sum + value, 0);
 }

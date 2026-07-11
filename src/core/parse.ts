@@ -113,7 +113,7 @@ function stringifyFallback(value: unknown): string {
   }
 }
 
-function extractJsonObjectCandidates(text: string): string[] {
+export function extractJsonObjectCandidates(text: string): string[] {
   const candidates: string[] = [];
   let start = -1;
   let depth = 0;
