@@ -548,6 +548,8 @@ function buildClaudeQueryOptions(
   const queryOptions: ClaudeQueryOptions = {
     cwd: options.input.cwd,
     model: options.input.reviewer.model ?? defaultClaudeModel,
+    // Unlike the user-supplied CLI executable, the Agent SDK is a pinned
+    // diffwarden dependency, so systemPrompt support needs no runtime probe.
     ...(options.input.systemPrompt !== undefined
       ? { systemPrompt: options.input.systemPrompt }
       : {}),
