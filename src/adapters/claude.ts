@@ -401,8 +401,8 @@ function resolveClaudeModelEffort(
     return nativeEffort;
   }
 
-  // Model catalogs expose at most one of the two top levels (e.g. sonnet lists
-  // max but not xhigh); substitute within the top tier instead of failing.
+  // The catalog's top-tier composition varies (sonnet has been observed both
+  // with and without xhigh); substitute within the top tier instead of failing.
   if (nativeEffort === "xhigh" && supportedLevels.includes("max")) {
     return "max";
   }

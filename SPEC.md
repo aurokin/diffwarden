@@ -948,7 +948,7 @@ Findings:
 - Current Claude docs describe `allowedTools` as approval rules only. Use `tools` to constrain built-in tool availability and pair `allowedTools` with `permissionMode: "dontAsk"` for locked-down SDK agents.
 - Local Claude Code executable auth is only used when `claude --help` advertises the policy flags Diffwarden passes. This makes newer flag requirements explicit during preflight instead of allowing unknown-option failures during review execution.
 - The SDK may spawn a native Claude Code binary through optional per-platform dependencies. Preflight must check runtime/package/binary availability.
-- The SDK exports an `EffortLevel` type with `low`, `medium`, `high`, `xhigh`, and `max`; it also exposes model capability metadata such as supported effort levels. Model catalogs list at most one of the two top levels (the 2026-07 catalog lists `xhigh` for `default` and `max` for `sonnet`), so preflight substitutes within the top tier instead of failing.
+- The SDK exports an `EffortLevel` type with `low`, `medium`, `high`, `xhigh`, and `max`; it also exposes model capability metadata such as supported effort levels. The catalog's top-tier composition is not stable across probes (2026-07 observations of `sonnet` listed `max` without `xhigh` in one probe and all five levels in another), so preflight resolves against the live catalog and substitutes within the top tier (`xhigh`/`max`) instead of failing.
 
 #### Pi Agent SDK
 
