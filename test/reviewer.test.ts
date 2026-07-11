@@ -170,6 +170,8 @@ describe("resolveReviewerConfig", () => {
       sdk: "claude",
       model: "sonnet",
       modelSource: "adapter-default",
+      effort: "high",
+      effortSource: "diffwarden-default",
       readonly: true,
     });
 
@@ -274,6 +276,95 @@ describe("resolveReviewerConfig", () => {
       sdk: "pi",
       effort: "high",
       effortSource: "requested",
+    });
+  });
+
+  it("applies the diffwarden default effort to built-in claude reviewers", () => {
+    expect(resolveReviewerConfig({ spec: "claude" })).toMatchObject({
+      sdk: "claude",
+      effort: "high",
+      effortSource: "diffwarden-default",
+    });
+  });
+
+  it("lets requested effort win over the diffwarden default", () => {
+    expect(resolveReviewerConfig({ spec: "claude", effort: "low" })).toMatchObject({
+      sdk: "claude",
+      effort: "low",
+      effortSource: "requested",
+    });
+  });
+
+  it("does not apply a default effort to SDKs without one", () => {
+    const cursor = resolveReviewerConfig({ spec: "cursor" });
+    expect(cursor.effort).toBeUndefined();
+    expect(cursor.effortSource).toBeUndefined();
+    const pi = resolveReviewerConfig({ spec: "pi" });
+    expect(pi.effort).toBeUndefined();
+    expect(pi.effortSource).toBeUndefined();
+  });
+
+  it("applies the diffwarden default effort to configured claude reviewers", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "claude-deep",
+        config: {
+          reviewers: [{ id: "claude-deep", sdk: "claude", model: "sonnet" }],
+        },
+      }),
+    ).toMatchObject({
+      id: "claude-deep",
+      effort: "high",
+      effortSource: "diffwarden-default",
+    });
+  });
+
+  it("applies the diffwarden default effort to configured claude cli reviewers", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "claude-cli",
+        config: {
+          reviewers: [{ id: "claude-cli", sdk: "claude", transport: "cli", model: "sonnet" }],
+        },
+      }),
+    ).toMatchObject({
+      id: "claude-cli",
+      transport: "cli",
+      effort: "high",
+      effortSource: "diffwarden-default",
+    });
+  });
+
+  it("skips the diffwarden default effort when the effort catalog excludes it", () => {
+    const resolved = resolveReviewerConfig({
+      spec: "claude-limited",
+      config: {
+        reviewers: [
+          {
+            id: "claude-limited",
+            sdk: "claude",
+            model: "sonnet",
+            effortCatalog: ["low", "medium"],
+          },
+        ],
+      },
+    });
+    expect(resolved.effort).toBeUndefined();
+    expect(resolved.effortSource).toBeUndefined();
+  });
+
+  it("lets configured effort win over the diffwarden default", () => {
+    expect(
+      resolveReviewerConfig({
+        spec: "claude-deep",
+        config: {
+          reviewers: [{ id: "claude-deep", sdk: "claude", model: "sonnet", effort: "medium" }],
+        },
+      }),
+    ).toMatchObject({
+      id: "claude-deep",
+      effort: "medium",
+      effortSource: "config",
     });
   });
 

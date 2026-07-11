@@ -11,6 +11,7 @@ export type ResolutionSource =
   | "adapter-default"
   | "adapter-selection"
   | "config"
+  | "diffwarden-default"
   | "env"
   | "provider-init"
   | "provider-local"
@@ -124,6 +125,7 @@ const resolutionSources = [
   "adapter-default",
   "adapter-selection",
   "config",
+  "diffwarden-default",
   "env",
   "provider-init",
   "provider-local",
@@ -135,6 +137,7 @@ const resolutionSources = [
 const resolutionSourceRanks: Record<ResolutionSource, number> = {
   unsupported: 0,
   "adapter-default": 10,
+  "diffwarden-default": 15,
   "provider-local": 20,
   "adapter-selection": 30,
   config: 40,

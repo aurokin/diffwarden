@@ -346,6 +346,14 @@ Public effort values:
 - `xhigh`
 - `max`
 
+When flags, environment variables, and reviewer config all leave effort unset, Diffwarden
+applies a per-transport default effort from the adapter capability matrix, reported with
+`effortSource: "diffwarden-default"`. Claude reviewers (SDK and CLI transports) default to
+`high`; other engines currently have no default, so effort stays unset and the engine
+decides. A reviewer `effortCatalog` that omits the default suppresses it, and if the
+selected model turns out not to support effort at preflight, the default is silently
+dropped (recorded as `effortDropped: "model-unsupported"`) instead of failing the run.
+
 ## Pi Provider Profile Example
 
 Provider-backed Pi profiles can keep provider-specific auth and base URL wiring in config

@@ -494,6 +494,69 @@ describe("claudeAdapter", () => {
     expect(closeCalls()).toBe(1);
   });
 
+  it("drops a diffwarden-default effort when the model does not support effort", async () => {
+    const { adapter } = createMockClaudePreflightAdapter([
+      {
+        value: "haiku",
+        supportsEffort: false,
+      },
+    ]);
+
+    const prepared = await adapter.prepare?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "haiku",
+        effort: "high",
+        effortSource: "diffwarden-default",
+        readonly: true,
+      },
+      readonly: true,
+      env: { ANTHROPIC_API_KEY: "test-key" },
+    });
+
+    expect(prepared?.preflight?.checks.find((check) => check.name === "model")).toMatchObject({
+      status: "passed",
+    });
+    expect(prepared?.preflight?.metadata).toMatchObject({
+      requestedEffort: "high",
+      effortResolutionSource: "adapter-selection",
+      effortDropped: "model-unsupported",
+    });
+    expect(prepared?.preflight?.metadata).not.toHaveProperty("effort");
+    expect(prepared?.preflight?.metadata).not.toHaveProperty("resolvedEffort");
+    expect(prepared?.runContext).toMatchObject({ kind: "claude", effortDropped: true });
+  });
+
+  it("still rejects user-requested efforts the model does not support", async () => {
+    const { adapter } = createMockClaudePreflightAdapter([
+      {
+        value: "haiku",
+        supportsEffort: false,
+      },
+    ]);
+
+    await expect(
+      adapter.prepare?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "haiku",
+          effort: "high",
+          effortSource: "config",
+          readonly: true,
+        },
+        readonly: true,
+        env: { ANTHROPIC_API_KEY: "test-key" },
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_effort",
+      exitCode: 2,
+    });
+  });
+
   it("fails clearly when no Claude auth path is available", async () => {
     await expect(claudeAdapter.run(input({ env: { PATH: "" } }))).rejects.toMatchObject({
       code: "missing_auth",
@@ -715,6 +778,48 @@ describe("claudeAdapter", () => {
       resolvedEffort: "max",
       effortResolutionSource: "adapter-selection",
     });
+  });
+
+  it("omits effort entirely when the run context marks it dropped", async () => {
+    const { adapter, calls } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "success",
+        structured_output: validReview(),
+        duration_ms: 12,
+        total_cost_usd: 0.1,
+        session_id: "structured-session",
+      },
+    ]);
+
+    const output = await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "haiku",
+          effort: "high",
+          effortSource: "diffwarden-default",
+          readonly: true,
+        },
+        runContext: {
+          kind: "claude",
+          runtime: { authMode: "api-key", authPreference: "auto" },
+          effortDropped: true,
+        },
+      }),
+    );
+
+    expect(calls[0]?.options).not.toHaveProperty("effort");
+    expect(calls[0]?.options).not.toHaveProperty("thinking");
+    expect(output.metadata).toMatchObject({
+      requestedEffort: "high",
+      effortResolutionSource: "adapter-selection",
+      effortDropped: "model-unsupported",
+    });
+    expect(output.metadata).not.toHaveProperty("effort");
+    expect(output.metadata).not.toHaveProperty("resolvedEffort");
   });
 
   it.skipIf(isIntegrationDisabled("claude"))(

@@ -3,6 +3,7 @@ import {
   defaultReviewerModel,
   isReviewerSdk,
   reviewerCapabilityDefaults,
+  reviewerDefaultEffort,
   reviewerSdkValues,
   reviewerTransportDefaults,
   validateReviewerCapabilityOverrides,
@@ -111,17 +112,37 @@ export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewRe
       : options.model === undefined
         ? "adapter-default"
         : (options.modelSource ?? "requested");
+  const effortSelection =
+    options.effort !== undefined
+      ? { value: options.effort, source: options.effortSource ?? "requested" }
+      : defaultEffortSelection(parsed.sdk, defaults.transport, undefined);
 
   return validateReviewerCapabilityOverrides({
     id: parsed.sdk,
     sdk: parsed.sdk,
     ...defaults,
     ...(modelSource !== undefined ? { modelSource } : {}),
-    ...(options.effort !== undefined ? { effort: options.effort } : {}),
-    ...(options.effort !== undefined ? { effortSource: options.effortSource ?? "requested" } : {}),
+    ...(effortSelection !== undefined
+      ? { effort: effortSelection.value, effortSource: effortSelection.source }
+      : {}),
     ...reviewerTimeout(timeoutSeconds),
     readonly: true,
   });
+}
+
+function defaultEffortSelection(
+  sdk: ReviewerSdk,
+  transport: ReviewReviewerConfig["transport"],
+  effortCatalog: string[] | undefined,
+): { value: string; source: "diffwarden-default" } | undefined {
+  const defaultEffort = reviewerDefaultEffort(sdk, transport);
+  if (defaultEffort === undefined) {
+    return undefined;
+  }
+  if (effortCatalog !== undefined && !effortCatalog.includes(defaultEffort)) {
+    return undefined;
+  }
+  return { value: defaultEffort, source: "diffwarden-default" };
 }
 
 function resolveReviewerSpecs(options: ResolveReviewersOptions): string[] {
@@ -216,11 +237,13 @@ function materializeConfiguredReviewer(
   options: ResolveReviewerOptions,
 ): ReviewReviewerConfig {
   const modelSelection = configuredModelSelection(configured, options.model, options.modelSource);
-  const effortSelection = configuredEffortSelection(
-    configured,
-    options.effort,
-    options.effortSource,
-  );
+  const effortSelection =
+    configuredEffortSelection(configured, options.effort, options.effortSource) ??
+    defaultEffortSelection(
+      configured.sdk,
+      configured.transport ?? reviewerTransportDefaults(configured.sdk).transport,
+      configured.effortCatalog,
+    );
   const model = modelSelection?.value;
   const effort = effortSelection?.value;
 

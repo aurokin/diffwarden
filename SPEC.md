@@ -300,6 +300,7 @@ Rules:
 - Invalid effort values fail during CLI/config validation with exit `2`.
 - Invalid model values fail gracefully with a specific error. Prefer local validation against the selected reviewer/profile model catalog; if the SDK/provider rejects the model during preflight or execution, surface that as a reviewer setup/execution failure with exit `3`.
 - Effort is best understood as requested reasoning intensity. Adapters may record a different effective effort when the SDK or model maps/clamps the requested value.
+- When no effort is requested through flags, env, or config, diffwarden applies a per-transport default effort declared in the capability matrix (`defaultEffort`), recorded with source `diffwarden-default`. Claude's SDK and CLI transports default to `high`; other engines currently declare no default and leave effort to the engine. A configured `effortCatalog` that omits the default suppresses it. If preflight later proves the selected model cannot accept the default (for example a model without effort support), the adapter drops effort entirely instead of failing, recording `effortDropped: "model-unsupported"`; user-requested efforts still fail loudly.
 
 Pi effort handling is the reference implementation:
 
