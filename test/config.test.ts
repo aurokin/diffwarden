@@ -105,6 +105,66 @@ describe("loadDiffwardenConfig", () => {
     });
   });
 
+  it("loads Claude fallback and limit configuration", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [
+        {
+          id: "claude",
+          engine: "claude",
+          model: "opus",
+          fallbackModel: "sonnet",
+          maxTurns: 40,
+          maxBudgetUsd: 2.5,
+        },
+      ],
+    });
+
+    const loaded = await loadDiffwardenConfig({ cwd: root, repoRoot: root });
+
+    expect(loaded?.config.reviewers?.[0]).toMatchObject({
+      id: "claude",
+      sdk: "claude",
+      fallbackModel: "sonnet",
+      maxTurns: 40,
+      maxBudgetUsd: 2.5,
+    });
+  });
+
+  it("rejects fallback and limit fields on engines that do not support them", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [{ id: "pi", engine: "pi", fallbackModel: "sonnet" }],
+    });
+
+    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toThrow(
+      "Reviewer pi: pi sdk transport does not support fallbackModel",
+    );
+  });
+
+  it("rejects maxTurns for the Claude CLI transport", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [{ id: "claude-cli", engine: "claude", transport: "cli", maxTurns: 40 }],
+    });
+
+    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toThrow(
+      "Reviewer claude-cli: claude cli transport does not support maxTurns",
+    );
+  });
+
+  it("rejects non-positive reviewer limit values", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
+    writeConfig(root, {
+      reviewers: [{ id: "claude", engine: "claude", maxBudgetUsd: 0 }],
+    });
+
+    await expect(loadDiffwardenConfig({ cwd: root, repoRoot: root })).rejects.toMatchObject({
+      code: "invalid_config",
+      exitCode: 2,
+    });
+  });
+
   it("loads CLI transport configuration for executable-backed reviewers", async () => {
     root = mkdtempSync(path.join(tmpdir(), "diffwarden-config-"));
     writeConfig(root, {

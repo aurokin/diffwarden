@@ -354,6 +354,32 @@ describe("runReview", () => {
     expect(piAdapter.repoRoots).toEqual([realpathSync(repo)]);
   });
 
+  it("threads --fallback-model into standalone reviewer preflight reports", async () => {
+    repo = createWorkspace();
+    const fallbackModels: Array<string | undefined> = [];
+    const claudeAdapter: ReviewAdapter = {
+      name: "claude",
+      async preflight(input) {
+        fallbackModels.push(input.reviewer.fallbackModel);
+        return { checks: [{ name: "mock", status: "passed" }] };
+      },
+      async run() {
+        throw new Error("run should not be called");
+      },
+    };
+
+    await runReviewerPreflightReport({
+      cwd: repo,
+      reviewer: "claude",
+      fallbackModel: "sonnet",
+      adapters: {
+        claude: claudeAdapter,
+      },
+    });
+
+    expect(fallbackModels).toEqual(["sonnet"]);
+  });
+
   it("rejects reviewer profiles before adapter execution", async () => {
     repo = createWorkspace();
     const resolved = createResolvedTarget(repo);

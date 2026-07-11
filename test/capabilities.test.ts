@@ -5,6 +5,7 @@ import {
   getReviewerAuthSignal,
   getTransportCapability,
   reviewerCapabilities,
+  reviewerLimitCapabilityErrors,
   reviewerSdkPackage,
   reviewerSdkValues,
   reviewerSystemPromptSupport,
@@ -63,6 +64,49 @@ describe("reviewerCapabilities", () => {
       }
       expect(reviewerSystemPromptSupport(sdk, undefined)).toBeUndefined();
     }
+  });
+
+  it("declares fallback/limit support only for claude transports", () => {
+    expect(reviewerLimitCapabilityErrors({ sdk: "claude", fallbackModel: "sonnet" })).toEqual([]);
+    expect(reviewerLimitCapabilityErrors({ sdk: "claude", maxTurns: 40 })).toEqual([]);
+    expect(reviewerLimitCapabilityErrors({ sdk: "claude", maxBudgetUsd: 2 })).toEqual([]);
+    expect(
+      reviewerLimitCapabilityErrors({
+        sdk: "claude",
+        transport: "cli",
+        fallbackModel: "sonnet",
+        maxBudgetUsd: 2,
+      }),
+    ).toEqual([]);
+
+    // The Claude CLI has no --max-turns flag.
+    expect(
+      reviewerLimitCapabilityErrors({ sdk: "claude", transport: "cli", maxTurns: 40 }),
+    ).toEqual(["claude cli transport does not support maxTurns"]);
+
+    for (const sdk of expectedReviewerSdks) {
+      if (sdk === "claude") {
+        continue;
+      }
+      expect(
+        reviewerLimitCapabilityErrors({ sdk, fallbackModel: "x", maxTurns: 1, maxBudgetUsd: 1 }),
+      ).toEqual([
+        expect.stringContaining("does not support fallbackModel"),
+        expect.stringContaining("does not support maxTurns"),
+        expect.stringContaining("does not support maxBudgetUsd"),
+      ]);
+      // Without the fields set, no errors regardless of capability.
+      expect(reviewerLimitCapabilityErrors({ sdk })).toEqual([]);
+    }
+  });
+
+  it("rejects unsupported fallback/limit fields during reviewer resolution", () => {
+    const config = {
+      reviewers: [{ id: "pi-reviewer", sdk: "pi" as const }],
+    };
+    expect(() =>
+      resolveReviewerConfig({ spec: "pi-reviewer", fallbackModel: "sonnet", config }),
+    ).toThrow("pi sdk transport does not support fallbackModel");
   });
 
   it("matches reviewer resolution defaults", () => {

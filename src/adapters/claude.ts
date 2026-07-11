@@ -48,6 +48,8 @@ type ClaudeRunContext = {
   resolvedEffort?: ClaudeNativeEffort;
   /** A diffwarden-default effort the model rejected at preflight; omit effort entirely. */
   effortDropped?: boolean;
+  /** Catalog-validated fallback model resolved at preflight; absent means no fallback. */
+  fallbackModel?: string;
 };
 
 const defaultClaudeAdapterDependencies: ClaudeAdapterDependencies = {
@@ -74,6 +76,11 @@ export function createClaudeAdapter(
       // Only prepare() can prove a drop; runs without a run context pass the
       // configured effort through and leave rejection to the platform.
       const effortDropped = runContext?.effortDropped === true;
+      const fallbackModel =
+        runContext !== undefined
+          ? runContext.fallbackModel
+          : (input.reviewer.fallbackModel ??
+            claudeDefaultFallbackModel(input.reviewer.model ?? defaultClaudeModel));
 
       try {
         const structuredResult = await runClaudeQuery({
@@ -82,6 +89,7 @@ export function createClaudeAdapter(
           runtime,
           resolvedEffort,
           effortDropped,
+          fallbackModel,
           outputFormat: true,
         });
 
@@ -95,6 +103,7 @@ export function createClaudeAdapter(
                 runtime,
                 resolvedEffort,
                 effortDropped,
+                fallbackModel,
                 captureMode: "native-structured",
               }),
             },
@@ -106,6 +115,7 @@ export function createClaudeAdapter(
               runtime,
               resolvedEffort,
               effortDropped,
+              fallbackModel,
               captureMode: "native-structured",
               structured: structuredOutput.structured,
             });
@@ -117,6 +127,7 @@ export function createClaudeAdapter(
             runtime,
             resolvedEffort,
             effortDropped,
+            fallbackModel,
             outputFormat: false,
           });
           return buildClaudeTextOutput({
@@ -125,6 +136,7 @@ export function createClaudeAdapter(
             runtime,
             resolvedEffort,
             effortDropped,
+            fallbackModel,
             fallbackReason: "invalid_structured_output",
             previousResult: structuredResult,
           });
@@ -137,6 +149,7 @@ export function createClaudeAdapter(
             runtime,
             resolvedEffort,
             effortDropped,
+            fallbackModel,
             outputFormat: false,
           });
           return buildClaudeTextOutput({
@@ -145,6 +158,7 @@ export function createClaudeAdapter(
             runtime,
             resolvedEffort,
             effortDropped,
+            fallbackModel,
             fallbackReason: structuredResult.subtype,
             previousResult: structuredResult,
           });
@@ -223,6 +237,8 @@ async function prepareClaudeAdapter(
           modelPreflight.resolvedEffort,
           modelPreflight.effortDropped,
         ),
+        ...claudeFallbackModelMetadata(input.reviewer, modelPreflight.fallbackModel),
+        ...claudeRunLimitMetadata(input.reviewer),
         authMode: runtime.authMode,
         authPreference: runtime.authPreference,
         authMethod: runtime.authMethod,
@@ -238,6 +254,9 @@ async function prepareClaudeAdapter(
         ? { resolvedEffort: modelPreflight.resolvedEffort }
         : {}),
       ...(modelPreflight.effortDropped ? { effortDropped: true } : {}),
+      ...(modelPreflight.fallbackModel !== undefined
+        ? { fallbackModel: modelPreflight.fallbackModel }
+        : {}),
     },
   };
 }
@@ -264,6 +283,7 @@ type RunClaudeQueryInput = {
   runtime: ClaudeRuntime;
   resolvedEffort?: ClaudeNativeEffort | undefined;
   effortDropped?: boolean | undefined;
+  fallbackModel?: string | undefined;
   outputFormat: boolean;
 };
 
@@ -301,6 +321,8 @@ type ClaudeQueryOptions = {
   strictMcpConfig?: boolean;
   persistSession?: boolean;
   maxTurns?: number;
+  maxBudgetUsd?: number;
+  fallbackModel?: string;
   thinking?: { type: "disabled" | "adaptive" } | { type: "enabled"; budgetTokens: number };
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   pathToClaudeCodeExecutable?: string;
@@ -320,6 +342,7 @@ async function preflightClaudeModel(options: {
   model: ClaudeModelInfo;
   resolvedEffort?: ClaudeNativeEffort;
   effortDropped?: boolean;
+  fallbackModel?: string;
 }> {
   const abortBridge = createAbortBridge(options.input.signal);
   const query = options.query({
@@ -364,10 +387,26 @@ async function preflightClaudeModel(options: {
       }
     }
 
+    const requestedFallback = options.input.reviewer.fallbackModel;
+    let fallbackModel: string | undefined;
+    if (requestedFallback !== undefined) {
+      if (!models.some((candidate) => candidate.value === requestedFallback)) {
+        throw new DiffwardenError(
+          "invalid_model",
+          `Claude fallback model is not available: ${requestedFallback}`,
+          2,
+        );
+      }
+      fallbackModel = requestedFallback;
+    } else {
+      fallbackModel = claudeDefaultFallbackModel(model.value, models);
+    }
+
     return {
       model,
       ...(resolvedEffort !== undefined ? { resolvedEffort } : {}),
       ...(effortDropped ? { effortDropped: true } : {}),
+      ...(fallbackModel !== undefined ? { fallbackModel } : {}),
     };
   } catch (error) {
     if (error instanceof DiffwardenError) {
@@ -510,6 +549,7 @@ type ClaudeResultMessage = {
   duration_ms?: number;
   total_cost_usd?: number;
   session_id?: string;
+  modelUsage?: Record<string, unknown>;
   errors?: string[];
 };
 
@@ -539,6 +579,14 @@ async function runClaudeQuery(options: RunClaudeQueryInput): Promise<ClaudeResul
     throw reviewerFailed("Claude reviewer did not return a result");
   }
 
+  // Checked here so budget exhaustion during a text-fallback retry gets the
+  // same budget-specific error as the initial structured query.
+  if (result.subtype === "error_max_budget_usd") {
+    throw reviewerFailed(
+      "Claude reviewer stopped: the configured maxBudgetUsd was exhausted before the review completed",
+    );
+  }
+
   return result;
 }
 
@@ -565,6 +613,13 @@ function buildClaudeQueryOptions(
     ...(options.effortDropped === true
       ? {}
       : claudeQueryEffortOptions(options.input.reviewer.effort, options.resolvedEffort)),
+    ...(options.fallbackModel !== undefined ? { fallbackModel: options.fallbackModel } : {}),
+    ...(options.input.reviewer.maxTurns !== undefined
+      ? { maxTurns: options.input.reviewer.maxTurns }
+      : {}),
+    ...(options.input.reviewer.maxBudgetUsd !== undefined
+      ? { maxBudgetUsd: options.input.reviewer.maxBudgetUsd }
+      : {}),
   };
 
   if (abortController !== undefined) {
@@ -619,6 +674,7 @@ function buildClaudeTextOutput(options: {
   runtime: ClaudeRuntime;
   resolvedEffort?: ClaudeNativeEffort | undefined;
   effortDropped?: boolean | undefined;
+  fallbackModel?: string | undefined;
   fallbackReason: string;
   previousResult?: ClaudeResultMessage;
 }): ReviewAdapterOutput {
@@ -643,6 +699,10 @@ function buildClaudeTextOutput(options: {
     outputOptions.effortDropped = options.effortDropped;
   }
 
+  if (options.fallbackModel !== undefined) {
+    outputOptions.fallbackModel = options.fallbackModel;
+  }
+
   if (options.previousResult !== undefined) {
     outputOptions.previousResult = options.previousResult;
   }
@@ -659,6 +719,7 @@ function claudeOutputMetadata(options: {
   runtime: ClaudeRuntime;
   resolvedEffort?: ClaudeNativeEffort | undefined;
   effortDropped?: boolean | undefined;
+  fallbackModel?: string | undefined;
   captureMode: "native-structured" | "text";
   fallbackReason?: string;
   previousResult?: ClaudeResultMessage;
@@ -671,6 +732,9 @@ function claudeOutputMetadata(options: {
     ...claudeModelResolutionMetadata(options.input.reviewer, model),
     ...claudeEffortMetadata(options.input.reviewer, options.resolvedEffort, options.effortDropped),
     ...(options.input.systemPrompt !== undefined ? { systemPromptMode: "system-prompt" } : {}),
+    ...claudeFallbackModelMetadata(options.input.reviewer, options.fallbackModel),
+    ...claudeFallbackUsageMetadata(options.fallbackModel, model, options.result),
+    ...claudeRunLimitMetadata(options.input.reviewer),
     durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
     totalCostUsd: sumKnownNumbers(
       options.previousResult?.total_cost_usd,
@@ -712,6 +776,7 @@ function buildClaudeOutput(options: {
   runtime: ClaudeRuntime;
   resolvedEffort?: ClaudeNativeEffort | undefined;
   effortDropped?: boolean | undefined;
+  fallbackModel?: string | undefined;
   captureMode: "native-structured" | "text";
   structured?: unknown;
   text?: string;
@@ -782,6 +847,78 @@ function claudeEffortMetadata(
           ? "adapter-selection"
           : (reviewer.effortSource ?? "requested"),
     }),
+  };
+}
+
+const claudeModelFamilies = ["sonnet", "opus", "haiku", "fable", "mythos"] as const;
+
+export function claudeModelFamily(model: string): string | undefined {
+  const normalized = model.toLowerCase();
+  return claudeModelFamilies.find((family) => normalized.includes(family));
+}
+
+/**
+ * Default fallback model: sonnet, only when the primary is provably a
+ * different family. Unrecognized primaries get no default, and no code path
+ * ever selects haiku. With a catalog, the fallback must exist in it.
+ */
+export function claudeDefaultFallbackModel(
+  primaryModel: string,
+  catalogModels?: Array<{ value: string }>,
+): string | undefined {
+  const primaryFamily = claudeModelFamily(primaryModel);
+  if (primaryFamily === undefined || primaryFamily === "sonnet") {
+    return undefined;
+  }
+  if (catalogModels === undefined) {
+    return "sonnet";
+  }
+  const sonnet =
+    catalogModels.find((model) => model.value === "sonnet") ??
+    catalogModels.find((model) => claudeModelFamily(model.value) === "sonnet");
+  return sonnet?.value;
+}
+
+function claudeFallbackModelMetadata(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+  fallbackModel: string | undefined,
+): Record<string, string> {
+  if (fallbackModel === undefined) {
+    return {};
+  }
+  return {
+    fallbackModel,
+    fallbackModelSource: reviewer.fallbackModel !== undefined ? "requested" : "diffwarden-default",
+  };
+}
+
+function claudeFallbackUsageMetadata(
+  fallbackModel: string | undefined,
+  primaryModel: string,
+  result: ClaudeResultMessage,
+): Record<string, string> {
+  if (fallbackModel === undefined || result.modelUsage === undefined) {
+    return {};
+  }
+  const fallbackFamily = claudeModelFamily(fallbackModel);
+  const primaryFamily = claudeModelFamily(primaryModel);
+  if (fallbackFamily === undefined || fallbackFamily === primaryFamily) {
+    return {};
+  }
+  const used = Object.keys(result.modelUsage).some(
+    (model) => claudeModelFamily(model) === fallbackFamily,
+  );
+  return { fallbackModelUsed: used ? "true" : "false" };
+}
+
+// Strings, matching the CLI transport's Record<string, string> invocation
+// metadata so both transports report the same shape for the same keys.
+function claudeRunLimitMetadata(
+  reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
+): Record<string, string> {
+  return {
+    ...(reviewer.maxTurns !== undefined ? { maxTurns: String(reviewer.maxTurns) } : {}),
+    ...(reviewer.maxBudgetUsd !== undefined ? { maxBudgetUsd: String(reviewer.maxBudgetUsd) } : {}),
   };
 }
 

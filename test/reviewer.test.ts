@@ -606,6 +606,49 @@ describe("resolveReviewerConfigs", () => {
         model: "sonnet",
       }),
     ).toThrow("--model can only be used with a single reviewer");
+
+    expect(() =>
+      resolveReviewerConfigs({
+        reviewers: ["pi", "claude"],
+        fallbackModel: "sonnet",
+      }),
+    ).toThrow("--fallback-model can only be used with a single reviewer");
+  });
+
+  it("threads fallback and limit settings into resolved reviewers", () => {
+    const [fromOption] = resolveReviewerConfigs({
+      reviewers: ["claude"],
+      model: "opus",
+      fallbackModel: "sonnet",
+    });
+    expect(fromOption).toMatchObject({ sdk: "claude", fallbackModel: "sonnet" });
+
+    const config = {
+      reviewers: [
+        {
+          id: "claude-custom",
+          sdk: "claude" as const,
+          model: "opus",
+          fallbackModel: "claude-sonnet-4-5",
+          maxTurns: 40,
+          maxBudgetUsd: 2.5,
+        },
+      ],
+    };
+    const [fromConfig] = resolveReviewerConfigs({ reviewers: ["claude-custom"], config });
+    expect(fromConfig).toMatchObject({
+      fallbackModel: "claude-sonnet-4-5",
+      maxTurns: 40,
+      maxBudgetUsd: 2.5,
+    });
+
+    // A per-run --fallback-model wins over the configured one.
+    const [overridden] = resolveReviewerConfigs({
+      reviewers: ["claude-custom"],
+      config,
+      fallbackModel: "sonnet",
+    });
+    expect(overridden).toMatchObject({ fallbackModel: "sonnet" });
   });
 
   it("rejects empty explicit reviewer specs", () => {

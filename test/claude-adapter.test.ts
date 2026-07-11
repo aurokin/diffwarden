@@ -9,6 +9,8 @@ import {
 } from "../src/adapters/claude-tool-policy.js";
 import {
   claudeAdapter,
+  claudeDefaultFallbackModel,
+  claudeModelFamily,
   createClaudeAdapter,
   resolveClaudeRuntime,
 } from "../src/adapters/claude.js";
@@ -1025,6 +1027,299 @@ describe("claudeAdapter", () => {
     expect(output.metadata).not.toHaveProperty("resolvedEffort");
   });
 
+  it("derives model families and default sonnet fallbacks", () => {
+    expect(claudeModelFamily("claude-opus-4-8")).toBe("opus");
+    expect(claudeModelFamily("sonnet")).toBe("sonnet");
+    expect(claudeModelFamily("claude-fable-5")).toBe("fable");
+    expect(claudeModelFamily("default")).toBeUndefined();
+
+    expect(claudeDefaultFallbackModel("opus")).toBe("sonnet");
+    expect(claudeDefaultFallbackModel("claude-haiku-4-5")).toBe("sonnet");
+    expect(claudeDefaultFallbackModel("sonnet")).toBeUndefined();
+    expect(claudeDefaultFallbackModel("default")).toBeUndefined();
+
+    expect(claudeDefaultFallbackModel("opus", [{ value: "sonnet" }, { value: "opus" }])).toBe(
+      "sonnet",
+    );
+    expect(claudeDefaultFallbackModel("opus", [{ value: "claude-sonnet-4-5" }])).toBe(
+      "claude-sonnet-4-5",
+    );
+    // Never invent a fallback that the catalog does not offer, and never haiku.
+    expect(
+      claudeDefaultFallbackModel("opus", [{ value: "opus" }, { value: "haiku" }]),
+    ).toBeUndefined();
+  });
+
+  it("selects a default sonnet fallback during preflight for non-sonnet primaries", async () => {
+    const { adapter } = createMockClaudePreflightAdapter([
+      { value: "opus", displayName: "Opus" },
+      { value: "sonnet", displayName: "Sonnet" },
+    ]);
+
+    const prepared = await adapter.prepare?.({
+      cwd: process.cwd(),
+      reviewer: { id: "claude", sdk: "claude", model: "opus", readonly: true },
+      readonly: true,
+      env: { ANTHROPIC_API_KEY: "test-key" },
+    });
+
+    expect(prepared?.preflight?.metadata).toMatchObject({
+      fallbackModel: "sonnet",
+      fallbackModelSource: "diffwarden-default",
+    });
+    expect(prepared?.runContext).toMatchObject({ fallbackModel: "sonnet" });
+  });
+
+  it("omits the fallback when the primary is already sonnet", async () => {
+    const { adapter } = createMockClaudePreflightAdapter([
+      { value: "opus", displayName: "Opus" },
+      { value: "sonnet", displayName: "Sonnet" },
+    ]);
+
+    const prepared = await adapter.prepare?.({
+      cwd: process.cwd(),
+      reviewer: { id: "claude", sdk: "claude", model: "sonnet", readonly: true },
+      readonly: true,
+      env: { ANTHROPIC_API_KEY: "test-key" },
+    });
+
+    expect(prepared?.preflight?.metadata).not.toHaveProperty("fallbackModel");
+    expect(prepared?.runContext).not.toHaveProperty("fallbackModel");
+  });
+
+  it("validates an explicit fallback model against the catalog", async () => {
+    const models = [
+      { value: "opus", displayName: "Opus" },
+      { value: "sonnet", displayName: "Sonnet" },
+    ];
+
+    const { adapter } = createMockClaudePreflightAdapter(models);
+    const prepared = await adapter.prepare?.({
+      cwd: process.cwd(),
+      reviewer: {
+        id: "claude",
+        sdk: "claude",
+        model: "opus",
+        fallbackModel: "sonnet",
+        readonly: true,
+      },
+      readonly: true,
+      env: { ANTHROPIC_API_KEY: "test-key" },
+    });
+    expect(prepared?.preflight?.metadata).toMatchObject({
+      fallbackModel: "sonnet",
+      fallbackModelSource: "requested",
+    });
+
+    const { adapter: rejecting } = createMockClaudePreflightAdapter(models);
+    await expect(
+      rejecting.preflight?.({
+        cwd: process.cwd(),
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "opus",
+          fallbackModel: "opus-mini",
+          readonly: true,
+        },
+        readonly: true,
+        env: { ANTHROPIC_API_KEY: "test-key" },
+      }),
+    ).rejects.toThrow("Claude fallback model is not available: opus-mini");
+  });
+
+  it("maps fallbackModel, maxTurns, and maxBudgetUsd to Claude query options", async () => {
+    const { adapter, calls } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "success",
+        structured_output: validReview(),
+        duration_ms: 12,
+        total_cost_usd: 0.1,
+        session_id: "structured-session",
+      },
+    ]);
+
+    const output = await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        reviewer: {
+          id: "claude",
+          sdk: "claude",
+          model: "opus",
+          fallbackModel: "sonnet",
+          maxTurns: 40,
+          maxBudgetUsd: 2.5,
+          readonly: true,
+        },
+      }),
+    );
+
+    expect(calls[0]?.options).toMatchObject({
+      fallbackModel: "sonnet",
+      maxTurns: 40,
+      maxBudgetUsd: 2.5,
+    });
+    // Limit metadata is stringly typed to match the CLI transport's shape.
+    expect(output.metadata).toMatchObject({
+      fallbackModel: "sonnet",
+      fallbackModelSource: "requested",
+      maxTurns: "40",
+      maxBudgetUsd: "2.5",
+    });
+  });
+
+  it("applies the default sonnet fallback on runs without a run context", async () => {
+    const { adapter, calls } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "success",
+        structured_output: validReview(),
+        duration_ms: 12,
+        total_cost_usd: 0.1,
+        session_id: "structured-session",
+      },
+    ]);
+
+    const output = await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        reviewer: { id: "claude", sdk: "claude", model: "opus", readonly: true },
+      }),
+    );
+
+    expect(calls[0]?.options).toMatchObject({ fallbackModel: "sonnet" });
+    expect(calls[0]?.options).not.toHaveProperty("maxTurns");
+    expect(calls[0]?.options).not.toHaveProperty("maxBudgetUsd");
+    expect(output.metadata).toMatchObject({
+      fallbackModel: "sonnet",
+      fallbackModelSource: "diffwarden-default",
+    });
+  });
+
+  it("prefers the preflight-resolved fallback from the run context", async () => {
+    const { adapter, calls } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "success",
+        structured_output: validReview(),
+        duration_ms: 12,
+        total_cost_usd: 0.1,
+        session_id: "structured-session",
+      },
+    ]);
+
+    const output = await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        reviewer: { id: "claude", sdk: "claude", model: "opus", readonly: true },
+        runContext: {
+          kind: "claude",
+          runtime: { authMode: "api-key", authPreference: "auto" },
+          fallbackModel: "claude-sonnet-4-5",
+        },
+      }),
+    );
+
+    expect(calls[0]?.options).toMatchObject({ fallbackModel: "claude-sonnet-4-5" });
+    expect(output.metadata).toMatchObject({ fallbackModel: "claude-sonnet-4-5" });
+  });
+
+  it("reports whether the fallback model actually served the run", async () => {
+    const usedResult: MockClaudeResult = {
+      type: "result",
+      subtype: "success",
+      structured_output: validReview(),
+      duration_ms: 12,
+      total_cost_usd: 0.1,
+      session_id: "structured-session",
+      modelUsage: {
+        "claude-opus-4-8": { outputTokens: 10 },
+        "claude-sonnet-4-5": { outputTokens: 900 },
+      },
+    };
+    const { adapter, calls } = createMockClaudeAdapter([usedResult]);
+    const output = await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        reviewer: { id: "claude", sdk: "claude", model: "opus", readonly: true },
+      }),
+    );
+    expect(calls).toHaveLength(1);
+    expect(output.metadata).toMatchObject({ fallbackModelUsed: "true" });
+
+    const { adapter: primaryOnly } = createMockClaudeAdapter([
+      { ...usedResult, modelUsage: { "claude-opus-4-8": { outputTokens: 900 } } },
+    ]);
+    const primaryOutput = await primaryOnly.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        reviewer: { id: "claude", sdk: "claude", model: "opus", readonly: true },
+      }),
+    );
+    expect(primaryOutput.metadata).toMatchObject({ fallbackModelUsed: "false" });
+  });
+
+  it("fails with a budget-specific error when the run exhausts maxBudgetUsd", async () => {
+    const { adapter } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "error_max_budget_usd",
+        duration_ms: 15,
+        total_cost_usd: 2.5,
+        session_id: "budget-session",
+      },
+    ]);
+
+    await expect(
+      adapter.run(
+        input({
+          env: { ANTHROPIC_API_KEY: "test-key" },
+          reviewer: {
+            id: "claude",
+            sdk: "claude",
+            model: "sonnet",
+            maxBudgetUsd: 2.5,
+            readonly: true,
+          },
+        }),
+      ),
+    ).rejects.toThrow("maxBudgetUsd was exhausted before the review completed");
+
+    // The budget can also run out during the text-fallback retry; that path
+    // must produce the same budget-specific error, not a generic failure.
+    const { adapter: retryAdapter } = createMockClaudeAdapter([
+      {
+        type: "result",
+        subtype: "error_max_structured_output_retries",
+        duration_ms: 15,
+        total_cost_usd: 2.0,
+        session_id: "structured-session",
+      },
+      {
+        type: "result",
+        subtype: "error_max_budget_usd",
+        duration_ms: 10,
+        total_cost_usd: 0.5,
+        session_id: "text-session",
+      },
+    ]);
+    await expect(
+      retryAdapter.run(
+        input({
+          env: { ANTHROPIC_API_KEY: "test-key" },
+          reviewer: {
+            id: "claude",
+            sdk: "claude",
+            model: "sonnet",
+            maxBudgetUsd: 2.5,
+            readonly: true,
+          },
+        }),
+      ),
+    ).rejects.toThrow("maxBudgetUsd was exhausted before the review completed");
+  });
+
   it.skipIf(isIntegrationDisabled("claude"))(
     "runs a live Claude local review smoke test",
     async () => {
@@ -1067,6 +1362,7 @@ type MockClaudeResult = {
   duration_ms?: number;
   total_cost_usd?: number;
   session_id?: string;
+  modelUsage?: Record<string, unknown>;
 };
 
 type MockClaudeQueryCall = {

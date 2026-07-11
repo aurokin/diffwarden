@@ -44,6 +44,10 @@ export type ReviewReviewerConfig = {
   modelSource?: ReviewReviewerValueSource;
   effort?: string;
   effortSource?: ReviewReviewerValueSource;
+  /** Model the engine may switch to when the primary model is overloaded or unavailable. */
+  fallbackModel?: string;
+  maxTurns?: number;
+  maxBudgetUsd?: number;
   modelCatalog?: string[];
   effortCatalog?: string[];
   timeoutMs?: number;

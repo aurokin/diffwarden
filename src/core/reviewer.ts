@@ -29,6 +29,7 @@ export type ResolveReviewerOptions = {
   modelSource?: ReviewerOverrideSource;
   effort?: string;
   effortSource?: ReviewerOverrideSource;
+  fallbackModel?: string;
   timeoutSeconds?: number;
   config?: DiffwardenConfig;
 };
@@ -40,6 +41,7 @@ export type ResolveReviewersOptions = {
   modelSource?: ReviewerOverrideSource;
   effort?: string;
   effortSource?: ReviewerOverrideSource;
+  fallbackModel?: string;
   timeoutSeconds?: number;
   config?: DiffwardenConfig;
 };
@@ -55,6 +57,10 @@ export function resolveReviewerConfigs(options: ResolveReviewersOptions): Review
     throw invalidCli("--effort can only be used with a single reviewer");
   }
 
+  if (specs.length > 1 && options.fallbackModel !== undefined) {
+    throw invalidCli("--fallback-model can only be used with a single reviewer");
+  }
+
   return specs.map((spec) =>
     resolveReviewerConfig({
       spec,
@@ -62,6 +68,7 @@ export function resolveReviewerConfigs(options: ResolveReviewersOptions): Review
       ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
       ...(options.effort !== undefined ? { effort: options.effort } : {}),
       ...(options.effortSource !== undefined ? { effortSource: options.effortSource } : {}),
+      ...(options.fallbackModel !== undefined ? { fallbackModel: options.fallbackModel } : {}),
       ...(options.timeoutSeconds !== undefined ? { timeoutSeconds: options.timeoutSeconds } : {}),
       ...(options.config !== undefined ? { config: options.config } : {}),
     }),
@@ -125,6 +132,7 @@ export function resolveReviewerConfig(options: ResolveReviewerOptions): ReviewRe
     ...(effortSelection !== undefined
       ? { effort: effortSelection.value, effortSource: effortSelection.source }
       : {}),
+    ...(options.fallbackModel !== undefined ? { fallbackModel: options.fallbackModel } : {}),
     ...reviewerTimeout(timeoutSeconds),
     readonly: true,
   });
@@ -275,6 +283,13 @@ function materializeConfiguredReviewer(
     ...(modelSelection !== undefined ? { modelSource: modelSelection.source } : {}),
     ...(effort !== undefined ? { effort } : {}),
     ...(effortSelection !== undefined ? { effortSource: effortSelection.source } : {}),
+    ...(options.fallbackModel !== undefined
+      ? { fallbackModel: options.fallbackModel }
+      : configured.fallbackModel !== undefined
+        ? { fallbackModel: configured.fallbackModel }
+        : {}),
+    ...(configured.maxTurns !== undefined ? { maxTurns: configured.maxTurns } : {}),
+    ...(configured.maxBudgetUsd !== undefined ? { maxBudgetUsd: configured.maxBudgetUsd } : {}),
     ...(configured.modelCatalog !== undefined ? { modelCatalog: configured.modelCatalog } : {}),
     ...(configured.effortCatalog !== undefined ? { effortCatalog: configured.effortCatalog } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
