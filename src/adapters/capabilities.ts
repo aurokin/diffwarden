@@ -41,6 +41,8 @@ export type ReviewerTransportCapability = {
   supportsFallbackModel?: boolean;
   supportsMaxTurns?: boolean;
   supportsMaxBudgetUsd?: boolean;
+  /** Whether the adapter can list a live model catalog (ReviewAdapter.listModels). */
+  supportsModelCatalog?: boolean;
   captureMode: CaptureMode;
   readonlyCapability: ReadonlyCapability;
 };
@@ -144,6 +146,8 @@ const reviewerCapabilityDefinitions = {
         supportsFallbackModel: true,
         supportsMaxTurns: true,
         supportsMaxBudgetUsd: true,
+        // Via query.supportedModels(); the Cursor SDK is the next candidate.
+        supportsModelCatalog: true,
         captureMode: "native-structured",
         readonlyCapability: "tool-restricted",
       },
@@ -402,6 +406,14 @@ export function reviewerSystemPromptSupport(
     return undefined;
   }
   return capability.systemPromptTools !== undefined ? { tools: capability.systemPromptTools } : {};
+}
+
+export function reviewerSupportsModelCatalog(
+  sdk: ReviewerSdk,
+  transport: ReviewerTransport | undefined,
+): boolean {
+  const effectiveTransport = transport ?? defaultReviewerTransport(sdk) ?? "sdk";
+  return getTransportCapability(sdk, effectiveTransport)?.supportsModelCatalog === true;
 }
 
 export function reviewerSdkPackage(sdk: ReviewerSdk): string | undefined {

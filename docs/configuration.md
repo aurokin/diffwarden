@@ -124,7 +124,12 @@ non-zero and writes nothing. `set add` requires the id to be a configured review
 Interactive setup is the default in a TTY. A bare `diffwarden reviewers add` opens an arrow-key
 multiselect of discovered reviewers that are not already configured, then steps each selection
 through a field editor for transport, model, effort, and the reviewer id. A bare `diffwarden init`
-runs the discover/scaffold flow. A bare `reviewers edit` (or `edit <id>` with no field flags) opens
+runs the discover/scaffold flow. In the model field, engines whose transport declares a live model
+catalog — currently Claude on the SDK transport — replace free text with a picker fetched once per
+setup session behind a spinner; "custom…" keeps the free-text escape hatch, and a failed fetch (no
+auth, offline, timeout) degrades to free text with a one-line notice. When the fetched catalog
+lists a model's supported effort levels, the effort menu narrows to those plus `off` and
+`default`. A bare `reviewers edit` (or `edit <id>` with no field flags) opens
 a field editor for an existing reviewer's transport, model, effort, and enabled state, and a bare
 `reviewers remove` lets you pick a reviewer and confirm (default No). In any menu, Esc or Ctrl-C steps back one level and cancels at the top, while
 a `✕ quit` choice exits immediately. In the field editor, submitting a blank model clears the model

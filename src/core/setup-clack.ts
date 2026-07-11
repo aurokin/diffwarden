@@ -1,4 +1,15 @@
-import { cancel, confirm, intro, isCancel, multiselect, outro, select, text } from "@clack/prompts";
+import {
+  cancel,
+  confirm,
+  intro,
+  isCancel,
+  log,
+  multiselect,
+  outro,
+  select,
+  spinner,
+  text,
+} from "@clack/prompts";
 import {
   type ReviewerSdk,
   type ReviewerTransport,
@@ -9,6 +20,14 @@ import {
 } from "../adapters/capabilities.js";
 import type { ConfiguredReviewerSummary, PublicReviewerEntry } from "./config.js";
 import type { ReviewerDiscoveryCandidate } from "./discovery.js";
+import {
+  CUSTOM_MODEL_CHOICE,
+  type ModelCatalogResult,
+  type ModelCatalogSession,
+  buildModelSelectOptions,
+  catalogEffortChoices,
+  createModelCatalogSession,
+} from "./setup-catalog.js";
 
 /**
  * The interactive reviewer-setup picker, built on @clack/prompts (arrow-key select / multiselect /
@@ -217,6 +236,9 @@ async function runReviewerConfigureFlow(options: {
   intro(options.title, io);
 
   const candidateByTransport = buildCandidateMap(options.candidates);
+  // One catalog session per run: auth resolution and the model fetch happen at most once per
+  // engine+transport, no matter how often the user revisits the model/effort fields.
+  const catalog = createModelCatalogSession();
   // Ids a rename must not collide with: those already configured (options.reservedIds) AND every
   // discovered reviewer's own id. The latter matters because a draft renamed to another discovered
   // reviewer's id would collide once that reviewer is also selected — the reconciliation re-adds it
@@ -291,6 +313,7 @@ async function runReviewerConfigureFlow(options: {
       options.configPath,
       options.writeVerb,
       reservedIds,
+      catalog,
     );
     if (outcome === "back") {
       continue;
@@ -318,6 +341,7 @@ async function configureLoop(
   configPath: string,
   writeVerb: "Write" | "Add",
   reservedIds: Set<string>,
+  catalog: ModelCatalogSession,
 ): Promise<"back" | "quit" | "write"> {
   while (true) {
     const action = await select({
@@ -352,6 +376,7 @@ async function configureLoop(
         Number.parseInt(action, 10),
         candidateByTransport,
         reservedIds,
+        catalog,
       )) === "quit"
     ) {
       return "quit";
@@ -373,6 +398,7 @@ export async function runClackReviewerEdit(options: {
 }): Promise<{ id: string; entry: PublicReviewerEntry } | undefined> {
   intro("diffwarden · edit reviewer", io);
   const candidateByTransport = buildCandidateMap(options.candidates);
+  const catalog = createModelCatalogSession();
 
   let entry =
     options.targetId !== undefined
@@ -428,9 +454,9 @@ export async function runClackReviewerEdit(options: {
     if (field === "transport") {
       outcome = await editTransportField(draft, candidateByTransport);
     } else if (field === "model") {
-      outcome = await editModelField(draft);
+      outcome = await editModelField(draft, catalog);
     } else if (field === "effort") {
-      outcome = await editEffortField(draft);
+      outcome = await editEffortField(draft, catalog);
     } else if (field === "enabled") {
       outcome = await editEnabledField(draft);
     }
@@ -577,8 +603,60 @@ async function editTransportField(
   return "continue";
 }
 
-/** Model leaf editor: free-text; blank clears the override back to the engine/transport default. */
-async function editModelField(entry: Draft): Promise<FieldOutcome> {
+/** Fetch (or reuse) a draft's model catalog behind a spinner so auth resolution has visible progress. */
+async function fetchCatalogWithSpinner(
+  entry: Draft,
+  catalog: ModelCatalogSession,
+): Promise<ModelCatalogResult> {
+  const cached = catalog.peek(entry);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const spin = spinner({ output: process.stderr });
+  spin.start(`Fetching ${entry.engine} model catalog`);
+  const result = await catalog.fetch(entry);
+  spin.stop(
+    result.status === "ok"
+      ? `${entry.engine} model catalog loaded (${result.models.length} models)`
+      : `${entry.engine} model catalog unavailable`,
+  );
+  return result;
+}
+
+/**
+ * Model leaf editor. Engines whose transport declares supportsModelCatalog get a live catalog
+ * select ("default" clears the override, "custom…" falls through to free text); a failed fetch
+ * (no auth, offline, timeout) degrades to the free-text prompt with a one-line notice. Everything
+ * else keeps the plain free-text editor, where blank clears the override.
+ */
+async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promise<FieldOutcome> {
+  if (catalog.supports(entry.engine, entry.transport)) {
+    const result = await fetchCatalogWithSpinner(entry, catalog);
+    if (result.status === "ok") {
+      const inCatalog =
+        entry.model !== undefined && result.models.some((model) => model.value === entry.model);
+      const value = await select({
+        message: `model for ${entry.id} (Esc to go back)`,
+        options: [...buildModelSelectOptions(result.models, entry.engine), quitOption],
+        initialValue: inCatalog ? (entry.model as string) : "",
+        ...io,
+      });
+      if (isCancel(value)) {
+        return "continue";
+      }
+      if (value === QUIT) {
+        return "quit";
+      }
+      if (value !== CUSTOM_MODEL_CHOICE) {
+        entry.model = value === "" ? undefined : value;
+        return "continue";
+      }
+      // "custom…" falls through to the free-text prompt below.
+    } else {
+      log.warn(`model catalog unavailable — ${result.reason}`, { output: process.stderr });
+    }
+  }
+
   const value = await text({
     message: `model for ${entry.id} (blank = default · Esc to go back)`,
     placeholder: defaultReviewerModel(entry.engine) ?? "default",
@@ -593,8 +671,19 @@ async function editModelField(entry: Draft): Promise<FieldOutcome> {
   return "continue";
 }
 
-/** Effort leaf editor: pick from the effort enum, or "default" to clear the override. */
-async function editEffortField(entry: Draft): Promise<FieldOutcome> {
+/**
+ * Effort leaf editor: pick from the effort enum, or "default" to clear the override. When the
+ * model field already fetched a catalog whose effective-model entry lists supportedEffortLevels,
+ * the menu narrows to those levels (peek only — the effort field never triggers a network fetch).
+ */
+async function editEffortField(entry: Draft, catalog: ModelCatalogSession): Promise<FieldOutcome> {
+  const narrowed = catalogEffortChoices(catalog.peek(entry), entry, effortChoices);
+  const choices = narrowed !== undefined ? [...narrowed] : [...effortChoices];
+  // Keep a previously-set effort selectable even if the catalog would hide it,
+  // so the menu always reflects what is currently configured.
+  if (entry.effort !== undefined && !choices.includes(entry.effort)) {
+    choices.push(entry.effort);
+  }
   const value = await select({
     message: `effort for ${entry.id} (Esc to go back)`,
     options: [
@@ -603,7 +692,7 @@ async function editEffortField(entry: Draft): Promise<FieldOutcome> {
         label: "default",
         hint: "diffwarden sets high where supported, else engine decides",
       },
-      ...effortChoices.map((e) => ({ value: e, label: e })),
+      ...choices.map((e) => ({ value: e, label: e })),
       quitOption,
     ],
     initialValue: entry.effort ?? "",
@@ -693,6 +782,7 @@ async function editReviewer(
   index: number,
   candidateByTransport: Map<string, ReviewerDiscoveryCandidate>,
   reservedIds: Set<string>,
+  catalog: ModelCatalogSession,
 ): Promise<"back" | "quit"> {
   while (true) {
     const entry = draft[index];
@@ -724,9 +814,9 @@ async function editReviewer(
     if (field === "transport") {
       outcome = await editTransportField(entry, candidateByTransport);
     } else if (field === "model") {
-      outcome = await editModelField(entry);
+      outcome = await editModelField(entry, catalog);
     } else if (field === "effort") {
-      outcome = await editEffortField(entry);
+      outcome = await editEffortField(entry, catalog);
     } else if (field === "id") {
       outcome = await editIdField(entry, draft, reservedIds);
     }

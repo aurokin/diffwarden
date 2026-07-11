@@ -8,6 +8,7 @@ import {
   reviewerLimitCapabilityErrors,
   reviewerSdkPackage,
   reviewerSdkValues,
+  reviewerSupportsModelCatalog,
   reviewerSystemPromptSupport,
 } from "../src/adapters/capabilities.js";
 import { resolveReviewerConfig } from "../src/core/reviewer.js";
@@ -97,6 +98,18 @@ describe("reviewerCapabilities", () => {
       ]);
       // Without the fields set, no errors regardless of capability.
       expect(reviewerLimitCapabilityErrors({ sdk })).toEqual([]);
+    }
+  });
+
+  it("declares a live model catalog only for the claude sdk transport", () => {
+    expect(reviewerSupportsModelCatalog("claude", undefined)).toBe(true);
+    expect(reviewerSupportsModelCatalog("claude", "sdk")).toBe(true);
+    expect(reviewerSupportsModelCatalog("claude", "cli")).toBe(false);
+    for (const sdk of expectedReviewerSdks) {
+      if (sdk === "claude") {
+        continue;
+      }
+      expect(reviewerSupportsModelCatalog(sdk, undefined)).toBe(false);
     }
   });
 

@@ -401,6 +401,12 @@ via stdin and records `systemPromptMode: "concatenated"`. The CLI also probes `-
 appends it only for api-key auth runs (Claude Code's `--bare` restricts auth to API keys and
 skips hooks, plugins, and other session startup), recording `bare: "true"/"false"`.
 
+The Claude SDK transport declares `supportsModelCatalog`: `claudeAdapter.listModels` fetches the
+live model catalog via the same locked-down `query.supportedModels()` pattern model preflight
+uses, mapped to `ModelCatalogEntry` (value, display name, description, supported effort levels,
+and a `default` mark on diffwarden's default model). Interactive setup uses it for the model
+picker. The Cursor SDK is the next candidate; no other engine lists models yet.
+
 Live smoke test:
 
 ```bash
