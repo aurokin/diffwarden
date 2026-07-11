@@ -116,6 +116,53 @@ describe("SDK adapter metadata", () => {
     });
   });
 
+  it("ranks diffwarden-default effort above adapter defaults and below adapter selection", () => {
+    expect(
+      mergeEffortResolutionMetadata({
+        requested: "high",
+        evidence: [
+          { value: "medium", source: "adapter-default" },
+          { value: "high", source: "diffwarden-default" },
+        ],
+      }),
+    ).toEqual({
+      requestedEffort: "high",
+      resolvedEffort: "high",
+      effortResolutionSource: "diffwarden-default",
+    });
+
+    expect(
+      mergeEffortResolutionMetadata({
+        requested: "high",
+        evidence: [
+          { value: "high", source: "diffwarden-default" },
+          { value: "max", source: "adapter-selection" },
+        ],
+      }),
+    ).toEqual({
+      requestedEffort: "high",
+      resolvedEffort: "max",
+      effortResolutionSource: "adapter-selection",
+    });
+  });
+
+  it("preserves diffwarden-default sources across metadata record merges", () => {
+    expect(
+      mergeResolutionMetadataRecords(
+        {
+          requestedEffort: "high",
+          resolvedEffort: "high",
+          effortResolutionSource: "diffwarden-default",
+        },
+        {},
+      ),
+    ).toMatchObject({
+      requestedEffort: "high",
+      resolvedEffort: "high",
+      effortResolutionSource: "diffwarden-default",
+    });
+  });
+
   it("uses provider-local evidence as a fallback ahead of adapter defaults", () => {
     expect(
       mergeModelResolutionMetadata({

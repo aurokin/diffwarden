@@ -1,6 +1,11 @@
 import type { ReviewTargetResolved } from "../core/schema.js";
 
-export type ReviewReviewerValueSource = "adapter-default" | "config" | "env" | "requested";
+export type ReviewReviewerValueSource =
+  | "adapter-default"
+  | "config"
+  | "diffwarden-default"
+  | "env"
+  | "requested";
 
 export type ReviewAdapterInput = {
   cwd: string;

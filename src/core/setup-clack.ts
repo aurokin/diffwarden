@@ -598,7 +598,11 @@ async function editEffortField(entry: Draft): Promise<FieldOutcome> {
   const value = await select({
     message: `effort for ${entry.id} (Esc to go back)`,
     options: [
-      { value: "", label: "default", hint: "engine decides" },
+      {
+        value: "",
+        label: "default",
+        hint: "diffwarden sets high where supported, else engine decides",
+      },
       ...effortChoices.map((e) => ({ value: e, label: e })),
       quitOption,
     ],

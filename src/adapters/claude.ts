@@ -45,6 +45,8 @@ type ClaudeRunContext = {
   kind: "claude";
   runtime: ClaudeRuntime;
   resolvedEffort?: ClaudeNativeEffort;
+  /** A diffwarden-default effort the model rejected at preflight; omit effort entirely. */
+  effortDropped?: boolean;
 };
 
 const defaultClaudeAdapterDependencies: ClaudeAdapterDependencies = {
@@ -68,6 +70,9 @@ export function createClaudeAdapter(
       const runContext = claudeRunContext(input.runContext);
       const runtime = runContext?.runtime ?? (await dependencies.resolveRuntime(input));
       const resolvedEffort = runContext?.resolvedEffort;
+      // Only prepare() can prove a drop; runs without a run context pass the
+      // configured effort through and leave rejection to the platform.
+      const effortDropped = runContext?.effortDropped === true;
 
       try {
         const structuredResult = await runClaudeQuery({
@@ -75,6 +80,7 @@ export function createClaudeAdapter(
           input,
           runtime,
           resolvedEffort,
+          effortDropped,
           outputFormat: true,
         });
 
@@ -87,6 +93,7 @@ export function createClaudeAdapter(
                 result: structuredResult,
                 runtime,
                 resolvedEffort,
+                effortDropped,
                 captureMode: "native-structured",
               }),
             },
@@ -97,6 +104,7 @@ export function createClaudeAdapter(
               result: structuredResult,
               runtime,
               resolvedEffort,
+              effortDropped,
               captureMode: "native-structured",
               structured: structuredOutput.structured,
             });
@@ -107,6 +115,7 @@ export function createClaudeAdapter(
             input,
             runtime,
             resolvedEffort,
+            effortDropped,
             outputFormat: false,
           });
           return buildClaudeTextOutput({
@@ -114,6 +123,7 @@ export function createClaudeAdapter(
             result: textResult,
             runtime,
             resolvedEffort,
+            effortDropped,
             fallbackReason: "invalid_structured_output",
             previousResult: structuredResult,
           });
@@ -125,6 +135,7 @@ export function createClaudeAdapter(
             input,
             runtime,
             resolvedEffort,
+            effortDropped,
             outputFormat: false,
           });
           return buildClaudeTextOutput({
@@ -132,6 +143,7 @@ export function createClaudeAdapter(
             result: textResult,
             runtime,
             resolvedEffort,
+            effortDropped,
             fallbackReason: structuredResult.subtype,
             previousResult: structuredResult,
           });
@@ -205,7 +217,11 @@ async function prepareClaudeAdapter(
         ...(modelPreflight.model.supportedEffortLevels !== undefined
           ? { supportedEffortLevels: modelPreflight.model.supportedEffortLevels }
           : {}),
-        ...claudeEffortMetadata(input.reviewer, modelPreflight.resolvedEffort),
+        ...claudeEffortMetadata(
+          input.reviewer,
+          modelPreflight.resolvedEffort,
+          modelPreflight.effortDropped,
+        ),
         authMode: runtime.authMode,
         authPreference: runtime.authPreference,
         authMethod: runtime.authMethod,
@@ -220,6 +236,7 @@ async function prepareClaudeAdapter(
       ...(modelPreflight.resolvedEffort !== undefined
         ? { resolvedEffort: modelPreflight.resolvedEffort }
         : {}),
+      ...(modelPreflight.effortDropped ? { effortDropped: true } : {}),
     },
   };
 }
@@ -245,6 +262,7 @@ type RunClaudeQueryInput = {
   input: ReviewAdapterInput;
   runtime: ClaudeRuntime;
   resolvedEffort?: ClaudeNativeEffort | undefined;
+  effortDropped?: boolean | undefined;
   outputFormat: boolean;
 };
 
@@ -296,7 +314,11 @@ async function preflightClaudeModel(options: {
   input: ReviewAdapterPreflightInput;
   runtime: ClaudeRuntime;
   model: string;
-}): Promise<{ model: ClaudeModelInfo; resolvedEffort?: ClaudeNativeEffort }> {
+}): Promise<{
+  model: ClaudeModelInfo;
+  resolvedEffort?: ClaudeNativeEffort;
+  effortDropped?: boolean;
+}> {
   const abortBridge = createAbortBridge(options.input.signal);
   const query = options.query({
     prompt: emptyClaudeStreamingInput(),
@@ -322,11 +344,28 @@ async function preflightClaudeModel(options: {
       );
     }
 
-    const resolvedEffort = resolveClaudeModelEffort(model, options.input.reviewer.effort);
+    let resolvedEffort: ClaudeNativeEffort | undefined;
+    let effortDropped = false;
+    try {
+      resolvedEffort = resolveClaudeModelEffort(model, options.input.reviewer.effort);
+    } catch (error) {
+      // A diffwarden-supplied default must degrade to "no effort" instead of
+      // failing preflight; user-requested efforts keep failing loudly.
+      if (
+        options.input.reviewer.effortSource === "diffwarden-default" &&
+        error instanceof DiffwardenError &&
+        error.code === "invalid_effort"
+      ) {
+        effortDropped = true;
+      } else {
+        throw error;
+      }
+    }
 
     return {
       model,
       ...(resolvedEffort !== undefined ? { resolvedEffort } : {}),
+      ...(effortDropped ? { effortDropped: true } : {}),
     };
   } catch (error) {
     if (error instanceof DiffwardenError) {
@@ -515,7 +554,9 @@ function buildClaudeQueryOptions(
     mcpServers: {},
     strictMcpConfig: true,
     persistSession: false,
-    ...claudeQueryEffortOptions(options.input.reviewer.effort, options.resolvedEffort),
+    ...(options.effortDropped === true
+      ? {}
+      : claudeQueryEffortOptions(options.input.reviewer.effort, options.resolvedEffort)),
   };
 
   if (abortController !== undefined) {
@@ -569,6 +610,7 @@ function buildClaudeTextOutput(options: {
   result: ClaudeResultMessage;
   runtime: ClaudeRuntime;
   resolvedEffort?: ClaudeNativeEffort | undefined;
+  effortDropped?: boolean | undefined;
   fallbackReason: string;
   previousResult?: ClaudeResultMessage;
 }): ReviewAdapterOutput {
@@ -589,6 +631,10 @@ function buildClaudeTextOutput(options: {
     outputOptions.resolvedEffort = options.resolvedEffort;
   }
 
+  if (options.effortDropped !== undefined) {
+    outputOptions.effortDropped = options.effortDropped;
+  }
+
   if (options.previousResult !== undefined) {
     outputOptions.previousResult = options.previousResult;
   }
@@ -604,6 +650,7 @@ function claudeOutputMetadata(options: {
   result: ClaudeResultMessage;
   runtime: ClaudeRuntime;
   resolvedEffort?: ClaudeNativeEffort | undefined;
+  effortDropped?: boolean | undefined;
   captureMode: "native-structured" | "text";
   fallbackReason?: string;
   previousResult?: ClaudeResultMessage;
@@ -614,7 +661,7 @@ function claudeOutputMetadata(options: {
     sessionId: options.result.session_id,
     model,
     ...claudeModelResolutionMetadata(options.input.reviewer, model),
-    ...claudeEffortMetadata(options.input.reviewer, options.resolvedEffort),
+    ...claudeEffortMetadata(options.input.reviewer, options.resolvedEffort, options.effortDropped),
     durationMs: sumKnownNumbers(options.previousResult?.duration_ms, options.result.duration_ms),
     totalCostUsd: sumKnownNumbers(
       options.previousResult?.total_cost_usd,
@@ -655,6 +702,7 @@ function buildClaudeOutput(options: {
   result: ClaudeResultMessage;
   runtime: ClaudeRuntime;
   resolvedEffort?: ClaudeNativeEffort | undefined;
+  effortDropped?: boolean | undefined;
   captureMode: "native-structured" | "text";
   structured?: unknown;
   text?: string;
@@ -699,10 +747,18 @@ function claudeQueryEffortOptions(
 function claudeEffortMetadata(
   reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
   modelResolvedEffort?: ClaudeNativeEffort,
+  effortDropped?: boolean,
 ): Record<string, string> {
   const effort = reviewer.effort;
   if (effort === undefined) {
     return {};
+  }
+
+  if (effortDropped === true) {
+    return {
+      ...effortResolutionMetadata({ requested: effort, source: "adapter-selection" }),
+      effortDropped: "model-unsupported",
+    };
   }
   const resolvedEffort =
     effort === "off" ? "off" : (modelResolvedEffort ?? claudeNativeEffort(effort));

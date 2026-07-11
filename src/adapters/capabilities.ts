@@ -30,6 +30,8 @@ export type ReviewerTransportCapability = {
   sdkPackage?: string;
   supportsModel: boolean;
   supportsEffort: boolean;
+  /** Effort diffwarden passes when the reviewer configuration leaves effort unset. */
+  defaultEffort?: string;
   captureMode: CaptureMode;
   readonlyCapability: ReadonlyCapability;
 };
@@ -127,6 +129,7 @@ const reviewerCapabilityDefinitions = {
         sdkPackage: "@anthropic-ai/claude-agent-sdk",
         supportsModel: true,
         supportsEffort: true,
+        defaultEffort: "high",
         captureMode: "native-structured",
         readonlyCapability: "tool-restricted",
       },
@@ -136,6 +139,7 @@ const reviewerCapabilityDefinitions = {
         defaultExecutable: "claude",
         supportsModel: true,
         supportsEffort: true,
+        defaultEffort: "high",
         captureMode: "native-structured",
         readonlyCapability: "tool-restricted",
       },
@@ -359,6 +363,14 @@ export function getTransportCapability(
 
 export function getReviewerAuthSignal(sdk: ReviewerSdk): ReviewerAuthSignal | undefined {
   return reviewerCapabilities[sdk].auth;
+}
+
+export function reviewerDefaultEffort(
+  sdk: ReviewerSdk,
+  transport: ReviewerTransport | undefined,
+): string | undefined {
+  const effectiveTransport = transport ?? defaultReviewerTransport(sdk) ?? "sdk";
+  return getTransportCapability(sdk, effectiveTransport)?.defaultEffort;
 }
 
 export function reviewerSdkPackage(sdk: ReviewerSdk): string | undefined {

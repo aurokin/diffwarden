@@ -133,7 +133,17 @@ clearer than treating configured values as direct CLI requests, but it is still 
 than runtime evidence. `env` means the value came from `DIFFWARDEN_MODEL` or
 `DIFFWARDEN_EFFORT`. `requested` means the value came from a per-run CLI override.
 `adapter-default` and `adapter-selection` mean Diffwarden selected or translated the value
-locally.
+locally. `diffwarden-default` means Diffwarden filled an unset effort from the capability
+matrix's per-transport `defaultEffort`; it ranks above `adapter-default` but below
+`adapter-selection`, so adapter clamping still wins over the injected default.
+
+When the Claude SDK model preflight proves a `diffwarden-default` effort is unsupported by
+the selected model, the adapter drops effort entirely rather than failing and records
+`effortDropped: "model-unsupported"` without `effort`/`resolvedEffort` fields. Efforts the
+user requested through flags, env, or config never degrade this way; they fail preflight.
+The Claude CLI transport has no catalog access, so a `diffwarden-default` effort is passed
+through as `--effort high` and unsupported-level resolution stays with the platform, the
+same as explicit effort passthrough.
 
 Current SDK coverage:
 
