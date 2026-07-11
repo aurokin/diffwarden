@@ -2,6 +2,7 @@ import {
   type ReviewerSdk,
   type ReviewerTransport,
   defaultReviewerModel,
+  defaultReviewerTransport,
   reviewerSupportsModelCatalog,
 } from "../adapters/capabilities.js";
 import { claudeAdapter } from "../adapters/claude.js";
@@ -61,7 +62,10 @@ export function createModelCatalogSession(
   const cache = new Map<string, ModelCatalogResult>();
   const pending = new Map<string, Promise<ModelCatalogResult>>();
 
-  const key = (draft: ModelCatalogDraft) => `${draft.engine}::${draft.transport ?? "default"}`;
+  // Key on the EFFECTIVE transport: an explicit "sdk" and an unset transport are the same
+  // catalog, so a no-op transport toggle must not re-run auth or lose the cached narrowing.
+  const key = (draft: ModelCatalogDraft) =>
+    `${draft.engine}::${draft.transport ?? defaultReviewerTransport(draft.engine) ?? "sdk"}`;
 
   return {
     supports(engine, transport) {
@@ -110,15 +114,18 @@ async function runCatalogFetch(
     env,
   };
 
+  // Abort the underlying fetch on timeout so a hung auth probe/SDK query does not
+  // keep a subprocess alive after the picker has already degraded to free text.
+  const abort = new AbortController();
   let timer: NodeJS.Timeout | undefined;
   try {
     const models = await Promise.race([
-      fetch(draft.engine, input),
+      fetch(draft.engine, { ...input, signal: abort.signal }),
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`timed out after ${timeoutMs / 1000}s`)),
-          timeoutMs,
-        );
+        timer = setTimeout(() => {
+          abort.abort();
+          reject(new Error(`timed out after ${timeoutMs / 1000}s`));
+        }, timeoutMs);
       }),
     ]);
     return models.length > 0
@@ -140,11 +147,14 @@ export const CUSTOM_MODEL_CHOICE = "__custom__" as const;
 
 /**
  * Rows for the model select: "default" (clears the override), one row per catalog entry, then
- * "custom…" for ids the catalog does not list. Pure so tests can cover it without a TTY.
+ * "custom…" for ids the catalog does not list. A configured model the catalog omits (a pinned id,
+ * a previous custom entry) gets its own row so it stays visible and an accidental Enter keeps it
+ * instead of silently clearing the override. Pure so tests can cover it without a TTY.
  */
 export function buildModelSelectOptions(
   models: ModelCatalogEntry[],
   engine: ReviewerSdk,
+  currentModel?: string,
 ): { value: string; label: string; hint?: string }[] {
   const engineDefault = defaultReviewerModel(engine);
   return [
@@ -160,14 +170,19 @@ export function buildModelSelectOptions(
         .filter((piece): piece is string => piece !== undefined)
         .join(" · "),
     })),
+    ...(currentModel !== undefined && !models.some((model) => model.value === currentModel)
+      ? [{ value: currentModel, label: currentModel, hint: "current — not in the catalog" }]
+      : []),
     { value: CUSTOM_MODEL_CHOICE, label: "custom…", hint: "enter a model id" },
   ];
 }
 
 /**
  * Effort choices narrowed by the catalog: when the draft's effective model carries
- * supportedEffortLevels, keep only those (plus "off", which disables reasoning rather than
- * selecting a level). Returns undefined when the catalog cannot narrow — caller keeps the full menu.
+ * supportedEffortLevels, keep only those, plus "off" (disables reasoning rather than selecting a
+ * level) and "minimal" whenever "low" is supported (diffwarden maps minimal to native low, so it
+ * is valid exactly when low is). Returns undefined when the catalog cannot narrow — caller keeps
+ * the full menu.
  */
 export function catalogEffortChoices(
   result: ModelCatalogResult | undefined,
@@ -183,5 +198,10 @@ export function catalogEffortChoices(
   if (levels === undefined || levels.length === 0) {
     return undefined;
   }
-  return allChoices.filter((choice) => choice === "off" || levels.includes(choice));
+  return allChoices.filter(
+    (choice) =>
+      choice === "off" ||
+      levels.includes(choice) ||
+      (choice === "minimal" && levels.includes("low")),
+  );
 }

@@ -64,7 +64,7 @@ describe("createModelCatalogSession", () => {
     expect(session.peek(claudeDraft())).toBe(first);
   });
 
-  it("passes the draft reviewer and env through to the fetch", async () => {
+  it("passes the draft reviewer, env, and an abort signal through to the fetch", async () => {
     const inputs: unknown[] = [];
     const env = { CLAUDE_CODE_OAUTH_TOKEN: "test-token" };
     const session = createModelCatalogSession({
@@ -76,10 +76,11 @@ describe("createModelCatalogSession", () => {
     });
 
     await session.fetch(claudeDraft({ id: "claude-main", model: "sonnet" }));
-    expect(inputs[0]).toEqual({
+    expect(inputs[0]).toMatchObject({
       reviewer: { id: "claude-main", sdk: "claude", model: "sonnet", readonly: true },
       env,
     });
+    expect((inputs[0] as { signal?: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
   });
 
   it("degrades a failed fetch to unavailable with a one-line reason", async () => {
@@ -105,18 +106,23 @@ describe("createModelCatalogSession", () => {
     });
   });
 
-  it("times out a hung fetch", async () => {
+  it("times out a hung fetch and aborts the underlying request", async () => {
+    let signal: AbortSignal | undefined;
     const session = createModelCatalogSession({
       timeoutMs: 20,
-      fetch: () => new Promise(() => {}),
+      fetch: (_engine, input) => {
+        signal = input.signal;
+        return new Promise(() => {});
+      },
     });
     expect(await session.fetch(claudeDraft())).toEqual({
       status: "unavailable",
       reason: "timed out after 0.02s",
     });
+    expect(signal?.aborted).toBe(true);
   });
 
-  it("caches per transport, not globally", async () => {
+  it("caches on the effective transport, so an explicit sdk toggle is a cache hit", async () => {
     let calls = 0;
     const session = createModelCatalogSession({
       fetch: async () => {
@@ -125,8 +131,14 @@ describe("createModelCatalogSession", () => {
       },
     });
 
-    await session.fetch(claudeDraft());
-    await session.fetch(claudeDraft({ transport: "sdk" }));
+    const implicit = await session.fetch(claudeDraft());
+    // Claude's default transport is sdk: explicitly selecting it must not refetch.
+    expect(await session.fetch(claudeDraft({ transport: "sdk" }))).toBe(implicit);
+    expect(session.peek(claudeDraft({ transport: "sdk" }))).toBe(implicit);
+    expect(calls).toBe(1);
+
+    // A genuinely different transport is its own cache entry.
+    await session.fetch(claudeDraft({ transport: "cli" }));
     expect(calls).toBe(2);
   });
 });
@@ -146,21 +158,47 @@ describe("buildModelSelectOptions", () => {
     expect(options[1]).toEqual({ value: "sonnet[1m]", label: "sonnet[1m]", hint: "" });
     expect(options[0]?.hint).toBe("engine default");
   });
+
+  it("keeps an out-of-catalog current model selectable instead of dropping it", () => {
+    const options = buildModelSelectOptions(sampleModels(), "claude", "claude-opus-4-1-20250805");
+    expect(options).toContainEqual({
+      value: "claude-opus-4-1-20250805",
+      label: "claude-opus-4-1-20250805",
+      hint: "current — not in the catalog",
+    });
+    // Placed before the custom escape hatch.
+    expect(options.at(-1)?.value).toBe(CUSTOM_MODEL_CHOICE);
+
+    // A current model the catalog already lists gets no duplicate row.
+    const inCatalog = buildModelSelectOptions(sampleModels(), "claude", "sonnet");
+    expect(inCatalog.filter((option) => option.value === "sonnet")).toHaveLength(1);
+  });
 });
 
 describe("catalogEffortChoices", () => {
   const okResult: ModelCatalogResult = { status: "ok", models: sampleModels() };
 
-  it("narrows to the catalog's levels plus off for the effective model", () => {
+  it("narrows to the catalog's levels plus off and low-backed minimal", () => {
+    // minimal maps to native low, so it stays whenever low is supported.
     expect(catalogEffortChoices(okResult, claudeDraft({ model: "sonnet" }), effortChoices)).toEqual(
-      ["off", "low", "medium", "high", "max"],
+      ["off", "minimal", "low", "medium", "high", "max"],
     );
+    const noLow: ModelCatalogResult = {
+      status: "ok",
+      models: [{ value: "sonnet", supportedEffortLevels: ["medium", "high"] }],
+    };
+    expect(catalogEffortChoices(noLow, claudeDraft({ model: "sonnet" }), effortChoices)).toEqual([
+      "off",
+      "medium",
+      "high",
+    ]);
   });
 
   it("uses the engine default model when the draft has no override", () => {
     // Claude's default model is sonnet, whose sample entry carries levels.
     expect(catalogEffortChoices(okResult, claudeDraft(), effortChoices)).toEqual([
       "off",
+      "minimal",
       "low",
       "medium",
       "high",

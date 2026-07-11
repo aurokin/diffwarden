@@ -633,12 +633,12 @@ async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promi
   if (catalog.supports(entry.engine, entry.transport)) {
     const result = await fetchCatalogWithSpinner(entry, catalog);
     if (result.status === "ok") {
-      const inCatalog =
-        entry.model !== undefined && result.models.some((model) => model.value === entry.model);
+      // The current model is always a selectable row (catalog or synthetic), so the
+      // highlighted default on Enter preserves the configured value instead of clearing it.
       const value = await select({
         message: `model for ${entry.id} (Esc to go back)`,
-        options: [...buildModelSelectOptions(result.models, entry.engine), quitOption],
-        initialValue: inCatalog ? (entry.model as string) : "",
+        options: [...buildModelSelectOptions(result.models, entry.engine, entry.model), quitOption],
+        initialValue: entry.model ?? "",
         ...io,
       });
       if (isCancel(value)) {
