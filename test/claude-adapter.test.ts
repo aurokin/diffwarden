@@ -1320,6 +1320,44 @@ describe("claudeAdapter", () => {
     ).rejects.toThrow("maxBudgetUsd was exhausted before the review completed");
   });
 
+  it("lists the model catalog through the preflight query pattern", async () => {
+    const { adapter, calls, closeCalls } = createMockClaudePreflightAdapter([
+      { value: "default", displayName: "Default (recommended)" },
+      {
+        value: "sonnet",
+        displayName: "Sonnet",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "max"],
+      },
+      { value: "haiku", displayName: "Haiku", supportsEffort: false },
+    ]);
+
+    const models = await adapter.listModels?.({
+      reviewer: { id: "claude", sdk: "claude", readonly: true },
+      env: { ANTHROPIC_API_KEY: "test-key" },
+    });
+
+    expect(models).toEqual([
+      { value: "default", displayName: "Default (recommended)" },
+      {
+        value: "sonnet",
+        displayName: "Sonnet",
+        supportedEffortLevels: ["low", "medium", "high", "max"],
+        default: true,
+      },
+      { value: "haiku", displayName: "Haiku" },
+    ]);
+    // Same locked-down query options as model preflight; the query is closed after use.
+    expect(calls[0]?.options).toMatchObject({
+      permissionMode: "dontAsk",
+      settingSources: [],
+      mcpServers: {},
+      strictMcpConfig: true,
+      persistSession: false,
+    });
+    expect(closeCalls()).toBe(1);
+  });
+
   it.skipIf(isIntegrationDisabled("claude"))(
     "runs a live Claude local review smoke test",
     async () => {

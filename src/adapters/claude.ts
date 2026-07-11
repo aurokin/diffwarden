@@ -23,6 +23,8 @@ import {
   sdkPreflightMetadata,
 } from "./metadata.js";
 import type {
+  ListModelsInput,
+  ModelCatalogEntry,
   ReviewAdapter,
   ReviewAdapterInput,
   ReviewAdapterOutput,
@@ -176,6 +178,47 @@ export function createClaudeAdapter(
         throw reviewerFailed(`Claude reviewer failed: ${detail}`);
       }
     },
+    async listModels(input: ListModelsInput): Promise<ModelCatalogEntry[]> {
+      const sdk = await dependencies.loadSdk();
+      const runtime = await dependencies.resolveRuntime(input);
+      const abortBridge = createAbortBridge(input.signal);
+      const query = sdk.query({
+        prompt: emptyClaudeStreamingInput(),
+        options: buildClaudeModelPreflightOptions(
+          {
+            cwd: input.cwd ?? process.cwd(),
+            reviewer: input.reviewer,
+            readonly: true,
+            ...(input.env !== undefined ? { env: input.env } : {}),
+            ...(input.signal !== undefined ? { signal: input.signal } : {}),
+          },
+          runtime,
+          abortBridge.controller,
+        ),
+      });
+
+      try {
+        if (query.supportedModels === undefined) {
+          throw missingRequirement("Claude SDK query does not expose supportedModels()");
+        }
+        return (await query.supportedModels()).map(claudeCatalogEntry);
+      } finally {
+        abortBridge.dispose();
+        query.close?.();
+      }
+    },
+  };
+}
+
+function claudeCatalogEntry(model: ClaudeModelInfo): ModelCatalogEntry {
+  return {
+    value: model.value,
+    ...(model.displayName !== undefined ? { displayName: model.displayName } : {}),
+    ...(model.description !== undefined ? { description: model.description } : {}),
+    ...(model.supportsEffort === true && model.supportedEffortLevels !== undefined
+      ? { supportedEffortLevels: model.supportedEffortLevels }
+      : {}),
+    ...(model.value === defaultClaudeModel ? { default: true } : {}),
   };
 }
 

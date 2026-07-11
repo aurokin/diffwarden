@@ -101,9 +101,33 @@ export type ReviewAdapterPrepareResult = {
   runContext?: unknown;
 };
 
+/** One selectable model from an engine's live catalog. */
+export type ModelCatalogEntry = {
+  value: string;
+  displayName?: string;
+  description?: string;
+  supportedEffortLevels?: string[];
+  /** True for the engine/diffwarden default model, when the catalog can tell. */
+  default?: boolean;
+};
+
+/**
+ * Input for `listModels`. The reviewer (usually a setup draft) rides along so
+ * the fetch resolves auth per its settings (e.g. claude `sdkOptions.authMode`)
+ * instead of probing blind.
+ */
+export type ListModelsInput = {
+  cwd?: string;
+  reviewer: ReviewReviewerConfig;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+};
+
 export interface ReviewAdapter {
   name: string;
   preflight?(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult>;
   prepare?(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPrepareResult>;
   run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput>;
+  /** Live model catalog for interactive setup; only on engines whose capability declares supportsModelCatalog. */
+  listModels?(input: ListModelsInput): Promise<ModelCatalogEntry[]>;
 }
