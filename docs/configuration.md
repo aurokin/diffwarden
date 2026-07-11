@@ -350,9 +350,12 @@ When flags, environment variables, and reviewer config all leave effort unset, D
 applies a per-transport default effort from the adapter capability matrix, reported with
 `effortSource: "diffwarden-default"`. Claude reviewers (SDK and CLI transports) default to
 `high`; other engines currently have no default, so effort stays unset and the engine
-decides. A reviewer `effortCatalog` that omits the default suppresses it, and if the
-selected model turns out not to support effort at preflight, the default is silently
-dropped (recorded as `effortDropped: "model-unsupported"`) instead of failing the run.
+decides. A reviewer `effortCatalog` that omits the default suppresses it. On the Claude SDK
+transport, if model preflight proves the selected model does not support effort, the default
+is silently dropped (recorded as `effortDropped: "model-unsupported"`) instead of failing
+the run. The Claude CLI transport has no model catalog access, so it passes `--effort high`
+through and leaves unsupported-level resolution to the platform, matching how it already
+handles explicit efforts.
 
 ## Pi Provider Profile Example
 

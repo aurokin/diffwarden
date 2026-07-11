@@ -137,10 +137,13 @@ locally. `diffwarden-default` means Diffwarden filled an unset effort from the c
 matrix's per-transport `defaultEffort`; it ranks above `adapter-default` but below
 `adapter-selection`, so adapter clamping still wins over the injected default.
 
-When a `diffwarden-default` effort turns out to be unsupported by the selected model at
-preflight, the adapter drops effort entirely rather than failing and records
+When the Claude SDK model preflight proves a `diffwarden-default` effort is unsupported by
+the selected model, the adapter drops effort entirely rather than failing and records
 `effortDropped: "model-unsupported"` without `effort`/`resolvedEffort` fields. Efforts the
 user requested through flags, env, or config never degrade this way; they fail preflight.
+The Claude CLI transport has no catalog access, so a `diffwarden-default` effort is passed
+through as `--effort high` and unsupported-level resolution stays with the platform, the
+same as explicit effort passthrough.
 
 Current SDK coverage:
 

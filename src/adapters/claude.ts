@@ -70,6 +70,8 @@ export function createClaudeAdapter(
       const runContext = claudeRunContext(input.runContext);
       const runtime = runContext?.runtime ?? (await dependencies.resolveRuntime(input));
       const resolvedEffort = runContext?.resolvedEffort;
+      // Only prepare() can prove a drop; runs without a run context pass the
+      // configured effort through and leave rejection to the platform.
       const effortDropped = runContext?.effortDropped === true;
 
       try {
