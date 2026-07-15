@@ -256,7 +256,7 @@ diffwarden review --target base:main --reviewer droid-cli --ndjson --debug-revie
   unknown fields on NDJSON events; new optional fields are additive within a schema version.
 - When both `--ndjson` and `--debug-reviewer-output` are set, adapters with a native stream
   output mode switch to it so debug events arrive live instead of at process exit: Claude
-  CLI runs with `--output-format stream-json --verbose` and Droid with
+  CLI runs with `--output-format stream-json --verbose`, and Cursor and Droid with
   `--output-format stream-json` (support is probed first; CLIs without the mode silently
   stay on `json`, recorded as `debugStreamModeDropped` in reviewer metadata). Stream events
   are rendered as compact one-line summaries — assistant text verbatim, tool activity as

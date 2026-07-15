@@ -90,6 +90,48 @@ describe("createCliStreamChunkParser (claude-stream-json)", () => {
   });
 });
 
+describe("createCliStreamChunkParser (cursor-stream-json)", () => {
+  it("renders claude-shaped summaries and drops top-level thinking delta events", () => {
+    const parser = createCliStreamChunkParser("cursor-stream-json");
+    const rendered = parser.push(
+      line({ type: "system", subtype: "init", session_id: "s-1", model: "test-model" }) +
+        // Cursor emits top-level thinking delta events; the universal
+        // reasoning drop removes them before the renderer runs (otherwise
+        // one noisy [thinking] marker would print per delta).
+        line({ type: "thinking", subtype: "delta", text: "secret reasoning" }) +
+        line({ type: "thinking", subtype: "completed" }) +
+        // Cursor re-echoes the review prompt as a user event (live-observed);
+        // it reduces to a size marker so the prompt never re-renders.
+        line({
+          type: "user",
+          message: { role: "user", content: [{ type: "text", text: "echoed review prompt" }] },
+          session_id: "s-1",
+        }) +
+        line({
+          type: "assistant",
+          message: { role: "assistant", content: [{ type: "text", text: "checking the diff" }] },
+          session_id: "s-1",
+        }) +
+        // tool_call shape is unverified (no tools triggered in captures);
+        // the payload-free [type] fallback is the required behavior.
+        line({ type: "tool_call", subtype: "started", session_id: "s-1" }) +
+        // Cursor result events carry no num_turns; the summary omits turns.
+        line({ type: "result", subtype: "success", duration_ms: 12, result: "done" }),
+    );
+
+    expect(rendered).toEqual([
+      "[system:init]\n",
+      "[user message 47 chars]\n",
+      "checking the diff\n",
+      "[tool_call]\n",
+      "[result:success duration_ms=12]\n",
+    ]);
+    expect(rendered.join("")).not.toContain("secret reasoning");
+    expect(rendered.join("")).not.toContain("echoed review prompt");
+    expect(rendered.join("")).not.toContain("[thinking]");
+  });
+});
+
 describe("createCliStreamChunkParser (droid-stream-json)", () => {
   it("summarizes events and excludes reasoning", () => {
     const parser = createCliStreamChunkParser("droid-stream-json");
@@ -228,6 +270,25 @@ describe("extractClaudeStreamResultStdout", () => {
   it("returns undefined when the transcript has no result event", () => {
     const stdout = `${line({ type: "system", subtype: "init" })}not json\n`;
     expect(extractClaudeStreamResultStdout(stdout)).toBeUndefined();
+  });
+
+  it("extracts cursor's result event, which shares the claude envelope", () => {
+    // Cursor reuses this extractor verbatim; its result event has the same
+    // shape as its json-mode stdout, minus num_turns (cosmetic only).
+    const resultLine = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      duration_ms: 12,
+      result: "cursor review text",
+      session_id: "s-1",
+    });
+    const stdout = `${
+      line({ type: "system", subtype: "init", session_id: "s-1", model: "test-model" }) +
+      line({ type: "thinking", subtype: "delta", text: "secret reasoning" })
+    }${resultLine}\n`;
+
+    expect(extractClaudeStreamResultStdout(stdout)).toBe(resultLine);
   });
 });
 

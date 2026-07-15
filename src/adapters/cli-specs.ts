@@ -1057,10 +1057,23 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         captureMode: "text",
       };
     },
-    async parseOutput(result) {
-      return normalizeJsonLikeAdapterOutput(result.stdout, {
+    async parseOutput(result, invocation) {
+      // Stream mode: cursor's terminal result event is byte-shape-identical
+      // to the whole stdout of --output-format json (key sets compared
+      // programmatically, live-verified 2026-07-15), so the extracted line
+      // feeds the same normalizer; a transcript without one falls back to the
+      // raw stdout and the normal parse/repair pipeline.
+      const stdout =
+        invocation.streamFormat === "cursor-stream-json"
+          ? (extractClaudeStreamResultStdout(result.stdout) ?? result.stdout)
+          : result.stdout;
+      return normalizeJsonLikeAdapterOutput(stdout, {
         captureMode: "text",
         readonlyCapability: "prompt-only",
+        // Deliberately the full transcript, not the extracted result line:
+        // cliRuntimeResolutionMetadata parses JSONL per line, and in stream
+        // mode the system:init event carries session_id/model information
+        // the result event lacks.
         ...cliRuntimeResolutionMetadata(result.stdout),
       });
     },

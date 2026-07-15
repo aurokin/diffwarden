@@ -2164,6 +2164,95 @@ describe("cli adapter streaming debug output", () => {
     expect(output.text).toContain("droid text");
   });
 
+  it("switches Cursor to stream-json output when the help probe confirms support", async () => {
+    const harness = createHarness("cursor");
+    const adapter = createCliAdapter("cursor");
+    const reviewer = createReviewer("cursor", harness.executable);
+    const capture = collectChunks();
+
+    const baseline = await adapter.run(createInput(reviewer, harness));
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      debugOutput: { onChunk: capture.onChunk, streaming: true },
+    });
+    const invocation = harness.readInvocation();
+
+    const formatIndex = invocation.args.indexOf("--output-format");
+    expect(invocation.args[formatIndex + 1]).toBe("stream-json");
+    // Never passed: it adds text-delta events that would double-print.
+    expect(invocation.args).not.toContain("--stream-partial-output");
+    expect(output.metadata).toMatchObject({
+      debugStreamMode: "stream-json",
+      debugOutputMode: "event-summary",
+    });
+    // The artifact parses from the extracted terminal result event exactly as
+    // in json mode (the result event is byte-shape-identical to json stdout).
+    expect(output.text).toBe(baseline.text);
+    expect(output.text).toContain("cursor text");
+    // system:init carries session_id/model, so the full-transcript runtime
+    // metadata extraction works as in claude's stream mode.
+    expect(output.metadata).toMatchObject({ resolvedModel: "cursor-test-model" });
+    const stdoutText = capture.stdoutText();
+    expect(stdoutText).toContain("[system:init]");
+    // The echoed review prompt reduces to a size marker, never re-rendered.
+    expect(stdoutText).toMatch(/\[user message \d+ chars\]/);
+    expect(stdoutText).not.toContain("review prompt");
+    expect(stdoutText).toContain("cursor streaming");
+    expect(stdoutText).toContain("[tool_call]");
+    expect(stdoutText).toContain("[result:success duration_ms=12]");
+    // Top-level thinking deltas drop entirely, not one [thinking] per delta.
+    expect(stdoutText).not.toContain("[thinking]");
+    expect(stdoutText).not.toContain("secret reasoning");
+  });
+
+  it("keeps the Cursor invocation byte-identical when capture is not streaming", async () => {
+    const harness = createHarness("cursor");
+    const adapter = createCliAdapter("cursor");
+    const reviewer = createReviewer("cursor", harness.executable);
+    const capture = collectChunks();
+
+    await adapter.run(createInput(reviewer, harness));
+    const baselineArgs = harness.readInvocation().args;
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      debugOutput: { onChunk: capture.onChunk },
+    });
+    const invocation = harness.readInvocation();
+
+    // Without both --ndjson and --debug-reviewer-output (streaming unset) the
+    // invocation is byte-identical to a run without any debug capture.
+    expect(invocation.args).toEqual(baselineArgs);
+    expect(invocation.args[invocation.args.indexOf("--output-format") + 1]).toBe("json");
+    expect(output.metadata).not.toHaveProperty("debugStreamMode");
+    expect(output.metadata).not.toHaveProperty("debugOutputMode");
+    expect(output.text).toContain("cursor text");
+    // Raw passthrough: the callback sees the buffered json output unmodified.
+    expect(capture.stdoutText()).toContain('"result"');
+  });
+
+  it.each([
+    ["help lacks stream-json", { DIFFWARDEN_FAKE_CURSOR_NO_STREAM_JSON: "1" }],
+    ["help probe fails", { DIFFWARDEN_FAKE_CURSOR_HELP_FAIL: "1" }],
+  ])("degrades Cursor streaming to json output, failing closed (%s)", async (_name, extraEnv) => {
+    const harness = createHarness("cursor");
+    const adapter = createCliAdapter("cursor");
+    const reviewer = createReviewer("cursor", harness.executable);
+    const capture = collectChunks();
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: { ...harness.env, ...extraEnv },
+      debugOutput: { onChunk: capture.onChunk, streaming: true },
+    });
+    const invocation = harness.readInvocation();
+
+    const formatIndex = invocation.args.indexOf("--output-format");
+    expect(invocation.args[formatIndex + 1]).toBe("json");
+    expect(output.metadata).toMatchObject({ debugStreamModeDropped: "cli-unsupported" });
+    // The artifact still parses via the verified json mode.
+    expect(output.text).toContain("cursor text");
+  });
+
   it.each([
     ["canonical wording", "1"],
     ["alternative wording", "alt"],
@@ -2423,6 +2512,18 @@ if (engine === "gemini" && process.argv.includes("--help")) {
   }
   process.exit(0);
 }
+if (engine === "cursor" && process.argv.includes("--help")) {
+  // Stream-json support probe: cursor help enumerates --output-format values.
+  if (process.env.DIFFWARDEN_FAKE_CURSOR_HELP_FAIL === "1") {
+    process.stderr.write("cursor-agent help failed");
+    process.exit(1);
+  }
+  const formats = process.env.DIFFWARDEN_FAKE_CURSOR_NO_STREAM_JSON === "1"
+    ? "text | json"
+    : "text | json | stream-json";
+  process.stdout.write("--output-format <format>  Output format (" + formats + ")");
+  process.exit(0);
+}
 if (engine === "grok" && process.argv.includes("--help")) {
   if (process.env.DIFFWARDEN_FAKE_OLD_GROK_HELP === "1") {
     process.stdout.write("--prompt-file --cwd --output-format --permission-mode");
@@ -2661,7 +2762,20 @@ if (engine === "codex") {
     process.stdout.write(JSON.stringify({ result: review }));
   }
 } else if (engine === "cursor") {
-  process.stdout.write(JSON.stringify({ result: engine + " text" }));
+  // cursor's terminal stream result event is byte-shape-identical to the
+  // whole stdout of --output-format json (live-verified 2026-07-15).
+  const cursorResult = JSON.stringify({ type: "result", subtype: "success", is_error: false, duration_ms: 12, result: engine + " text", session_id: "sess-cursor" });
+  if (process.argv.includes("stream-json")) {
+    process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "sess-cursor", model: "cursor-test-model" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "thinking", subtype: "delta", text: "secret reasoning" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "thinking", subtype: "completed" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: "review prompt" }] }, session_id: "sess-cursor" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "cursor streaming" }] }, session_id: "sess-cursor" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "tool_call", subtype: "started", session_id: "sess-cursor" }) + "\\n");
+    process.stdout.write(cursorResult + "\\n");
+  } else {
+    process.stdout.write(cursorResult);
+  }
 } else if (engine === "gemini") {
   process.stdout.write(JSON.stringify({ response: engine + " text" }));
 } else if (engine === "droid") {
