@@ -447,6 +447,60 @@ describe("createCodexAppServerAdapter", () => {
     });
   });
 
+  it("keeps foreign-thread notifications out of reply assembly in stdio-isolated mode", async () => {
+    const harness = createHarness({ foreignThread: true });
+    const adapter = createCodexAppServerAdapter();
+    const reviewer = createReviewer(harness.executable);
+
+    const output = await adapter.run(createInput(reviewer, harness));
+
+    expect(output.structured).toMatchObject({
+      overall_correctness: "patch is correct",
+      overall_explanation: "codex app-server ok",
+    });
+  });
+
+  it("accepts missing-threadId notifications in stdio-isolated mode", async () => {
+    const harness = createHarness({ omitThreadId: true });
+    const adapter = createCodexAppServerAdapter();
+    const reviewer = createReviewer(harness.executable);
+
+    const output = await adapter.run(createInput(reviewer, harness));
+
+    expect(output.structured).toMatchObject({
+      overall_correctness: "patch is correct",
+      overall_explanation: "codex app-server ok",
+    });
+    expect(output.usage).toMatchObject({
+      total: {
+        inputTokens: 10,
+        outputTokens: 5,
+      },
+    });
+  });
+
+  it.each(["auto", "attach"] as const)(
+    "drops foreign, missing-threadId, and pre-threadId notifications in shared %s mode",
+    async (mode) => {
+      const harness = createSocketHarness({ crossThreadTraffic: true });
+      await harness.start();
+      const adapter = createCodexAppServerAdapter();
+      const reviewer = createSharedReviewer(process.execPath, {
+        mode,
+        codexHome: harness.authHome,
+      });
+
+      const output = await adapter.run(createInput(reviewer, harness));
+
+      expect(output.structured).toMatchObject({
+        overall_correctness: "patch is correct",
+        overall_explanation: "codex app-server ok",
+      });
+      // Server-initiated requests stay answered regardless of thread.
+      expect(harness.readInvocation().approvalResponse).toEqual({ decision: "decline" });
+    },
+  );
+
   it("handles terminal turns returned directly from turn/start", async () => {
     const harness = createHarness({ directCompletedTurn: true });
     const adapter = createCodexAppServerAdapter();
@@ -627,7 +681,9 @@ type FakeInvocation = {
   unsupportedResponse?: unknown;
 };
 
-function createSocketHarness(): Harness & { socketPath: string; start(): Promise<void> } {
+function createSocketHarness(
+  options: { crossThreadTraffic?: boolean } = {},
+): Harness & { socketPath: string; start(): Promise<void> } {
   root = mkdtempSync(path.join("/tmp", "dw-cas-"));
   const cwd = path.join(root, "repo");
   const authHome = path.join(root, "codex-home");
@@ -656,7 +712,7 @@ function createSocketHarness(): Harness & { socketPath: string; start(): Promise
       CODEX_HOME: authHome,
     },
     async start() {
-      server = createFakeWebSocketAppServer(socketPath, invocation, invocationPath);
+      server = createFakeWebSocketAppServer(socketPath, invocation, invocationPath, options);
       cleanupFns.push(
         () =>
           new Promise<void>((resolve) => {
@@ -723,6 +779,8 @@ function createHarness(
   options: {
     auth?: boolean;
     completedItemOnly?: boolean;
+    foreignThread?: boolean;
+    omitThreadId?: boolean;
     requestApproval?: boolean;
     legacyApproval?: boolean;
     retryableError?: boolean;
@@ -761,6 +819,8 @@ function createHarness(
       CODEX_HOME: authHome,
       DIFFWARDEN_FAKE_APP_SERVER_INVOCATION: invocationPath,
       ...(options.completedItemOnly ? { DIFFWARDEN_FAKE_APP_SERVER_COMPLETED_ITEM_ONLY: "1" } : {}),
+      ...(options.foreignThread ? { DIFFWARDEN_FAKE_APP_SERVER_FOREIGN_THREAD: "1" } : {}),
+      ...(options.omitThreadId ? { DIFFWARDEN_FAKE_APP_SERVER_OMIT_THREAD_ID: "1" } : {}),
       ...(options.requestApproval ? { DIFFWARDEN_FAKE_APP_SERVER_APPROVAL: "1" } : {}),
       ...(options.legacyApproval ? { DIFFWARDEN_FAKE_APP_SERVER_LEGACY_APPROVAL: "1" } : {}),
       ...(options.retryableError ? { DIFFWARDEN_FAKE_APP_SERVER_RETRYABLE_ERROR: "1" } : {}),
@@ -800,6 +860,7 @@ function createFakeWebSocketAppServer(
   socketPath: string,
   invocation: FakeInvocation & { messages: unknown[] },
   invocationPath: string,
+  options: { crossThreadTraffic?: boolean } = {},
 ): Server {
   const server = createServer((socket) => {
     let buffer = Buffer.alloc(0);
@@ -837,7 +898,13 @@ function createFakeWebSocketAppServer(
         }
         const payload = Buffer.concat(fragments).toString("utf8");
         fragments.length = 0;
-        handleFakeAppServerMessage(JSON.parse(payload), invocation, invocationPath, socket);
+        handleFakeAppServerMessage(
+          JSON.parse(payload),
+          invocation,
+          invocationPath,
+          socket,
+          options,
+        );
       }
     });
   });
@@ -850,21 +917,48 @@ function handleFakeAppServerMessage(
   invocation: FakeInvocation & { messages: unknown[] },
   invocationPath: string,
   socket: Socket,
+  options: { crossThreadTraffic?: boolean } = {},
 ): void {
   invocation.messages.push(message);
+  if (message.method === undefined && message.id === 999) {
+    invocation.approvalResponse = message.result;
+    finishFakeSocketInvocation(invocation, invocationPath, socket, options);
+    return;
+  }
   if (message.method === "initialize") {
     fakeSocketSend(socket, { id: message.id, result: { serverInfo: { name: "fake-codex" } } });
     return;
   }
   if (message.method === "thread/start") {
     invocation.threadStart = message.params as FakeInvocation["threadStart"];
+    if (options.crossThreadTraffic) {
+      // Arrives before the client learns its threadId from the thread/start
+      // response: shared modes must drop it even though the threadId matches.
+      fakeSocketSend(socket, {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "message-1",
+          delta: "PRE-THREAD POISON ",
+        },
+      });
+    }
     fakeSocketSend(socket, { id: message.id, result: { thread: { id: "thread-1" } } });
     return;
   }
   if (message.method === "turn/start") {
     invocation.turnStart = message.params as FakeInvocation["turnStart"];
     fakeSocketSend(socket, { id: message.id, result: { turn: { id: "turn-1" } } });
-    finishFakeSocketInvocation(invocation, invocationPath, socket);
+    if (options.crossThreadTraffic) {
+      fakeSocketSend(socket, {
+        id: 999,
+        method: "item/commandExecution/requestApproval",
+        params: {},
+      });
+      return;
+    }
+    finishFakeSocketInvocation(invocation, invocationPath, socket, options);
   }
 }
 
@@ -872,6 +966,7 @@ function finishFakeSocketInvocation(
   invocation: FakeInvocation & { messages: unknown[] },
   invocationPath: string,
   socket: Socket,
+  options: { crossThreadTraffic?: boolean } = {},
 ): void {
   const review = {
     findings: [],
@@ -879,6 +974,25 @@ function finishFakeSocketInvocation(
     overall_explanation: "codex app-server ok",
     overall_confidence_score: 0.91,
   };
+  if (options.crossThreadTraffic) {
+    fakeSocketSend(socket, {
+      method: "item/agentMessage/delta",
+      params: {
+        turnId: "turn-1",
+        itemId: "message-1",
+        delta: "NO-THREAD POISON ",
+      },
+    });
+    fakeSocketSend(socket, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-9",
+        itemId: "message-1",
+        delta: "FOREIGN POISON ",
+      },
+    });
+  }
   fakeSocketSend(socket, {
     method: "item/agentMessage/delta",
     params: {
@@ -888,6 +1002,16 @@ function finishFakeSocketInvocation(
       delta: JSON.stringify(review),
     },
   });
+  if (options.crossThreadTraffic) {
+    fakeSocketSend(socket, {
+      method: "item/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-9",
+        item: { type: "agentMessage", id: "message-9", text: "FOREIGN COMPLETED" },
+      },
+    });
+  }
   writeFileSync(invocationPath, JSON.stringify(invocation, null, 2));
   fakeSocketSend(socket, {
     method: "turn/completed",
@@ -1186,6 +1310,20 @@ function finish() {
     overall_explanation: "codex app-server ok",
     overall_confidence_score: 0.91
   };
+  const threadFields = process.env.DIFFWARDEN_FAKE_APP_SERVER_OMIT_THREAD_ID
+    ? {}
+    : { threadId: "thread-1" };
+  if (process.env.DIFFWARDEN_FAKE_APP_SERVER_FOREIGN_THREAD) {
+    send({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-9",
+        itemId: "message-1",
+        delta: "FOREIGN POISON "
+      }
+    });
+  }
   if (process.env.DIFFWARDEN_FAKE_APP_SERVER_RETRYABLE_ERROR) {
     send({
       method: "error",
@@ -1201,7 +1339,7 @@ function finish() {
     send({
       method: "item/completed",
       params: {
-        threadId: "thread-1",
+        ...threadFields,
         turnId: "turn-1",
         completedAtMs: Date.now(),
         item: {
@@ -1217,17 +1355,43 @@ function finish() {
     send({
       method: "item/agentMessage/delta",
       params: {
-        threadId: "thread-1",
+        ...threadFields,
         turnId: "turn-1",
         itemId: "message-1",
         delta: JSON.stringify(review)
       }
     });
   }
+  if (process.env.DIFFWARDEN_FAKE_APP_SERVER_FOREIGN_THREAD) {
+    send({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-9",
+        itemId: "message-9",
+        delta: "FOREIGN CLOBBER"
+      }
+    });
+    send({
+      method: "item/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-9",
+        completedAtMs: Date.now(),
+        item: {
+          type: "agentMessage",
+          id: "message-9",
+          text: "FOREIGN COMPLETED",
+          phase: null,
+          memoryCitation: null
+        }
+      }
+    });
+  }
   send({
     method: "thread/tokenUsage/updated",
     params: {
-      threadId: "thread-1",
+      ...threadFields,
       turnId: "turn-1",
       tokenUsage: {
         total: {
@@ -1243,7 +1407,7 @@ function finish() {
     send({
       method: "turn/completed",
       params: {
-        threadId: "thread-1",
+        ...threadFields,
         turn: {
           id: "turn-1",
           status: "failed",
@@ -1256,7 +1420,7 @@ function finish() {
   send({
     method: "turn/completed",
     params: {
-      threadId: "thread-1",
+      ...threadFields,
       turn: { id: "turn-1", status: "completed" }
     }
   });

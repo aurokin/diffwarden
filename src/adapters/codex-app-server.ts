@@ -255,6 +255,7 @@ class CodexAppServerSession {
   private readonly completedTurns = new Set<string>();
   private nextId = 1;
   private connection: AppServerConnection | undefined;
+  private threadId: string | undefined;
   private reply = "";
   private currentAgentMessageId = "";
   private currentAgentMessageText = "";
@@ -314,6 +315,7 @@ class CodexAppServerSession {
       if (threadId === undefined) {
         throw reviewerFailed("codex app-server did not return a thread id");
       }
+      this.threadId = threadId;
 
       if (this.options.reviewMode === "native") {
         return await this.runNativeReview(connection, threadId);
@@ -479,7 +481,17 @@ class CodexAppServerSession {
     }
 
     if (isServerRequest(message)) {
+      // Server-initiated requests are answered conservatively for all ids
+      // regardless of thread; only notifications are thread-filtered below.
       this.onServerRequest(message);
+      return;
+    }
+
+    const notifThreadId =
+      isRecord(message.params) && typeof message.params.threadId === "string"
+        ? message.params.threadId
+        : undefined;
+    if (!this.acceptsNotificationThread(notifThreadId)) {
       return;
     }
 
@@ -521,6 +533,36 @@ class CodexAppServerSession {
       const error = reviewerFailed(`codex app-server error: ${formatError(message.params)}`);
       this.turnCompletion?.reject(error);
     }
+  }
+
+  /**
+   * Mode-dependent thread filter for server notifications.
+   *
+   * stdio-isolated mode runs a single-tenant child spawned for this review, so
+   * cross-thread traffic is impossible; accept when threadIds match or when
+   * either side is absent — byte-identical to today's behavior for every
+   * fixture-verified flow.
+   *
+   * attach/auto/launch modes talk to a shared daemon in the user's real
+   * CODEX_HOME, where other clients' thread notifications can arrive on the
+   * same connection. Accept ONLY a verified match. The explicit three-clause
+   * guard is load-bearing: a naive `notifThreadId === this.threadId` is true
+   * when both sides are undefined, silently re-opening the window before our
+   * threadId is known. Foreign threads, missing threadIds, and traffic
+   * arriving before thread/start returns are all dropped — degrading to
+   * dropped notifications, never to cross-thread leakage.
+   */
+  private acceptsNotificationThread(notifThreadId: string | undefined): boolean {
+    if (this.options.mode === "stdio-isolated") {
+      return (
+        notifThreadId === undefined ||
+        this.threadId === undefined ||
+        notifThreadId === this.threadId
+      );
+    }
+    return (
+      notifThreadId !== undefined && this.threadId !== undefined && notifThreadId === this.threadId
+    );
   }
 
   private onServerRequest(message: JsonRpcMessage): void {
