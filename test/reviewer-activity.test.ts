@@ -37,6 +37,9 @@ const dialectRenderers: Array<[ActivityDialect, ActivityRenderer]> = [
   ["opencode-json", opencodeJsonEventText],
   ["copilot-json", copilotJsonEventText],
   ["pi-json", piJsonEventText],
+  // Stateful renderer: always resolved through the dialect map, which hands
+  // out a fresh instance per call.
+  ["antigravity-transcript", activityRenderer("antigravity-transcript")],
   // Resolved through the dialect map so the SDK wiring itself is under test.
   ["claude-sdk", activityRenderer("claude-sdk")],
   ["cursor-sdk", activityRenderer("cursor-sdk")],
@@ -285,6 +288,35 @@ const adversarialEvents: Array<[string, unknown]> = [
       result: { content: [{ type: "text", text: SENTINEL }] },
       isError: false,
     },
+  ],
+  // Antigravity transcript events (the isolated-HOME JSONL tail).
+  [
+    "antigravity planner thinking field",
+    {
+      type: "PLANNER_RESPONSE",
+      content: "planner prose",
+      thinking: SENTINEL,
+      tool_calls: [{ name: "view_file", args: { path: SENTINEL } }],
+    },
+  ],
+  [
+    "antigravity huge planner thinking field",
+    { type: "PLANNER_RESPONSE", content: "ok", thinking: SENTINEL.repeat(200_000) },
+  ],
+  ["antigravity user input echo", { type: "USER_INPUT", content: `${SENTINEL} full prompt` }],
+  ["antigravity huge user input echo", { type: "USER_INPUT", content: SENTINEL.repeat(200_000) }],
+  ["antigravity checkpoint summary", { type: "CHECKPOINT", content: `${SENTINEL} summary` }],
+  [
+    "antigravity tool payloads",
+    { type: "RUN_COMMAND", command: SENTINEL, output: SENTINEL, exit_code: 0 },
+  ],
+  [
+    "antigravity view file payload",
+    { type: "VIEW_FILE", path: SENTINEL, content: SENTINEL.repeat(1_000) },
+  ],
+  [
+    "antigravity hostile tool_calls entries",
+    { type: "PLANNER_RESPONSE", content: "ok", tool_calls: [null, "grep", { name: 42 }] },
   ],
   // Cursor SDK ConversationSteps (onStep callback shapes).
   [
@@ -1211,6 +1243,96 @@ describe("renderActivityEvent dialect rendering", () => {
         `[${type}]`,
       );
     }
+  });
+
+  it("hands out a fresh stateful antigravity-transcript renderer per dialect-map call", () => {
+    expect(activityRenderer("antigravity-transcript")).not.toBe(
+      activityRenderer("antigravity-transcript"),
+    );
+  });
+
+  it("renders antigravity planner content verbatim, dropping the thinking field entirely", () => {
+    const render = activityRenderer("antigravity-transcript");
+    expect(
+      renderActivityEvent(render, {
+        type: "PLANNER_RESPONSE",
+        content: "inspecting the diff",
+        thinking: SENTINEL,
+      }),
+    ).toBe("inspecting the diff");
+    // Content-less intermediate planner events drop silently.
+    expect(
+      renderActivityEvent(render, { type: "PLANNER_RESPONSE", content: "   ", thinking: SENTINEL }),
+    ).toBeUndefined();
+    expect(
+      renderActivityEvent(render, { type: "PLANNER_RESPONSE", thinking: SENTINEL }),
+    ).toBeUndefined();
+  });
+
+  it("names antigravity tool markers FIFO from the preceding planner tool_calls", () => {
+    const render = activityRenderer("antigravity-transcript");
+    expect(
+      renderActivityEvent(render, {
+        type: "PLANNER_RESPONSE",
+        content: "running checks",
+        thinking: SENTINEL,
+        tool_calls: [
+          { name: "run_command", args: { command: SENTINEL } },
+          { name: "grep_search", args: { query: SENTINEL } },
+        ],
+      }),
+    ).toBe("running checks");
+    expect(
+      renderActivityEvent(render, { type: "RUN_COMMAND", command: SENTINEL, output: SENTINEL }),
+    ).toBe("[tool_use run_command]");
+    expect(renderActivityEvent(render, { type: "GREP_SEARCH", results: SENTINEL })).toBe(
+      "[tool_use grep_search]",
+    );
+    // Queue exhausted: the event type itself is the payload-free fallback name.
+    expect(renderActivityEvent(render, { type: "VIEW_FILE", content: SENTINEL })).toBe(
+      "[tool_use VIEW_FILE]",
+    );
+    // A new planner response replaces the last-seen names.
+    renderActivityEvent(render, {
+      type: "PLANNER_RESPONSE",
+      content: "reading",
+      tool_calls: [{ name: "view_file" }],
+    });
+    expect(renderActivityEvent(render, { type: "VIEW_FILE", content: SENTINEL })).toBe(
+      "[tool_use view_file]",
+    );
+  });
+
+  it("bounds antigravity tool names and skips malformed tool_calls entries", () => {
+    const render = activityRenderer("antigravity-transcript");
+    renderActivityEvent(render, {
+      type: "PLANNER_RESPONSE",
+      content: "ok",
+      tool_calls: [null, "grep", { name: 42 }, { name: "x".repeat(500) + SENTINEL }],
+    });
+    expect(renderActivityEvent(render, { type: "GENERIC" })).toBe(`[tool_use ${"x".repeat(128)}]`);
+    expect(renderActivityEvent(render, { type: "GENERIC" })).toBe("[tool_use GENERIC]");
+  });
+
+  it("reduces antigravity user input echoes and checkpoints to size markers", () => {
+    const render = activityRenderer("antigravity-transcript");
+    expect(renderActivityEvent(render, { type: "USER_INPUT", content: "abcdefgh" })).toBe(
+      "[USER_INPUT 8 chars]",
+    );
+    expect(renderActivityEvent(render, { type: "CHECKPOINT", content: "abcdefgh" })).toBe(
+      "[CHECKPOINT 8 chars]",
+    );
+    // A content-less checkpoint sizes the whole event, still payload-free.
+    expect(renderActivityEvent(render, { type: "CHECKPOINT", summary: SENTINEL })).toMatch(
+      /^\[CHECKPOINT \d+ chars\]$/,
+    );
+  });
+
+  it("reduces unknown antigravity event types to payload-free markers", () => {
+    const render = activityRenderer("antigravity-transcript");
+    expect(renderActivityEvent(render, { type: "NEW_EVENT", payload: SENTINEL })).toBe(
+      "[NEW_EVENT]",
+    );
   });
 });
 

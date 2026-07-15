@@ -16,6 +16,13 @@ export type CliInvocation = {
   droidSessionDirectory?: string;
   claudeAuthMode?: "api-key" | "claude-code";
   /**
+   * Isolated HOME staged for the antigravity engine. When debug output is
+   * requested, the adapter tails the transcript JSONL agy live-appends under
+   * this home — a spend-free filesystem probe that never alters the
+   * invocation (see antigravity-transcript.ts).
+   */
+  antigravityIsolatedHome?: string;
+  /**
    * Set when the invocation's stdout is a JSONL event stream: either switched
    * to a native stream output mode (claude, droid) or always JSONL by default
    * (codex, opencode, copilot, pi). Debug stdout chunks are summarized through

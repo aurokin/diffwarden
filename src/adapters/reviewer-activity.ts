@@ -35,6 +35,7 @@ export type ActivityDialect =
   | "opencode-json"
   | "copilot-json"
   | "pi-json"
+  | "antigravity-transcript"
   | "claude-sdk"
   | "cursor-sdk"
   | "droid-sdk"
@@ -69,6 +70,9 @@ export function activityRenderer(dialect: ActivityDialect): ActivityRenderer {
     "opencode-json": opencodeJsonEventText,
     "copilot-json": copilotJsonEventText,
     "pi-json": piJsonEventText,
+    // Stateful (last-seen tool names): the map literal is rebuilt per call, so
+    // every activityRenderer() invocation hands out a fresh instance.
+    "antigravity-transcript": createAntigravityTranscriptRenderer(),
     // SDKMessage objects are structurally identical to parsed CLI stream-json
     // lines, so the claude renderer applies verbatim.
     "claude-sdk": claudeStreamEventText,
@@ -882,6 +886,90 @@ function piAssistantTextParts(content: unknown): string | undefined {
     }
   }
   return parts.length === 0 ? undefined : parts.join("\n");
+}
+
+/**
+ * Typed tool-execution events observed in the agy transcript JSONL
+ * (live-verified 2026-07-15). Their payloads carry command output and file
+ * contents and never render.
+ */
+const antigravityToolEventTypes = new Set([
+  "RUN_COMMAND",
+  "VIEW_FILE",
+  "LIST_DIRECTORY",
+  "GREP_SEARCH",
+  "SEARCH_WEB",
+  "CODE_ACTION",
+  "GENERIC",
+]);
+
+/** Bounds the last-seen tool-name state so a hostile transcript cannot grow it. */
+const maxAntigravityPendingToolNames = 16;
+
+/**
+ * One safe summary line per Antigravity transcript event (the JSONL agy
+ * live-appends under the review's isolated HOME; see
+ * antigravity-transcript.ts for the tailer). Stateful — unlike the other
+ * dialects, tool names arrive on `PLANNER_RESPONSE.tool_calls[].name` while
+ * the typed tool events that follow carry only payloads, so the renderer
+ * keeps a small FIFO of last-seen tool names — hence the factory. Policy:
+ *
+ * - `PLANNER_RESPONSE` surfaces `content` verbatim (the intermediate/final
+ *   assistant prose). Its optional `thinking` field is markdown
+ *   chain-of-thought that never appears on stdout and is dropped entirely
+ *   (never read beyond the allowlisted `content`/`tool_calls[].name`).
+ * - Typed tool events reduce to `[tool_use <name>]` markers, the name taken
+ *   FIFO from the preceding PLANNER_RESPONSE's tool_calls when available and
+ *   falling back to the event type itself; payloads never render.
+ * - `USER_INPUT` (the full echoed review prompt) and `CHECKPOINT` (context
+ *   summaries) reduce to size markers.
+ * - Unknown event types degrade to payload-free `[<type>]` markers.
+ */
+export function createAntigravityTranscriptRenderer(): ActivityRenderer {
+  let pendingToolNames: string[] = [];
+
+  return (event) => {
+    const type = stringField(event, "type");
+    if (type === undefined) {
+      return undefined;
+    }
+
+    if (type === "PLANNER_RESPONSE") {
+      pendingToolNames = antigravityToolCallNames(event.tool_calls);
+      const content = typeof event.content === "string" ? event.content : undefined;
+      return content === undefined || content.trim() === "" ? undefined : content;
+    }
+
+    if (antigravityToolEventTypes.has(type)) {
+      return toolUseMarker(pendingToolNames.shift() ?? type);
+    }
+
+    if (type === "USER_INPUT" || type === "CHECKPOINT") {
+      return sizeMarker(type, contentSize(event.content ?? event));
+    }
+
+    return `[${type}]`;
+  };
+}
+
+/** Bounded, name-only extraction from PLANNER_RESPONSE.tool_calls. */
+function antigravityToolCallNames(toolCalls: unknown): string[] {
+  if (!Array.isArray(toolCalls)) {
+    return [];
+  }
+  const names: string[] = [];
+  for (const call of toolCalls) {
+    if (names.length >= maxAntigravityPendingToolNames) {
+      break;
+    }
+    if (isRecord(call)) {
+      const name = stringField(call, "name");
+      if (name !== undefined) {
+        names.push(name);
+      }
+    }
+  }
+  return names;
 }
 
 /** Payload-free tool marker; the name is bounded, never the tool input. */

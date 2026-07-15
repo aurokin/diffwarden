@@ -1489,6 +1489,9 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
           AGY_CLI_DISABLE_AUTO_UPDATE: "true",
         },
         unsetEnv: ["HOMEDRIVE", "HOMEPATH"],
+        // Debug-only transcript tail anchor (see antigravity-transcript.ts);
+        // never changes the invocation itself.
+        antigravityIsolatedHome: isolatedHome,
         captureMode: "text",
       };
     },

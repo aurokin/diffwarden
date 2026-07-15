@@ -891,6 +891,74 @@ describe("createCliAdapter", () => {
     expect(readFileSync(versionHomeCapturePath, "utf8")).toContain("antigravity-home");
   });
 
+  it("summarizes the Antigravity transcript tail when debug output is requested", async () => {
+    const harness = createHarness("antigravity");
+    const adapter = createCliAdapter("antigravity");
+    const reviewer = createReviewer("antigravity", harness.executable);
+    const env = { ...harness.env, DIFFWARDEN_FAKE_ANTIGRAVITY_TRANSCRIPT: "1" };
+
+    const baseline = await adapter.run({ ...createInput(reviewer, harness), env });
+    const baselineArgs = harness.readInvocation().args;
+
+    const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+    const debugged = await adapter.run({
+      ...createInput(reviewer, harness),
+      env,
+      debugOutput: {
+        onChunk: (stream, text) => chunks.push({ stream, text }),
+      },
+    });
+    const debugArgs = harness.readInvocation().args;
+
+    // Zero invocation changes: the transcript tail is a filesystem probe, so
+    // debug capture must never alter the argv (unknown agy flags are a paid
+    // agent-run hazard, see antigravity-transcript.ts).
+    expect(debugArgs.map((arg) => arg.replace(/diffwarden-cli-[A-Za-z0-9]+/g, "TMP"))).toEqual(
+      baselineArgs.map((arg) => arg.replace(/diffwarden-cli-[A-Za-z0-9]+/g, "TMP")),
+    );
+    // Stdout parsing stays the source of truth for the review result.
+    expect(debugged.text).toEqual(baseline.text);
+    expect(baseline.metadata).not.toHaveProperty("debugOutputMode");
+    expect(debugged.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+
+    const stdoutText = chunks
+      .filter((chunk) => chunk.stream === "stdout")
+      .map((chunk) => chunk.text)
+      .join("");
+    expect(stdoutText).toContain("inspecting the diff");
+    expect(stdoutText).toContain("[tool_use view_file]");
+    expect(stdoutText).toContain("[USER_INPUT 20 chars]");
+    expect(stdoutText).toContain("[CHECKPOINT 20 chars]");
+    expect(stdoutText).toContain("antigravity summary done");
+    // The raw stdout passthrough (the review text itself) still flows.
+    expect(stdoutText).toContain("antigravity text");
+    // Thinking, the echoed prompt, and tool payloads never render.
+    expect(stdoutText).not.toContain("secret reasoning");
+    expect(stdoutText).not.toContain("echoed review prompt");
+    expect(stdoutText).not.toContain("secret file contents");
+    expect(stdoutText).not.toContain("secret path");
+  });
+
+  it("degrades Antigravity debug capture silently when the transcript never appears", async () => {
+    const harness = createHarness("antigravity");
+    const adapter = createCliAdapter("antigravity");
+    const reviewer = createReviewer("antigravity", harness.executable);
+
+    const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      debugOutput: {
+        onChunk: (stream, text) => chunks.push({ stream, text }),
+      },
+    });
+
+    // The review proceeds normally with only the raw stdout passthrough.
+    expect(output.text).toContain("antigravity text");
+    expect(output.metadata).toMatchObject({ debugOutputDropped: "transcript-unavailable" });
+    expect(output.metadata).not.toHaveProperty("debugOutputMode");
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe("antigravity text");
+  });
+
   it("prefers provider-observed CLI metadata over deterministic request metadata", async () => {
     const harness = createHarness("codex");
     const adapter = createCliAdapter("codex");
@@ -2936,6 +3004,28 @@ if (engine === "codex") {
     process.stdout.write(JSON.stringify({ type: "agent_end", messages: [{ role: "assistant", content: [{ type: "thinking", thinking: "secret reasoning" }] }] }) + "\\n");
   }
 } else if (engine === "antigravity") {
+  // agy has no machine-readable stdout mode; when enabled, the fake mimics
+  // the transcript JSONL agy live-appends under the isolated HOME's brain dir.
+  if (process.env.DIFFWARDEN_FAKE_ANTIGRAVITY_TRANSCRIPT === "1" && process.env.HOME) {
+    const logsDir = path.join(
+      process.env.HOME,
+      ".gemini",
+      "antigravity-cli",
+      "brain",
+      "11111111-2222-4333-8444-555555555555",
+      ".system_generated",
+      "logs",
+    );
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(logsDir, "transcript.jsonl"),
+      JSON.stringify({ type: "USER_INPUT", content: "echoed review prompt" }) + "\\n" +
+        JSON.stringify({ type: "PLANNER_RESPONSE", content: "inspecting the diff", thinking: "secret reasoning", tool_calls: [{ name: "view_file", args: { path: "secret path" } }] }) + "\\n" +
+        JSON.stringify({ type: "VIEW_FILE", content: "secret file contents" }) + "\\n" +
+        JSON.stringify({ type: "CHECKPOINT", content: "context summary blob" }) + "\\n" +
+        JSON.stringify({ type: "PLANNER_RESPONSE", content: "antigravity summary done", thinking: "secret reasoning" }) + "\\n",
+    );
+  }
   process.stdout.write(engine + " text");
 } else {
   process.stderr.write("unexpected engine " + engine);
