@@ -100,11 +100,7 @@ describe("startAntigravityTranscriptTail", () => {
 
     appendFileSync(layout.transcriptPath, `${toolLine.slice(12)}\n`, "utf8");
     await waitFor(() => lines.length >= 3);
-    expect(lines).toEqual([
-      "[USER_INPUT 20 chars]",
-      "checking the diff",
-      "[tool_use view_file]",
-    ]);
+    expect(lines).toEqual(["[USER_INPUT 20 chars]", "checking the diff", "[tool_use view_file]"]);
     // Offset tracking: already-rendered lines never re-render.
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(lines).toHaveLength(3);
