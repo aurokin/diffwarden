@@ -34,7 +34,11 @@ import {
   stringCliOption,
 } from "./cli-helpers.js";
 import { cliRuntimeResolutionMetadata } from "./cli-runtime-metadata.js";
-import { extractClaudeStreamResultStdout, extractDroidStreamResultStdout } from "./cli-stream.js";
+import {
+  extractClaudeStreamResultStdout,
+  extractDroidStreamResultStdout,
+  extractGrokStreamResultStdout,
+} from "./cli-stream.js";
 import type { CliEngine, CliSpec } from "./cli-types.js";
 import {
   codexCliCwdArg,
@@ -1427,11 +1431,22 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         captureMode: "text",
       };
     },
-    async parseOutput(result) {
-      return normalizeJsonLikeAdapterOutput(result.stdout, {
+    async parseOutput(result, invocation) {
+      // Stream mode: synthesize the json-mode envelope from the transcript
+      // (end event fields plus concatenated text deltas, thought omitted); a
+      // transcript without an end event falls back to the raw stdout and the
+      // normal parse/repair pipeline.
+      const stdout =
+        invocation.streamFormat === "grok-streaming-json"
+          ? (extractGrokStreamResultStdout(result.stdout) ?? result.stdout)
+          : result.stdout;
+      return normalizeJsonLikeAdapterOutput(stdout, {
         captureMode: "text",
         readonlyCapability: "enforced",
         ...grokCliReviewPolicyMetadata(),
+        // Deliberately the full transcript, not the synthesized envelope:
+        // cliRuntimeResolutionMetadata parses JSONL per line either way, and
+        // the raw end event carries the same modelUsage keys.
         ...cliRuntimeResolutionMetadata(result.stdout),
       });
     },

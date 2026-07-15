@@ -28,6 +28,8 @@ const dialectRenderers: Array<[ActivityDialect, ActivityRenderer]> = [
   // Resolved through the dialect map so the wiring itself is under test.
   ["cursor-stream-json", activityRenderer("cursor-stream-json")],
   ["droid-stream-json", droidStreamEventText],
+  // Resolved through the dialect map so the grok wiring itself is under test.
+  ["grok-streaming-json", activityRenderer("grok-streaming-json")],
   ["codex-json", codexJsonEventText],
   // Resolved through the dialect map so the app-server wiring itself is under test.
   ["codex-app-server", activityRenderer("codex-app-server")],
@@ -80,6 +82,20 @@ const adversarialEvents: Array<[string, unknown]> = [
   ],
   ["user message text", { type: "message", role: "user", text: `${SENTINEL} prompt` }],
   ["tool_call args", { type: "tool_call", name: "read-cli", args: { path: SENTINEL } }],
+  // Grok token-level answer deltas and terminal end payloads (grok's text
+  // events render only through the stream-layer coalescer, never here).
+  ["grok token delta", { type: "text", data: SENTINEL }],
+  [
+    "grok end payload",
+    {
+      type: "end",
+      stopReason: "EndTurn",
+      sessionId: SENTINEL,
+      requestId: SENTINEL,
+      usage: { note: SENTINEL },
+      modelUsage: { [SENTINEL]: { modelCalls: 2 } },
+    },
+  ],
   ["unknown event params", { type: "custom_event", params: { secret: SENTINEL } }],
   ["unknown event payload", { type: "weird_event", payload: SENTINEL }],
   // Huge payloads.
@@ -505,6 +521,49 @@ describe("renderActivityEvent dialect rendering", () => {
       text: "review prompt",
     });
     expect(rendered).toBe("[user message 13 chars]");
+  });
+
+  it("drops grok text deltas at the renderer (the stream layer coalesces them)", () => {
+    // Rendering token-level deltas here would emit one debug line per token;
+    // the grok stream parser routes them through createDeltaCoalescer instead.
+    const render = activityRenderer("grok-streaming-json");
+    expect(renderActivityEvent(render, { type: "text", data: SENTINEL })).toBeUndefined();
+    expect(renderActivityEvent(render, { type: "text" })).toBeUndefined();
+  });
+
+  it("drops grok thought deltas via the universal reasoning regex", () => {
+    // Grok streams verbatim reasoning as `thought` events; the universal
+    // /reasoning|thinking|thought/i drop removes them before the renderer.
+    const render = activityRenderer("grok-streaming-json");
+    expect(renderActivityEvent(render, { type: "thought", data: SENTINEL })).toBeUndefined();
+  });
+
+  it("reduces grok end events to a bounded terminal summary, never payload fields", () => {
+    const render = activityRenderer("grok-streaming-json");
+    expect(
+      renderActivityEvent(render, {
+        type: "end",
+        stopReason: "EndTurn",
+        sessionId: SENTINEL,
+        requestId: SENTINEL,
+        usage: { note: SENTINEL },
+        num_turns: 2,
+        modelUsage: { [SENTINEL]: { modelCalls: 2 } },
+      }),
+    ).toBe("[end:EndTurn turns=2]");
+    expect(renderActivityEvent(render, { type: "end" })).toBe("[end]");
+    // stopReason is engine-authored: bounded like tool names.
+    expect(renderActivityEvent(render, { type: "end", stopReason: "x".repeat(500) })).toBe(
+      `[end:${"x".repeat(128)}]`,
+    );
+  });
+
+  it("reduces unknown grok event types to payload-free markers", () => {
+    // The 2026-07-15 tool-using re-probe confirmed grok's stream has no
+    // tool-call/tool-result events; if future CLIs add them, they degrade to
+    // payload-free markers rather than rendering unverified payloads.
+    const render = activityRenderer("grok-streaming-json");
+    expect(renderActivityEvent(render, { type: "tool_call", data: SENTINEL })).toBe("[tool_call]");
   });
 
   it("renders codex completed agent messages verbatim and lifecycle events as markers", () => {

@@ -29,6 +29,7 @@ export type ActivityDialect =
   | "claude-stream-json"
   | "cursor-stream-json"
   | "droid-stream-json"
+  | "grok-streaming-json"
   | "codex-json"
   | "codex-app-server"
   | "opencode-json"
@@ -61,6 +62,7 @@ export function activityRenderer(dialect: ActivityDialect): ActivityRenderer {
     "claude-stream-json": claudeStreamEventText,
     "cursor-stream-json": cursorStreamEventText,
     "droid-stream-json": droidStreamEventText,
+    "grok-streaming-json": grokStreamingJsonEventText,
     "codex-json": codexJsonEventText,
     "codex-app-server": codexAppServerNotificationText,
     "opencode-json": opencodeJsonEventText,
@@ -127,7 +129,8 @@ export function createReviewerActivitySink(
     },
     end() {
       try {
-        // No buffered state in v1 (the delta coalescer is phase 2).
+        // No buffered state: dialects that coalesce deltas wire
+        // createDeltaCoalescer at the stream-parser layer (cli-stream.ts).
       } catch {
         // Debug never fails the review.
       }
@@ -325,6 +328,105 @@ export function droidSdkStreamEventText(event: Record<string, unknown>): string 
 
   const name = stringField(event, "toolName");
   return `[${type}${name !== undefined ? ` ${boundedMarkerName(name)}` : ""}]`;
+}
+
+/**
+ * One safe summary line per Grok streaming-json event (the CLI spells the
+ * --output-format value `streaming-json`, not claude's `stream-json`). The
+ * stream carries exactly three event types (live-verified 2026-07-15,
+ * including a tool-using multi-turn re-probe: tool calls execute without
+ * emitting any stream event, so no tool-call/tool-result shapes exist):
+ *
+ * - `thought` — verbatim reasoning deltas; the universal reasoning drop
+ *   removes them before this renderer runs.
+ * - `text` — token-level answer deltas in `.data`. Dropped here: rendering
+ *   per event would emit one debug line per token, so the stream layer
+ *   coalesces them into blocks through createDeltaCoalescer (cli-stream.ts).
+ * - `end` — terminal summary (stopReason/usage/num_turns, no answer text);
+ *   reduces to an `[end:...]` marker.
+ *
+ * Unknown future event types degrade to payload-free `[<type>]` markers.
+ */
+export function grokStreamingJsonEventText(event: Record<string, unknown>): string | undefined {
+  const type = stringField(event, "type");
+  if (type === undefined) {
+    return undefined;
+  }
+
+  if (type === "text") {
+    return undefined; // coalesced at the stream layer, never rendered per token
+  }
+
+  if (type === "end") {
+    const stopReason = stringField(event, "stopReason");
+    const turns = numberField(event, "num_turns");
+    return `[end${stopReason !== undefined ? `:${boundedMarkerName(stopReason)}` : ""}${
+      turns !== undefined ? ` turns=${turns}` : ""
+    }]`;
+  }
+
+  return `[${type}]`;
+}
+
+/**
+ * Generic delta coalescer for token-level streaming dialects (the design
+ * doc's phase-2 coalescer; grok's streaming-json `text` deltas are the first
+ * consumer, app-server agentMessage deltas are the planned second). Deltas
+ * append into a per-item buffer keyed by the caller's item key, and each
+ * buffered block is emitted exactly once: on an item-key transition, on an
+ * explicit flush (terminal event / stream close), or early when the buffer
+ * reaches the cap (bounding memory on unbounded streams). Emitted-length
+ * dedupe holds by construction — drained content leaves the buffer, so
+ * repeated flushes or a transition right after a cap overflow can never
+ * re-emit already-emitted chars.
+ */
+export type DeltaCoalescer = {
+  /**
+   * Append one delta for an item; returns any blocks completed by this push
+   * (the previous item's pending block on an item-key transition, and/or an
+   * early block when the buffer reaches the cap).
+   */
+  push(itemKey: string, delta: string): string[];
+  /** Drain the pending block (terminal event / stream close). Idempotent. */
+  flush(): string[];
+};
+
+/** Explicit per-item buffer cap for createDeltaCoalescer (~64 KiB). */
+export const deltaCoalescerBufferCapChars = 64 * 1024;
+
+export function createDeltaCoalescer(
+  maxBufferChars = deltaCoalescerBufferCapChars,
+): DeltaCoalescer {
+  let currentKey: string | undefined;
+  let buffer = "";
+
+  function drainPending(out: string[]): void {
+    if (buffer !== "") {
+      out.push(buffer);
+      buffer = "";
+    }
+  }
+
+  return {
+    push(itemKey, delta) {
+      const out: string[] = [];
+      if (itemKey !== currentKey) {
+        drainPending(out);
+        currentKey = itemKey;
+      }
+      buffer += delta;
+      if (buffer.length >= maxBufferChars) {
+        drainPending(out);
+      }
+      return out;
+    },
+    flush() {
+      const out: string[] = [];
+      drainPending(out);
+      currentKey = undefined;
+      return out;
+    },
+  };
 }
 
 /**

@@ -46,7 +46,10 @@ import {
 } from "./gemini-tool-policy.js";
 import { assertGeminiExecutableSupportsReviewPolicy } from "./gemini.js";
 import { grokCliReviewPolicyCliFlags } from "./grok-tool-policy.js";
-import { assertGrokExecutableSupportsReviewPolicy } from "./grok.js";
+import {
+  assertGrokExecutableSupportsReviewPolicy,
+  grokCliSupportsStreamingJsonOutput,
+} from "./grok.js";
 import {
   type ResolutionSource,
   effortResolutionMetadata,
@@ -1010,14 +1013,32 @@ async function prepareGrokCliInvocation(
   const env = cliInvocationEnv(invocation, input);
   invocation.resolvedExecutable =
     invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
-  if (policyAlreadyChecked) {
+  if (!policyAlreadyChecked) {
+    await assertGrokExecutableSupportsReviewPolicy(
+      invocation.resolvedExecutable,
+      env,
+      grokCliReviewPolicyCliFlags,
+    );
+  }
+  // Grok mirrors the cursor stream wiring: switch to --output-format
+  // streaming-json (grok's spelling — NOT stream-json) only when the run
+  // requested live debug streaming (--ndjson with --debug-reviewer-output),
+  // gated on the help-text support probe. Fail closed: an unsupported or
+  // inconclusive probe keeps the byte-identical json invocation and records
+  // the degrade.
+  if (input.debugOutput?.streaming !== true) {
     return;
   }
-  await assertGrokExecutableSupportsReviewPolicy(
-    invocation.resolvedExecutable,
-    env,
-    grokCliReviewPolicyCliFlags,
-  );
+  if (await grokCliSupportsStreamingJsonOutput(invocation.resolvedExecutable, env)) {
+    const formatIndex = invocation.args.indexOf("--output-format");
+    if (formatIndex !== -1) {
+      invocation.args[formatIndex + 1] = "streaming-json";
+      invocation.streamFormat = "grok-streaming-json";
+      invocation.metadata = { ...invocation.metadata, debugStreamMode: "streaming-json" };
+    }
+  } else {
+    invocation.metadata = { ...invocation.metadata, debugStreamModeDropped: "cli-unsupported" };
+  }
 }
 
 async function prepareAntigravityCliInvocation(

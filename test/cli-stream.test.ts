@@ -4,7 +4,12 @@ import {
   createCliStreamChunkParser,
   extractClaudeStreamResultStdout,
   extractDroidStreamResultStdout,
+  extractGrokStreamResultStdout,
 } from "../src/adapters/cli-stream.js";
+import {
+  createDeltaCoalescer,
+  deltaCoalescerBufferCapChars,
+} from "../src/adapters/reviewer-activity.js";
 
 function line(event: unknown): string {
   return `${JSON.stringify(event)}\n`;
@@ -153,6 +158,101 @@ describe("createCliStreamChunkParser (droid-stream-json)", () => {
       "[completion turns=2 duration_ms=17]\n",
     ]);
     expect(rendered.join("")).not.toContain("secret reasoning");
+  });
+});
+
+describe("createCliStreamChunkParser (grok-streaming-json)", () => {
+  it("coalesces token-level text deltas into per-turn blocks, excluding thought deltas", () => {
+    const parser = createCliStreamChunkParser("grok-streaming-json");
+    const rendered = parser.push(
+      line({ type: "thought", data: "secret reasoning" }) +
+        line({ type: "thought", data: " more secret reasoning" }) +
+        line({ type: "text", data: "I'll" }) +
+        line({ type: "text", data: " read" }) +
+        line({ type: "text", data: " the files." }) +
+        line({ type: "thought", data: "hidden turn-two reasoning" }) +
+        line({ type: "text", data: "beta" }) +
+        line({ type: "text", data: " is 2" }) +
+        line({
+          type: "end",
+          stopReason: "EndTurn",
+          sessionId: "s-1",
+          usage: { input_tokens: 10 },
+          num_turns: 2,
+        }),
+    );
+
+    // One block per turn plus the terminal summary — never one line per token.
+    expect(rendered).toEqual(["I'll read the files.\n", "beta is 2\n", "[end:EndTurn turns=2]\n"]);
+    expect(rendered.join("")).not.toContain("secret");
+    expect(rendered.join("")).not.toContain("hidden");
+  });
+
+  it("drains a pending text block on flush when no end event arrived", () => {
+    const parser = createCliStreamChunkParser("grok-streaming-json");
+    expect(
+      parser.push(
+        line({ type: "text", data: "partial" }) + line({ type: "text", data: " answer" }),
+      ),
+    ).toEqual([]);
+    expect(parser.flush()).toEqual(["partial answer\n"]);
+    expect(parser.flush()).toEqual([]);
+  });
+
+  it("coalesces a trailing text delta without a newline on flush", () => {
+    const parser = createCliStreamChunkParser("grok-streaming-json");
+    expect(parser.push(line({ type: "text", data: "head" }))).toEqual([]);
+    expect(parser.push(JSON.stringify({ type: "text", data: " tail" }))).toEqual([]);
+    expect(parser.flush()).toEqual(["head tail\n"]);
+  });
+
+  it("drains the coalesced block before degrading to raw passthrough", () => {
+    const parser = createCliStreamChunkParser("grok-streaming-json");
+    expect(parser.push(line({ type: "text", data: "buffered answer" }))).toEqual([]);
+    expect(parser.push("plain text output\n")).toEqual([
+      "buffered answer\n",
+      "plain text output\n",
+    ]);
+    // Every later chunk stays raw, valid JSON or not.
+    expect(parser.push(line({ type: "text", data: "x" }))).toEqual([
+      line({ type: "text", data: "x" }),
+    ]);
+    expect(parser.flush()).toEqual([]);
+  });
+});
+
+describe("createDeltaCoalescer", () => {
+  it("aggregates deltas and emits the block once on flush", () => {
+    const coalescer = createDeltaCoalescer();
+    expect(coalescer.push("text", "a")).toEqual([]);
+    expect(coalescer.push("text", "b")).toEqual([]);
+    expect(coalescer.flush()).toEqual(["ab"]);
+    // Emitted-length dedupe: a second flush never re-emits.
+    expect(coalescer.flush()).toEqual([]);
+  });
+
+  it("flushes the pending block on an item-key transition", () => {
+    const coalescer = createDeltaCoalescer();
+    expect(coalescer.push("item-1", "first")).toEqual([]);
+    expect(coalescer.push("item-2", "second")).toEqual(["first"]);
+    expect(coalescer.flush()).toEqual(["second"]);
+  });
+
+  it("emits early at the buffer cap without re-emitting drained chars", () => {
+    const coalescer = createDeltaCoalescer(8);
+    expect(coalescer.push("text", "abcd")).toEqual([]);
+    expect(coalescer.push("text", "efgh")).toEqual(["abcdefgh"]);
+    // Emitted-length dedupe: only chars after the overflow drain emit later.
+    expect(coalescer.push("text", "ij")).toEqual([]);
+    expect(coalescer.flush()).toEqual(["ij"]);
+  });
+
+  it("defaults the per-item buffer cap to 64 KiB", () => {
+    const coalescer = createDeltaCoalescer();
+    const chunk = "x".repeat(deltaCoalescerBufferCapChars - 1);
+    expect(coalescer.push("text", chunk)).toEqual([]);
+    expect(coalescer.push("text", "yz")).toEqual([`${chunk}yz`]);
+    expect(coalescer.flush()).toEqual([]);
   });
 });
 
@@ -327,5 +427,59 @@ describe("extractDroidStreamResultStdout", () => {
     expect(
       extractDroidStreamResultStdout(line({ type: "completion", numTurns: 1 })),
     ).toBeUndefined();
+  });
+});
+
+describe("extractGrokStreamResultStdout", () => {
+  it("synthesizes the json envelope from the end event and in-order text deltas", () => {
+    const stdout =
+      line({ type: "thought", data: "secret reasoning" }) +
+      line({ type: "text", data: "I'll read the files." }) +
+      line({ type: "thought", data: "hidden turn-two reasoning" }) +
+      line({ type: "text", data: "beta" }) +
+      line({ type: "text", data: " is 2" }) +
+      line({
+        type: "end",
+        stopReason: "EndTurn",
+        sessionId: "s-1",
+        requestId: "r-1",
+        usage: { input_tokens: 10 },
+        num_turns: 2,
+        modelUsage: { "grok-test-model": { modelCalls: 2 } },
+      });
+
+    const extracted = extractGrokStreamResultStdout(stdout);
+    expect(extracted).toBeDefined();
+    // Field passthrough (end minus type) plus in-order text concat: json
+    // mode's .text itself merges multi-turn text with no separator
+    // (live-verified 2026-07-15), so naive concat matches json semantics.
+    expect(JSON.parse(extracted as string)).toEqual({
+      stopReason: "EndTurn",
+      sessionId: "s-1",
+      requestId: "r-1",
+      usage: { input_tokens: 10 },
+      num_turns: 2,
+      modelUsage: { "grok-test-model": { modelCalls: 2 } },
+      text: "I'll read the files.beta is 2",
+    });
+    expect(extracted).not.toContain("secret");
+    expect(extracted).not.toContain("hidden");
+  });
+
+  it("omits thought from the envelope even if a future end event carries one", () => {
+    const stdout =
+      line({ type: "text", data: "answer" }) +
+      line({ type: "end", stopReason: "EndTurn", thought: "secret reasoning" });
+    const extracted = extractGrokStreamResultStdout(stdout);
+    expect(extracted).toBeDefined();
+    expect(JSON.parse(extracted as string)).toEqual({ stopReason: "EndTurn", text: "answer" });
+  });
+
+  it("returns undefined without an end event", () => {
+    expect(
+      extractGrokStreamResultStdout(line({ type: "text", data: "partial answer" })),
+    ).toBeUndefined();
+    expect(extractGrokStreamResultStdout("not json\n")).toBeUndefined();
+    expect(extractGrokStreamResultStdout("")).toBeUndefined();
   });
 });
