@@ -11,6 +11,7 @@ import {
   copilotJsonEventText,
   copilotSessionEventText,
   createReviewerActivitySink,
+  cursorSdkStepText,
   cursorStreamEventText,
   droidSdkStreamEventText,
   droidStreamEventText,
@@ -38,6 +39,7 @@ const dialectRenderers: Array<[ActivityDialect, ActivityRenderer]> = [
   ["pi-json", piJsonEventText],
   // Resolved through the dialect map so the SDK wiring itself is under test.
   ["claude-sdk", activityRenderer("claude-sdk")],
+  ["cursor-sdk", activityRenderer("cursor-sdk")],
   ["droid-sdk", activityRenderer("droid-sdk")],
   ["copilot-sdk", activityRenderer("copilot-sdk")],
   ["pi-sdk", activityRenderer("pi-sdk")],
@@ -284,6 +286,37 @@ const adversarialEvents: Array<[string, unknown]> = [
       isError: false,
     },
   ],
+  // Cursor SDK ConversationSteps (onStep callback shapes).
+  [
+    "cursor-sdk thinking step",
+    { type: "thinkingMessage", message: { text: SENTINEL, thinkingDurationMs: 3 } },
+  ],
+  [
+    "cursor-sdk tool call payloads",
+    {
+      type: "toolCall",
+      message: {
+        type: "read",
+        args: { path: SENTINEL },
+        result: { status: "success", value: { content: SENTINEL, totalLines: 1 } },
+      },
+    },
+  ],
+  [
+    "cursor-sdk huge tool result",
+    {
+      type: "toolCall",
+      message: {
+        type: "shell",
+        args: { command: SENTINEL },
+        result: {
+          status: "success",
+          value: { stdout: SENTINEL.repeat(200_000), stderr: "", exitCode: 0 },
+        },
+      },
+    },
+  ],
+  ["cursor-sdk user-flavored step", { type: "userMessage", message: { text: SENTINEL } }],
 ];
 
 const nonRecordEvents: unknown[] = [null, undefined, [], [{ type: "text" }], "a string", 42, true];
@@ -441,6 +474,66 @@ describe("renderActivityEvent dialect rendering", () => {
     expect(
       renderActivityEvent(render, { type: "result", subtype: "success", duration_ms: 12 }),
     ).toBe("[result:success duration_ms=12]");
+  });
+
+  it("forks the cursor-sdk dialect from the cursor CLI renderer", () => {
+    // onStep ConversationSteps are synthesized summaries, not Claude-shaped
+    // envelopes, so cursor-sdk is a fork (see cursorSdkStepText), unlike
+    // cursor-stream-json which delegates to the claude renderer.
+    expect(activityRenderer("cursor-sdk")).toBe(cursorSdkStepText);
+    expect(cursorSdkStepText).not.toBe(cursorStreamEventText);
+  });
+
+  it("renders cursor-sdk assistant text verbatim and reduces tool calls to bounded name markers", () => {
+    const render = activityRenderer("cursor-sdk");
+    expect(
+      renderActivityEvent(render, {
+        type: "assistantMessage",
+        message: { text: "cursor review text" },
+      }),
+    ).toBe("cursor review text");
+    expect(
+      renderActivityEvent(render, { type: "assistantMessage", message: { text: "   " } }),
+    ).toBeUndefined();
+    // Tool args/results embed file paths and raw file contents (live capture
+    // 2026-07-15); only the bounded tool name renders.
+    expect(
+      renderActivityEvent(render, {
+        type: "toolCall",
+        message: {
+          type: "read",
+          args: { path: SENTINEL },
+          result: { status: "success", value: { content: SENTINEL, totalLines: 1 } },
+        },
+      }),
+    ).toBe("[tool_use read]");
+    expect(
+      renderActivityEvent(render, {
+        type: "toolCall",
+        message: { type: "mcp", args: { toolName: "search-docs", args: { query: SENTINEL } } },
+      }),
+    ).toBe("[tool_use mcp:search-docs]");
+    expect(renderActivityEvent(render, { type: "toolCall", message: { type: "mcp" } })).toBe(
+      "[tool_use mcp]",
+    );
+    expect(renderActivityEvent(render, { type: "toolCall" })).toBe("[toolCall]");
+  });
+
+  it("drops cursor-sdk thinking steps and reduces user-flavored steps to size markers", () => {
+    const render = activityRenderer("cursor-sdk");
+    // thinkingMessage matches the universal reasoning regex; the drop happens
+    // before the renderer runs.
+    expect(
+      renderActivityEvent(render, {
+        type: "thinkingMessage",
+        message: { text: SENTINEL, thinkingDurationMs: 3 },
+      }),
+    ).toBeUndefined();
+    // No user step type exists in the SDK union today; the guard mirrors the
+    // cursor-stream-json echoed-prompt precaution under protocol drift.
+    expect(
+      renderActivityEvent(render, { type: "userMessage", message: { text: "12345678" } }),
+    ).toBe("[user message 8 chars]");
   });
 
   it("aliases the claude-sdk dialect to the claude stream renderer", () => {

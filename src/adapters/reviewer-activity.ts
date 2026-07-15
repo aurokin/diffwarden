@@ -36,6 +36,7 @@ export type ActivityDialect =
   | "copilot-json"
   | "pi-json"
   | "claude-sdk"
+  | "cursor-sdk"
   | "droid-sdk"
   | "copilot-sdk"
   | "pi-sdk";
@@ -71,6 +72,7 @@ export function activityRenderer(dialect: ActivityDialect): ActivityRenderer {
     // SDKMessage objects are structurally identical to parsed CLI stream-json
     // lines, so the claude renderer applies verbatim.
     "claude-sdk": claudeStreamEventText,
+    "cursor-sdk": cursorSdkStepText,
     "droid-sdk": droidSdkStreamEventText,
     "copilot-sdk": copilotSessionEventText,
     "pi-sdk": piSessionEventText,
@@ -236,6 +238,63 @@ export function cursorStreamEventText(event: Record<string, unknown>): string | 
     return sizeMarker("user message", contentSize(message.content ?? ""));
   }
   return claudeStreamEventText(event);
+}
+
+/**
+ * One safe summary line per Cursor SDK ConversationStep (the typed `onStep`
+ * callback on `agent.send()`). Not shared with cursor-stream-json: steps are
+ * already synthesized summaries, not Claude-shaped envelopes. The step union
+ * carries exactly three types today (live-verified 2026-07-15):
+ *
+ * - `assistantMessage` — `message.text` verbatim. Steps are message-granular
+ *   (the SDK's accumulator coalesces deltas before firing), so no delta
+ *   coalescer is needed.
+ * - `thinkingMessage` — verbatim reasoning; the universal reasoning drop
+ *   removes it before this renderer runs (the type matches /thinking/i).
+ * - `toolCall` — `message.type` names the tool (read/grep/shell/...);
+ *   `message.args` and `message.result` embed file paths and raw file
+ *   contents (the live-captured read result carried the full file body), so
+ *   only the bounded tool name renders, with mcp calls surfacing the bounded
+ *   server tool name as `[tool_use mcp:<toolName>]`.
+ *
+ * onStep never fires for user messages today, but cursor echoes the review
+ * prompt on its CLI stream surface, so any user-flavored step type that ever
+ * appears reduces to a size marker (mirroring cursor-stream-json). Unknown
+ * future step types degrade to payload-free `[<type>]` markers.
+ */
+export function cursorSdkStepText(event: Record<string, unknown>): string | undefined {
+  const type = stringField(event, "type");
+  if (type === undefined) {
+    return undefined;
+  }
+
+  const message = isRecord(event.message) ? event.message : undefined;
+
+  if (type === "assistantMessage") {
+    const text = message === undefined ? undefined : stringField(message, "text");
+    return text === undefined || text.trim() === "" ? undefined : text;
+  }
+
+  if (type === "toolCall") {
+    if (message === undefined) {
+      return `[${type}]`;
+    }
+    const toolType = stringField(message, "type");
+    if (toolType === "mcp") {
+      const args = isRecord(message.args) ? message.args : undefined;
+      const toolName = args === undefined ? undefined : stringField(args, "toolName");
+      return toolUseMarker(toolName === undefined ? "mcp" : `mcp:${toolName}`);
+    }
+    return toolUseMarker(toolType);
+  }
+
+  if (/user/i.test(type)) {
+    // The echoed user message would be our own review prompt; size marker only.
+    const text = message === undefined ? undefined : stringField(message, "text");
+    return sizeMarker("user message", contentSize(text ?? message ?? ""));
+  }
+
+  return `[${type}]`;
 }
 
 /**
