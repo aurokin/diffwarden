@@ -2,11 +2,11 @@
  * Native stream-output support for CLI transports.
  *
  * Two activation paths share this parser:
- * - Stream-switch engines (claude, droid): active only when the run requested
- *   live debug streaming (--ndjson together with --debug-reviewer-output);
- *   specs switch the CLI to its stream output mode and the final review result
- *   is extracted from the stream transcript so the artifact parses exactly as
- *   in the non-stream mode.
+ * - Stream-switch engines (claude, cursor, droid, grok): active only when the
+ *   run requested live debug streaming (--ndjson together with
+ *   --debug-reviewer-output); specs switch the CLI to its stream output mode
+ *   and the final review result is extracted from the stream transcript so
+ *   the artifact parses exactly as in the non-stream mode.
  * - Always-JSONL engines (codex, opencode, copilot, pi): the default review
  *   invocation already emits JSONL, so debug chunks route through the parser
  *   whenever debug output is requested — zero invocation changes, parseOutput
@@ -26,8 +26,8 @@
 // still consume them (only per-event rendering moved to reviewer-activity).
 import {
   type ActivityDialect,
-  type ActivityRenderer,
   activityRenderer,
+  createDeltaCoalescer,
   isRecord,
   numberField,
   renderActivityEvent,
@@ -45,8 +45,59 @@ export type CliStreamChunkParser = {
 
 export function createCliStreamChunkParser(format: CliStreamFormat): CliStreamChunkParser {
   const render = activityRenderer(format);
+  // Grok's stream carries the answer as token-level `text` deltas; rendering
+  // them per event would emit one debug line per token, so they coalesce into
+  // blocks flushed on event-type transition and at the terminal event/close.
+  const coalescer = format === "grok-streaming-json" ? createDeltaCoalescer() : undefined;
   let buffer = "";
   let degraded = false;
+
+  /** Rendered texts for one parsed event (possibly none). */
+  function renderEvent(event: Record<string, unknown>): string[] {
+    if (coalescer !== undefined) {
+      if (stringField(event, "type") === "text" && typeof event.data === "string") {
+        return coalescer.push("text", event.data);
+      }
+      // Event-type transition (thought/end/unknown): flush the pending block
+      // first so coalesced answer text precedes the event's own marker.
+      const texts = coalescer.flush();
+      const rendered = renderActivityEvent(render, event);
+      if (rendered !== undefined && rendered !== "") {
+        texts.push(rendered);
+      }
+      return texts;
+    }
+    const rendered = renderActivityEvent(render, event);
+    return rendered === undefined || rendered === "" ? [] : [rendered];
+  }
+
+  /** Rendered texts for one line, or undefined for invalid JSON. */
+  function renderStreamLine(line: string): string[] | undefined {
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      return [];
+    }
+    let event: unknown;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      return undefined;
+    }
+    if (!isRecord(event)) {
+      return undefined;
+    }
+    return renderEvent(event);
+  }
+
+  /** Drain the coalescer's pending block into newline-terminated outputs. */
+  function drainCoalescer(rendered: string[]): void {
+    if (coalescer === undefined) {
+      return;
+    }
+    for (const flushed of coalescer.flush()) {
+      rendered.push(`${flushed}\n`);
+    }
+  }
 
   return {
     push(text) {
@@ -59,15 +110,18 @@ export function createCliStreamChunkParser(format: CliStreamFormat): CliStreamCh
       while (newlineIndex !== -1) {
         const line = buffer.slice(0, newlineIndex);
         buffer = buffer.slice(newlineIndex + 1);
-        const lineText = renderStreamLine(line, render);
-        if (lineText === undefined) {
+        const lineTexts = renderStreamLine(line);
+        if (lineTexts === undefined) {
           // Not JSONL after all: degrade to raw passthrough from this point.
+          // Any coalesced block drains first so buffered answer text is not
+          // lost ahead of the raw tail.
           degraded = true;
+          drainCoalescer(rendered);
           rendered.push(`${line}\n${buffer}`);
           buffer = "";
           return rendered;
         }
-        if (lineText !== "") {
+        for (const lineText of lineTexts) {
           rendered.push(`${lineText}\n`);
         }
         newlineIndex = buffer.indexOf("\n");
@@ -77,37 +131,26 @@ export function createCliStreamChunkParser(format: CliStreamFormat): CliStreamCh
     flush() {
       const rest = buffer;
       buffer = "";
-      if (rest === "") {
-        return [];
-      }
       if (degraded) {
-        return [rest];
+        return rest === "" ? [] : [rest];
       }
-      const lineText = renderStreamLine(rest, render);
-      if (lineText === undefined) {
-        return [rest];
+      const rendered: string[] = [];
+      if (rest !== "") {
+        const lineTexts = renderStreamLine(rest);
+        if (lineTexts === undefined) {
+          drainCoalescer(rendered);
+          rendered.push(rest);
+          return rendered;
+        }
+        for (const lineText of lineTexts) {
+          rendered.push(`${lineText}\n`);
+        }
       }
-      return lineText === "" ? [] : [`${lineText}\n`];
+      // A stream that ended without a terminal event still drains its block.
+      drainCoalescer(rendered);
+      return rendered;
     },
   };
-}
-
-/** Rendered text, "" to skip the event silently, or undefined for invalid JSON. */
-function renderStreamLine(line: string, render: ActivityRenderer): string | undefined {
-  const trimmed = line.trim();
-  if (trimmed === "") {
-    return "";
-  }
-  let event: unknown;
-  try {
-    event = JSON.parse(trimmed);
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(event)) {
-    return undefined;
-  }
-  return renderActivityEvent(render, event) ?? "";
 }
 
 /**
@@ -154,6 +197,54 @@ export function extractDroidStreamResultStdout(stdout: string): string | undefin
       : {}),
     ...(completion.usage !== undefined ? { usage: completion.usage } : {}),
   });
+}
+
+/**
+ * Grok's streaming-json transcript carries the answer only as token-level
+ * `text` deltas in `.data`; the terminal `end` event carries every json-mode
+ * envelope field EXCEPT `text`/`thought` (live-verified 2026-07-15, tool-using
+ * multi-turn re-probe included). Synthesize the json-mode envelope —
+ * `{...end minus type, text: concat(text deltas in order)}` — so the existing
+ * normalizeJsonLikeAdapterOutput path parses it unchanged. Naive concat is
+ * exactly json-mode behavior: json mode's `.text` merges multi-turn text with
+ * no separator (live capture: "…files now.From the files…"), and the same
+ * deltas stream across turns. `thought` is deliberately omitted — json mode
+ * ships full verbatim reasoning there, and the stream path must not resurrect
+ * it even if a future `end` event grows a `thought` field. A transcript with
+ * no `end` event returns undefined and falls back to the raw transcript and
+ * the normal parse/repair pipeline.
+ */
+export function extractGrokStreamResultStdout(stdout: string): string | undefined {
+  let endEvent: Record<string, unknown> | undefined;
+  const textParts: string[] = [];
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "") {
+      continue;
+    }
+    const event = parseJsonRecord(line);
+    if (event === undefined) {
+      continue;
+    }
+    const type = stringField(event, "type");
+    if (type === "text" && typeof event.data === "string") {
+      textParts.push(event.data);
+    } else if (type === "end") {
+      endEvent = event;
+    }
+  }
+  if (endEvent === undefined) {
+    return undefined;
+  }
+
+  const envelope: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(endEvent)) {
+    if (key !== "type" && key !== "thought") {
+      envelope[key] = value;
+    }
+  }
+  envelope.text = textParts.join("");
+  return JSON.stringify(envelope);
 }
 
 function lastMatchingStreamLine(

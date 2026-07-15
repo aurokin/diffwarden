@@ -2253,6 +2253,99 @@ describe("cli adapter streaming debug output", () => {
     expect(output.text).toContain("cursor text");
   });
 
+  it("switches Grok to streaming-json output when the help probe confirms support", async () => {
+    const harness = createHarness("grok");
+    const adapter = createCliAdapter("grok");
+    const reviewer = createReviewer("grok", harness.executable);
+    const capture = collectChunks();
+
+    const baseline = await adapter.run(createInput(reviewer, harness));
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      debugOutput: { onChunk: capture.onChunk, streaming: true },
+    });
+    const invocation = harness.readInvocation();
+
+    const formatIndex = invocation.args.indexOf("--output-format");
+    // Grok's flag value is streaming-json, NOT claude's stream-json.
+    expect(invocation.args[formatIndex + 1]).toBe("streaming-json");
+    expect(output.metadata).toMatchObject({
+      debugStreamMode: "streaming-json",
+      debugOutputMode: "event-summary",
+    });
+    // The artifact parses from the synthesized json envelope (end event
+    // fields plus concatenated text deltas) identically to json mode.
+    expect(output.text).toBe(baseline.text);
+    expect(output.text).toContain("grok text");
+    // The end event carries the same modelUsage as json mode, so runtime
+    // metadata extraction is unchanged.
+    expect(output.metadata).toMatchObject({ resolvedModel: "grok-test-model" });
+    const stdoutChunks = capture.chunks
+      .filter((chunk) => chunk.stream === "stdout")
+      .map((chunk) => chunk.text);
+    // Token-level text deltas coalesce into per-turn blocks — never one
+    // debug event per token.
+    expect(stdoutChunks).toContain("I'll read the files.\n");
+    expect(stdoutChunks).toContain("grok text\n");
+    expect(stdoutChunks).not.toContain("I'll\n");
+    const stdoutText = capture.stdoutText();
+    expect(stdoutText).toContain("[end:EndTurn turns=2]");
+    // Verbatim reasoning (thought deltas) never renders.
+    expect(stdoutText).not.toContain("secret");
+    expect(stdoutText).not.toContain("hidden");
+  });
+
+  it("keeps the Grok invocation byte-identical when capture is not streaming", async () => {
+    const harness = createHarness("grok");
+    const adapter = createCliAdapter("grok");
+    const reviewer = createReviewer("grok", harness.executable);
+    const capture = collectChunks();
+
+    await adapter.run(createInput(reviewer, harness));
+    const baselineArgs = harness.readInvocation().args;
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      debugOutput: { onChunk: capture.onChunk },
+    });
+    const invocation = harness.readInvocation();
+
+    // Without both --ndjson and --debug-reviewer-output (streaming unset) the
+    // invocation is byte-identical to a run without any debug capture, modulo
+    // the per-run temp dir embedded in the --prompt-file path.
+    const maskTempDir = (args: string[]) =>
+      args.map((arg) => arg.replace(/diffwarden-cli-[A-Za-z0-9]+/g, "diffwarden-cli-TMP"));
+    expect(maskTempDir(invocation.args)).toEqual(maskTempDir(baselineArgs));
+    expect(invocation.args[invocation.args.indexOf("--output-format") + 1]).toBe("json");
+    expect(output.metadata).not.toHaveProperty("debugStreamMode");
+    expect(output.metadata).not.toHaveProperty("debugOutputMode");
+    expect(output.text).toContain("grok text");
+    // Raw passthrough: the callback sees the buffered json output unmodified.
+    expect(capture.stdoutText()).toContain('"text"');
+  });
+
+  it.each([
+    ["help lacks streaming-json", "1"],
+    ["help enumerates only the claude-spelled stream-json", "claude-spelling"],
+  ])("degrades Grok streaming to json output, failing closed (%s)", async (_name, variant) => {
+    const harness = createHarness("grok");
+    const adapter = createCliAdapter("grok");
+    const reviewer = createReviewer("grok", harness.executable);
+    const capture = collectChunks();
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env: { ...harness.env, DIFFWARDEN_FAKE_GROK_NO_STREAMING_JSON: variant },
+      debugOutput: { onChunk: capture.onChunk, streaming: true },
+    });
+    const invocation = harness.readInvocation();
+
+    const formatIndex = invocation.args.indexOf("--output-format");
+    expect(invocation.args[formatIndex + 1]).toBe("json");
+    expect(output.metadata).toMatchObject({ debugStreamModeDropped: "cli-unsupported" });
+    // The artifact still parses via the verified json mode.
+    expect(output.text).toContain("grok text");
+  });
+
   it.each([
     ["canonical wording", "1"],
     ["alternative wording", "alt"],
@@ -2528,7 +2621,14 @@ if (engine === "grok" && process.argv.includes("--help")) {
   if (process.env.DIFFWARDEN_FAKE_OLD_GROK_HELP === "1") {
     process.stdout.write("--prompt-file --cwd --output-format --permission-mode");
   } else {
-    process.stdout.write(${JSON.stringify(grokCliReviewPolicyCliFlags.join(" "))});
+    // Real grok help enumerates the --output-format values; the stream probe
+    // requires the streaming-json token (grok's spelling, NOT stream-json).
+    const formats = process.env.DIFFWARDEN_FAKE_GROK_NO_STREAMING_JSON === "claude-spelling"
+      ? "plain, json, stream-json"
+      : process.env.DIFFWARDEN_FAKE_GROK_NO_STREAMING_JSON === "1"
+        ? "plain, json"
+        : "plain, json, streaming-json";
+    process.stdout.write(${JSON.stringify(grokCliReviewPolicyCliFlags.join(" "))} + " [possible values: " + formats + "]");
   }
   process.exit(0);
 }
@@ -2789,7 +2889,23 @@ if (engine === "codex") {
     process.stdout.write(JSON.stringify({ result: engine + " text", session_id: process.env.DIFFWARDEN_FAKE_DROID_SESSION_ID }));
   }
 } else if (engine === "grok") {
-  process.stdout.write(JSON.stringify({ result: engine + " text" }));
+  // Envelope fields shared by json mode and the streaming end event
+  // (live-verified 2026-07-15: end = json envelope minus text/thought).
+  const grokEnvelope = { stopReason: "EndTurn", sessionId: "sess-grok", requestId: "req-grok", usage: { input_tokens: 10 }, num_turns: 2, modelUsage: { "grok-test-model": { modelCalls: 2 } } };
+  const grokFormatIndex = process.argv.indexOf("--output-format");
+  if (process.argv[grokFormatIndex + 1] === "streaming-json") {
+    process.stdout.write(JSON.stringify({ type: "thought", data: "secret reasoning" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "text", data: "I'll" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "text", data: " read the files." }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "thought", data: "hidden turn-two reasoning" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "text", data: "grok" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "text", data: " text" }) + "\\n");
+    process.stdout.write(JSON.stringify(Object.assign({ type: "end" }, grokEnvelope)) + "\\n");
+  } else {
+    // json mode's .text naively merges multi-turn text with no separator
+    // (live-verified); the stream deltas above concatenate to exactly it.
+    process.stdout.write(JSON.stringify(Object.assign({ text: "I'll read the files.grok text", thought: "secret reasoning" }, grokEnvelope)));
+  }
 } else if (engine === "copilot") {
   if (process.env.DIFFWARDEN_FAKE_COPILOT_SESSION_ERROR_BEFORE_REVIEW === "1") {
     const errorType = process.env.DIFFWARDEN_FAKE_COPILOT_SESSION_ERROR_TYPE || "runtime";
