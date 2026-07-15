@@ -632,6 +632,204 @@ describe("createCodexAppServerAdapter", () => {
   });
 });
 
+describe("codex app-server debug output", () => {
+  const reviewJson = JSON.stringify({
+    findings: [],
+    overall_correctness: "patch is correct",
+    overall_explanation: "codex app-server ok",
+    overall_confidence_score: 0.91,
+  });
+
+  type Chunk = { stream: "stdout" | "stderr"; text: string };
+
+  it("captures notification summaries, request notes, and raw stderr in stdio-isolated mode", async () => {
+    const harness = createHarness({ debugSequence: true });
+    const adapter = createCodexAppServerAdapter();
+    const chunks: Chunk[] = [];
+
+    const output = await adapter.run({
+      ...createInput(createReviewer(harness.executable), harness),
+      debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+    });
+
+    // Exact stdout line sequence: the request note (method + decision only),
+    // the non-message item marker, the completed agent message verbatim, the
+    // payload-free error marker, and the turn marker. Deltas, the reasoning
+    // method, and tokenUsage produce nothing.
+    expect(chunks.filter((chunk) => chunk.stream === "stdout").map((chunk) => chunk.text)).toEqual([
+      "[request item/commandExecution/requestApproval -> decline]\n",
+      "[item:commandExecution]\n",
+      `${reviewJson}\n`,
+      "[error willRetry=true]\n",
+      "[turn:completed]\n",
+    ]);
+    // The isolated child's stderr is teed raw, labeled as the stderr stream.
+    const stderrText = chunks
+      .filter((chunk) => chunk.stream === "stderr")
+      .map((chunk) => chunk.text)
+      .join("");
+    expect(stderrText).toContain("codex fixture stderr");
+    // No payload leaks: request params, delta text, reasoning text,
+    // aggregated_output, and the error message never render.
+    expect(JSON.stringify(chunks)).not.toContain("SENTINEL");
+    expect(output.structured).toMatchObject({ overall_explanation: "codex app-server ok" });
+    expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+    expect(output.metadata).not.toHaveProperty("debugOutputDropped");
+  });
+
+  it("captures native review text and the turn marker in stdio-isolated native mode", async () => {
+    const harness = createHarness({ nativeReview: true });
+    const adapter = createCodexAppServerAdapter();
+    const chunks: Chunk[] = [];
+
+    const output = await adapter.run({
+      ...createInput(
+        createReviewer(harness.executable, {
+          appServerOptions: { mode: "stdio-isolated", reviewMode: "native" },
+        }),
+        harness,
+      ),
+      debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+    });
+
+    // The exitedReviewMode item's review text renders verbatim (the
+    // structured duplication matches the accepted claude-CLI precedent).
+    expect(chunks.filter((chunk) => chunk.stream === "stdout").map((chunk) => chunk.text)).toEqual([
+      "native review text\n",
+      "[turn:completed]\n",
+    ]);
+    expect(output.text).toBe("native review text");
+    expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+  });
+
+  it("keeps foreign-thread notifications out of both reply assembly and debug capture", async () => {
+    const harness = createHarness({ foreignThread: true });
+    const adapter = createCodexAppServerAdapter();
+    const chunks: Chunk[] = [];
+
+    const output = await adapter.run({
+      ...createInput(createReviewer(harness.executable), harness),
+      debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+    });
+
+    // Own-thread traffic is one delta (dropped) plus tokenUsage (dropped) plus
+    // the turn marker; the foreign completed agent message must not render.
+    expect(chunks.filter((chunk) => chunk.stream === "stdout").map((chunk) => chunk.text)).toEqual([
+      "[turn:completed]\n",
+    ]);
+    expect(JSON.stringify(chunks)).not.toContain("FOREIGN");
+    expect(output.structured).toMatchObject({ overall_explanation: "codex app-server ok" });
+  });
+
+  it.each(["auto", "attach"] as const)(
+    "withholds debug capture in shared %s mode and marks it dropped",
+    async (mode) => {
+      const harness = createSocketHarness({ crossThreadTraffic: true });
+      await harness.start();
+      const adapter = createCodexAppServerAdapter();
+      const chunks: Chunk[] = [];
+
+      const output = await adapter.run({
+        ...createInput(
+          createSharedReviewer(process.execPath, { mode, codexHome: harness.authHome }),
+          harness,
+        ),
+        debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+      });
+
+      // Withheld until a live attach-mode capture proves threadId presence on
+      // real notifications (2026-07-15): no sink, no stderr (a shared daemon
+      // has no child stderr), only the dropped marker.
+      expect(chunks).toEqual([]);
+      expect(output.metadata).toMatchObject({ debugOutputDropped: "shared-server-unverified" });
+      expect(output.metadata).not.toHaveProperty("debugOutputMode");
+      expect(output.structured).toMatchObject({ overall_explanation: "codex app-server ok" });
+    },
+  );
+
+  it("produces an identical artifact with and without debug capture (non-authoritative debug invariant)", async () => {
+    const harness = createHarness();
+    const adapter = createCodexAppServerAdapter();
+
+    const baseline = await adapter.run(createInput(createReviewer(harness.executable), harness));
+    const debugged = await adapter.run({
+      ...createInput(createReviewer(harness.executable), harness),
+      debugOutput: { onChunk: () => {} },
+    });
+
+    expect(baseline.metadata).not.toHaveProperty("debugOutputMode");
+    expect(debugged.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+    expect(debugged).not.toHaveProperty("debug_output");
+    // Debug output is non-authoritative: removing its metadata key leaves the
+    // artifacts deep-equal. codexHome is excluded from the comparison because
+    // stdio-isolated runs mint a fresh ephemeral CODEX_HOME per run, with or
+    // without debug capture.
+    const {
+      debugOutputMode: _mode,
+      codexHome: _debugHome,
+      ...debuggedMetadata
+    } = debugged.metadata ?? {};
+    const { codexHome: _baselineHome, ...baselineMetadata } = baseline.metadata ?? {};
+    expect({ ...debugged, metadata: debuggedMetadata }).toEqual({
+      ...baseline,
+      metadata: baselineMetadata,
+    });
+  });
+
+  it("keeps the artifact byte-identical without the debug opt-in", async () => {
+    const harness = createHarness();
+    const adapter = createCodexAppServerAdapter();
+
+    const output = await adapter.run(createInput(createReviewer(harness.executable), harness));
+
+    // Full-artifact fixture: the flag-off run carries no debug traces at all.
+    expect(output).toEqual({
+      structured: {
+        findings: [],
+        overall_correctness: "patch is correct",
+        overall_explanation: "codex app-server ok",
+        overall_confidence_score: 0.91,
+      },
+      usage: { total: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 2 } },
+      metadata: {
+        captureMode: "native-structured",
+        readonlyCapability: "enforced",
+        transport: "app-server",
+        execEnabled: codexAppServerExecEnabled,
+        ephemeral: true,
+        codexReviewMode: "structured",
+        appServerMode: "stdio-isolated",
+        codexHome: harness.readInvocation().env.CODEX_HOME,
+        codexHomeShared: false,
+        serverLifecycle: "isolated-stdio",
+        executable: harness.executable,
+        requestedExecutable: harness.executable,
+        executableSource: "config",
+        webSearchPolicy: "disabled",
+        webSearchMode: "disabled",
+        effectiveWebSearchMode: "disabled",
+      },
+    });
+  });
+
+  it("tolerates a throwing debug callback in both the sink and the stderr tee", async () => {
+    const harness = createHarness({ debugSequence: true });
+    const adapter = createCodexAppServerAdapter();
+
+    const output = await adapter.run({
+      ...createInput(createReviewer(harness.executable), harness),
+      debugOutput: {
+        onChunk: () => {
+          throw new Error("recorder failed");
+        },
+      },
+    });
+
+    expect(output.structured).toMatchObject({ overall_explanation: "codex app-server ok" });
+    expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+  });
+});
+
 type Harness = {
   cwd: string;
   authHome: string;
@@ -779,6 +977,7 @@ function createHarness(
   options: {
     auth?: boolean;
     completedItemOnly?: boolean;
+    debugSequence?: boolean;
     foreignThread?: boolean;
     omitThreadId?: boolean;
     requestApproval?: boolean;
@@ -819,6 +1018,7 @@ function createHarness(
       CODEX_HOME: authHome,
       DIFFWARDEN_FAKE_APP_SERVER_INVOCATION: invocationPath,
       ...(options.completedItemOnly ? { DIFFWARDEN_FAKE_APP_SERVER_COMPLETED_ITEM_ONLY: "1" } : {}),
+      ...(options.debugSequence ? { DIFFWARDEN_FAKE_APP_SERVER_DEBUG_SEQUENCE: "1" } : {}),
       ...(options.foreignThread ? { DIFFWARDEN_FAKE_APP_SERVER_FOREIGN_THREAD: "1" } : {}),
       ...(options.omitThreadId ? { DIFFWARDEN_FAKE_APP_SERVER_OMIT_THREAD_ID: "1" } : {}),
       ...(options.requestApproval ? { DIFFWARDEN_FAKE_APP_SERVER_APPROVAL: "1" } : {}),
@@ -1174,7 +1374,11 @@ rl.on("line", (line) => {
   invocation.messages.push(message);
   if (message.id === 999 && !message.method) {
     invocation.approvalResponse = message.result;
-    finish();
+    if (process.env.DIFFWARDEN_FAKE_APP_SERVER_DEBUG_SEQUENCE) {
+      finishDebugSequence();
+    } else {
+      finish();
+    }
     return;
   }
   if (message.id === "legacy-approval" && !message.method) {
@@ -1243,7 +1447,14 @@ rl.on("line", (line) => {
       return;
     }
     send({ id: message.id, result: { turn: { id: "turn-1" } } });
-    if (process.env.DIFFWARDEN_FAKE_APP_SERVER_APPROVAL) {
+    if (process.env.DIFFWARDEN_FAKE_APP_SERVER_DEBUG_SEQUENCE) {
+      process.stderr.write("codex fixture stderr\\n");
+      send({
+        id: 999,
+        method: "item/commandExecution/requestApproval",
+        params: { command: "PARAM_SENTINEL rm -rf /" }
+      });
+    } else if (process.env.DIFFWARDEN_FAKE_APP_SERVER_APPROVAL) {
       send({
         id: 999,
         method: "item/commandExecution/requestApproval",
@@ -1278,6 +1489,69 @@ rl.on("line", (line) => {
     finishNativeReview();
   }
 });
+
+function finishDebugSequence() {
+  const review = {
+    findings: [],
+    overall_correctness: "patch is correct",
+    overall_explanation: "codex app-server ok",
+    overall_confidence_score: 0.91
+  };
+  // Delta: consumed by reply assembly, never rendered into debug output.
+  send({
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread-1", turnId: "turn-1", itemId: "message-1", delta: "DELTA_SENTINEL " }
+  });
+  // Reasoning-flavored method: dropped by the universal reasoning drop.
+  send({
+    method: "item/reasoning/delta",
+    params: { threadId: "thread-1", turnId: "turn-1", itemId: "reasoning-1", delta: "REASONING_SENTINEL" }
+  });
+  // Non-message item: marker only; aggregated_output must never render.
+  send({
+    method: "item/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "cmd-1",
+        type: "commandExecution",
+        command: "rg diff",
+        aggregated_output: "AGGREGATED_SENTINEL"
+      }
+    }
+  });
+  send({
+    method: "item/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "message-1", type: "agentMessage", text: JSON.stringify(review) }
+    }
+  });
+  send({
+    method: "error",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      willRetry: true,
+      error: { message: "ERROR_SENTINEL temporary failure" }
+    }
+  });
+  send({
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      tokenUsage: { total: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 2 } }
+    }
+  });
+  writeInvocation();
+  send({
+    method: "turn/completed",
+    params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } }
+  });
+}
 
 function finishNativeReview() {
   send({

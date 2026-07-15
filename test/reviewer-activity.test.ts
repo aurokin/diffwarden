@@ -6,6 +6,7 @@ import {
   activityRenderer,
   activitySinkFromDebugOutput,
   claudeStreamEventText,
+  codexAppServerNotificationText,
   codexJsonEventText,
   copilotJsonEventText,
   copilotSessionEventText,
@@ -28,6 +29,8 @@ const dialectRenderers: Array<[ActivityDialect, ActivityRenderer]> = [
   ["cursor-stream-json", activityRenderer("cursor-stream-json")],
   ["droid-stream-json", droidStreamEventText],
   ["codex-json", codexJsonEventText],
+  // Resolved through the dialect map so the app-server wiring itself is under test.
+  ["codex-app-server", activityRenderer("codex-app-server")],
   ["opencode-json", opencodeJsonEventText],
   ["copilot-json", copilotJsonEventText],
   ["pi-json", piJsonEventText],
@@ -103,6 +106,55 @@ const adversarialEvents: Array<[string, unknown]> = [
   [
     "codex updated agent message",
     { type: "item.updated", item: { id: "i_1", type: "agent_message", text: SENTINEL } },
+  ],
+  // Codex app-server JSON-RPC notifications (method-keyed, payloads in params).
+  [
+    "app-server agentMessage delta",
+    {
+      method: "item/agentMessage/delta",
+      params: { threadId: "t1", turnId: "u1", itemId: "m1", delta: SENTINEL },
+    },
+  ],
+  [
+    "app-server command execution item",
+    {
+      method: "item/completed",
+      params: {
+        threadId: "t1",
+        item: {
+          id: "c1",
+          type: "commandExecution",
+          command: SENTINEL,
+          aggregated_output: SENTINEL,
+        },
+      },
+    },
+  ],
+  [
+    "app-server nested reasoning item",
+    {
+      method: "item/completed",
+      params: { threadId: "t1", item: { id: "r1", type: "reasoning", text: SENTINEL } },
+    },
+  ],
+  [
+    "app-server token usage",
+    {
+      method: "thread/tokenUsage/updated",
+      params: { threadId: "t1", tokenUsage: { note: SENTINEL } },
+    },
+  ],
+  [
+    "app-server error payload",
+    { method: "error", params: { willRetry: false, error: { message: SENTINEL } } },
+  ],
+  ["app-server unknown method params", { method: "thread/started", params: { secret: SENTINEL } }],
+  [
+    "app-server huge delta",
+    {
+      method: "item/agentMessage/delta",
+      params: { threadId: "t1", itemId: "m1", delta: SENTINEL.repeat(200_000) },
+    },
   ],
   [
     "opencode part-nested reasoning",
@@ -508,6 +560,120 @@ describe("renderActivityEvent dialect rendering", () => {
         item: { id: "item_3", type: "file_change" },
       }),
     ).toBe("[file_change]");
+  });
+
+  it("renders app-server completed agent messages and review text verbatim", () => {
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "item/completed",
+        params: {
+          threadId: "t1",
+          item: { id: "m1", type: "agentMessage", text: "final review text" },
+        },
+      }),
+    ).toBe("final review text");
+    // Native review mode: the exitedReviewMode item carries the review text.
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "item/completed",
+        params: {
+          threadId: "t1",
+          item: { id: "r1", type: "exitedReviewMode", review: "native review text" },
+        },
+      }),
+    ).toBe("native review text");
+  });
+
+  it("drops app-server deltas and token usage entirely (no coalescer in v1)", () => {
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "item/agentMessage/delta",
+        params: { threadId: "t1", itemId: "m1", delta: SENTINEL },
+      }),
+    ).toBeUndefined();
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "thread/tokenUsage/updated",
+        params: { threadId: "t1", tokenUsage: { total: { inputTokens: 10 } } },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("reduces app-server non-message items to markers, never aggregated_output", () => {
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "item/completed",
+        params: {
+          threadId: "t1",
+          item: {
+            id: "c1",
+            type: "commandExecution",
+            command: "rg diff",
+            aggregated_output: SENTINEL,
+          },
+        },
+      }),
+    ).toBe("[item:commandExecution]");
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "item/completed",
+        params: { threadId: "t1", item: { id: "f1", type: "fileChange" } },
+      }),
+    ).toBe("[item:fileChange]");
+    // A completed item without a usable item payload degrades to the method marker.
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "item/completed",
+        params: { threadId: "t1" },
+      }),
+    ).toBe("[item/completed]");
+  });
+
+  it("drops app-server reasoning payloads at both the method and item level", () => {
+    // Top-level reasoning-flavored methods fall to the universal drop, which
+    // inspects `method` for JSON-RPC dialects (drift-proofing for the
+    // experimental app-server API).
+    expect(
+      renderActivityEvent(activityRenderer("codex-app-server"), {
+        method: "item/reasoning/delta",
+        params: { threadId: "t1", delta: SENTINEL },
+      }),
+    ).toBeUndefined();
+    // Reasoning-typed items nest under params.item.type, out of reach of the
+    // universal drop, so the renderer drops them explicitly.
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "item/completed",
+        params: { threadId: "t1", item: { id: "r1", type: "reasoning", text: SENTINEL } },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("renders app-server lifecycle and error notifications as payload-free markers", () => {
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "turn/completed",
+        params: { threadId: "t1", turn: { id: "u1", status: "completed", items: [SENTINEL] } },
+      }),
+    ).toBe("[turn:completed]");
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "error",
+        params: { threadId: "t1", willRetry: true, error: { message: SENTINEL } },
+      }),
+    ).toBe("[error willRetry=true]");
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "error",
+        params: { threadId: "t1", error: { message: SENTINEL } },
+      }),
+    ).toBe("[error willRetry=false]");
+    expect(
+      renderActivityEvent(codexAppServerNotificationText, {
+        method: "thread/started",
+        params: { thread: { id: SENTINEL } },
+      }),
+    ).toBe("[thread/started]");
   });
 
   it("renders opencode text from the nested part payload", () => {
