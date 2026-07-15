@@ -32,6 +32,8 @@ describe("createCliStreamChunkParser (claude-stream-json)", () => {
           },
         }) +
         line({ type: "rate_limit_event" }) +
+        // Top-level reasoning-typed events are dropped entirely (no marker).
+        line({ type: "thinking", thinking: "secret reasoning" }) +
         line({ type: "result", subtype: "success", num_turns: 3, duration_ms: 42 }),
     );
 
