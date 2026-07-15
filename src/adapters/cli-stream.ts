@@ -1,13 +1,20 @@
 /**
  * Native stream-output support for CLI transports.
  *
- * Active only when the run requested live debug streaming (--ndjson together
- * with --debug-reviewer-output): specs switch the CLI to its stream output
- * mode, raw JSONL chunks are parsed into compact single-line summaries for
- * reviewer_debug_output events, and the final review result is extracted from
- * the stream transcript so the artifact parses exactly as in the non-stream
- * mode. Per-event rendering (and the reasoning-exclusion policy) lives in the
- * shared reviewer-activity module; this file is the line-framing layer.
+ * Two activation paths share this parser:
+ * - Stream-switch engines (claude, droid): active only when the run requested
+ *   live debug streaming (--ndjson together with --debug-reviewer-output);
+ *   specs switch the CLI to its stream output mode and the final review result
+ *   is extracted from the stream transcript so the artifact parses exactly as
+ *   in the non-stream mode.
+ * - Always-JSONL engines (codex, opencode, copilot, pi): the default review
+ *   invocation already emits JSONL, so debug chunks route through the parser
+ *   whenever debug output is requested — zero invocation changes, parseOutput
+ *   untouched.
+ * In both cases raw JSONL chunks are parsed into compact single-line summaries
+ * for reviewer_debug_output events. Per-event rendering (and the
+ * reasoning-exclusion policy) lives in the shared reviewer-activity module;
+ * this file is the line-framing layer.
  *
  * Parsing is best-effort by contract: any line that is not valid JSON flips
  * the parser into raw passthrough for the rest of the run, and a transcript
@@ -18,16 +25,16 @@
 // stringField/numberField stay imported: the stream-result extractors below
 // still consume them (only per-event rendering moved to reviewer-activity).
 import {
+  type ActivityDialect,
   type ActivityRenderer,
-  claudeStreamEventText,
-  droidStreamEventText,
+  activityRenderer,
   isRecord,
   numberField,
   renderActivityEvent,
   stringField,
 } from "./reviewer-activity.js";
 
-export type CliStreamFormat = "claude-stream-json" | "droid-stream-json";
+export type CliStreamFormat = ActivityDialect;
 
 export type CliStreamChunkParser = {
   /** Feed one decoded stdout chunk; returns rendered debug texts to forward. */
@@ -37,7 +44,7 @@ export type CliStreamChunkParser = {
 };
 
 export function createCliStreamChunkParser(format: CliStreamFormat): CliStreamChunkParser {
-  const render = format === "claude-stream-json" ? claudeStreamEventText : droidStreamEventText;
+  const render = activityRenderer(format);
   let buffer = "";
   let degraded = false;
 

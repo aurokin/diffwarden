@@ -114,6 +114,101 @@ describe("createCliStreamChunkParser (droid-stream-json)", () => {
   });
 });
 
+describe("createCliStreamChunkParser (always-JSONL dialects)", () => {
+  it("summarizes codex --json events, deduping item updates", () => {
+    const parser = createCliStreamChunkParser("codex-json");
+    const rendered = parser.push(
+      line({ type: "thread.started", thread_id: "th_1" }) +
+        line({
+          type: "item.completed",
+          item: { id: "i_0", type: "reasoning", text: "secret reasoning" },
+        }) +
+        line({
+          type: "item.updated",
+          item: { id: "i_1", type: "agent_message", text: "partial" },
+        }) +
+        line({
+          type: "item.completed",
+          item: { id: "i_1", type: "agent_message", text: "codex answer" },
+        }) +
+        line({
+          type: "item.completed",
+          item: { id: "i_2", type: "command_execution", aggregated_output: "abcdefgh" },
+        }) +
+        line({ type: "turn.completed" }),
+    );
+
+    expect(rendered).toEqual([
+      "[thread.started]\n",
+      "codex answer\n",
+      "[command_execution 8 chars]\n",
+      "[turn.completed]\n",
+    ]);
+    expect(rendered.join("")).not.toContain("secret reasoning");
+  });
+
+  it("summarizes opencode --format json events from part payloads", () => {
+    const parser = createCliStreamChunkParser("opencode-json");
+    const rendered = parser.push(
+      line({ type: "reasoning", part: { type: "reasoning", text: "secret reasoning" } }) +
+        line({ type: "text", part: { type: "text", text: "opencode answer" } }) +
+        line({
+          type: "tool",
+          part: { type: "tool", tool: "grep", state: { output: "abcdefgh" } },
+        }) +
+        line({ type: "step_finish", part: { type: "step_finish", reason: "stop" } }),
+    );
+
+    expect(rendered).toEqual([
+      "opencode answer\n",
+      "[tool_use grep] [output 8 chars]\n",
+      "[step_finish reason=stop]\n",
+    ]);
+    expect(rendered.join("")).not.toContain("secret reasoning");
+  });
+
+  it("summarizes copilot json events through the strict allowlist", () => {
+    const parser = createCliStreamChunkParser("copilot-json");
+    const rendered = parser.push(
+      line({ type: "session.started", sessionId: "sess-1" }) +
+        line({ type: "assistant.message_delta", data: { content: "secret partial" } }) +
+        line({
+          type: "assistant.message",
+          data: { content: "copilot answer", toolRequests: [{ name: "grep_search" }] },
+        }),
+    );
+
+    expect(rendered).toEqual(["[session.started]\n", "copilot answer\n[tool_use grep_search]\n"]);
+    expect(rendered.join("")).not.toContain("secret partial");
+    expect(rendered.join("")).not.toContain("sess-1");
+  });
+
+  it("summarizes pi --mode json events without message_update duplication", () => {
+    const parser = createCliStreamChunkParser("pi-json");
+    const rendered = parser.push(
+      line({ type: "agent_start" }) +
+        line({
+          type: "message_update",
+          message: { role: "assistant", content: [{ type: "text", text: "partial secret" }] },
+        }) +
+        line({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "secret reasoning" },
+              { type: "text", text: "pi answer" },
+            ],
+          },
+        }) +
+        line({ type: "agent_end", messages: [{ role: "assistant", content: [] }] }),
+    );
+
+    expect(rendered).toEqual(["[agent_start]\n", "pi answer\n", "[agent_end]\n"]);
+    expect(rendered.join("")).not.toContain("secret");
+  });
+});
+
 describe("extractClaudeStreamResultStdout", () => {
   it("returns the last result event line verbatim", () => {
     const resultLine = JSON.stringify({

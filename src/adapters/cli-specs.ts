@@ -939,6 +939,10 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         args,
         stdin: input.prompt,
         outputPath,
+        // codex exec --json always emits JSONL on stdout; the dialect only
+        // shapes debug summaries. parseOutput keeps reading the
+        // --output-last-message file, so artifacts are untouched.
+        streamFormat: "codex-json",
         captureMode: "native-structured",
       };
     },
@@ -1132,6 +1136,9 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
             ? { OPENCODE_CONFIG_CONTENT: injectedConfig.content }
             : {}),
         },
+        // run --format json always emits JSONL on stdout; the dialect only
+        // shapes debug summaries. parseOutput is untouched.
+        streamFormat: "opencode-json",
         captureMode: "text",
       };
     },
@@ -1176,6 +1183,9 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         executable: cliExecutable(input.reviewer, defaultCliExecutable("pi")),
         args,
         stdin: input.prompt,
+        // --mode json always emits JSONL on stdout; the dialect only shapes
+        // debug summaries. parseOutput is untouched.
+        streamFormat: "pi-json",
         captureMode: "text",
       };
     },
@@ -1328,6 +1338,10 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
           "NODE_OPTIONS",
           "NODE_PATH",
         ],
+        // --output-format json always emits JSONL on stdout (byte-identical
+        // with --stream on/off, live-verified 2026-07-15); the dialect only
+        // shapes debug summaries. parseOutput is untouched.
+        streamFormat: "copilot-json",
         captureMode: "text",
       };
     },

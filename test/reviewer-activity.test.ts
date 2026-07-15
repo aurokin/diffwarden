@@ -5,8 +5,12 @@ import {
   type ActivityRenderer,
   activitySinkFromDebugOutput,
   claudeStreamEventText,
+  codexJsonEventText,
+  copilotJsonEventText,
   createReviewerActivitySink,
   droidStreamEventText,
+  opencodeJsonEventText,
+  piJsonEventText,
   renderActivityEvent,
 } from "../src/adapters/reviewer-activity.js";
 
@@ -16,6 +20,10 @@ const SENTINEL = "LEAK_ME";
 const dialectRenderers: Array<[ActivityDialect, ActivityRenderer]> = [
   ["claude-stream-json", claudeStreamEventText],
   ["droid-stream-json", droidStreamEventText],
+  ["codex-json", codexJsonEventText],
+  ["opencode-json", opencodeJsonEventText],
+  ["copilot-json", copilotJsonEventText],
+  ["pi-json", piJsonEventText],
 ];
 
 /**
@@ -71,6 +79,59 @@ const adversarialEvents: Array<[string, unknown]> = [
   // Renamed / unknown types.
   ["renamed type", { type: "totally_new_event", text: SENTINEL }],
   ["method-only event", { method: "some/method", params: { text: SENTINEL } }],
+  // Engine-nested reasoning and payload shapes (codex/opencode/copilot/pi).
+  [
+    "codex nested reasoning item",
+    { type: "item.completed", item: { id: "i_0", type: "reasoning", text: SENTINEL } },
+  ],
+  [
+    "codex command output",
+    { type: "item.completed", item: { type: "command_execution", aggregated_output: SENTINEL } },
+  ],
+  [
+    "codex updated agent message",
+    { type: "item.updated", item: { id: "i_1", type: "agent_message", text: SENTINEL } },
+  ],
+  [
+    "opencode part-nested reasoning",
+    { type: "part.updated", part: { type: "reasoning", text: SENTINEL } },
+  ],
+  [
+    "opencode tool state payloads",
+    {
+      type: "tool",
+      part: { type: "tool", tool: "grep", state: { input: SENTINEL, output: SENTINEL } },
+    },
+  ],
+  ["copilot message delta", { type: "assistant.message_delta", data: { content: SENTINEL } }],
+  [
+    "copilot embedded ids",
+    {
+      type: "assistant.message",
+      data: { content: "ok", sessionId: SENTINEL, requestId: SENTINEL, apiCallId: SENTINEL },
+    },
+  ],
+  [
+    "pi message update",
+    {
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "text", text: SENTINEL }] },
+    },
+  ],
+  [
+    "pi toolResult message",
+    {
+      type: "message_end",
+      message: { role: "toolResult", content: [{ type: "text", text: SENTINEL }] },
+    },
+  ],
+  [
+    "pi agent_end embedded messages",
+    {
+      type: "agent_end",
+      messages: [{ role: "assistant", content: [{ type: "thinking", thinking: SENTINEL }] }],
+    },
+  ],
 ];
 
 const nonRecordEvents: unknown[] = [null, undefined, [], [{ type: "text" }], "a string", 42, true];
@@ -195,6 +256,184 @@ describe("renderActivityEvent dialect rendering", () => {
       text: "review prompt",
     });
     expect(rendered).toBe("[user message 13 chars]");
+  });
+
+  it("renders codex completed agent messages verbatim and lifecycle events as markers", () => {
+    expect(renderActivityEvent(codexJsonEventText, { type: "thread.started" })).toBe(
+      "[thread.started]",
+    );
+    expect(renderActivityEvent(codexJsonEventText, { type: "turn.started" })).toBe(
+      "[turn.started]",
+    );
+    expect(
+      renderActivityEvent(codexJsonEventText, {
+        type: "item.completed",
+        item: { id: "item_2", type: "agent_message", text: "final review text" },
+      }),
+    ).toBe("final review text");
+    expect(renderActivityEvent(codexJsonEventText, { type: "turn.completed" })).toBe(
+      "[turn.completed]",
+    );
+  });
+
+  it("dedupes codex item updates by rendering payloads only at item.completed", () => {
+    for (const type of ["item.started", "item.updated"]) {
+      expect(
+        renderActivityEvent(codexJsonEventText, {
+          type,
+          item: { id: "item_2", type: "agent_message", text: SENTINEL },
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("drops codex reasoning items and truncates command output to size markers", () => {
+    expect(
+      renderActivityEvent(codexJsonEventText, {
+        type: "item.completed",
+        item: { id: "item_0", type: "reasoning", text: SENTINEL },
+      }),
+    ).toBeUndefined();
+    expect(
+      renderActivityEvent(codexJsonEventText, {
+        type: "item.completed",
+        item: {
+          id: "item_1",
+          type: "command_execution",
+          command: "rg diff",
+          aggregated_output: "abcdefgh",
+        },
+      }),
+    ).toBe("[command_execution 8 chars]");
+    expect(
+      renderActivityEvent(codexJsonEventText, {
+        type: "item.completed",
+        item: { id: "item_3", type: "file_change" },
+      }),
+    ).toBe("[file_change]");
+  });
+
+  it("renders opencode text from the nested part payload", () => {
+    expect(
+      renderActivityEvent(opencodeJsonEventText, {
+        type: "text",
+        part: { type: "text", text: "looking at the diff" },
+      }),
+    ).toBe("looking at the diff");
+    // A top-level text field is not the payload location; nothing renders.
+    expect(
+      renderActivityEvent(opencodeJsonEventText, { type: "text", text: SENTINEL }),
+    ).toBeUndefined();
+  });
+
+  it("reduces opencode tool parts to name and size markers", () => {
+    expect(
+      renderActivityEvent(opencodeJsonEventText, {
+        type: "tool",
+        part: {
+          type: "tool",
+          tool: "grep",
+          state: { status: "completed", input: { pattern: "x" }, output: "abcdefgh" },
+        },
+      }),
+    ).toBe("[tool_use grep] [input 15 chars] [output 8 chars]");
+    expect(
+      renderActivityEvent(opencodeJsonEventText, {
+        type: "step_finish",
+        part: { type: "step_finish", reason: "stop" },
+      }),
+    ).toBe("[step_finish reason=stop]");
+    expect(
+      renderActivityEvent(opencodeJsonEventText, {
+        type: "reasoning",
+        part: { type: "reasoning", text: SENTINEL },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("renders copilot assistant messages with content and tool-request markers", () => {
+    expect(
+      renderActivityEvent(copilotJsonEventText, {
+        type: "assistant.message",
+        data: {
+          content: "reviewing the patch",
+          toolRequests: [{ name: "grep_search" }],
+          sessionId: SENTINEL,
+          requestId: SENTINEL,
+          apiCallId: SENTINEL,
+        },
+      }),
+    ).toBe("reviewing the patch\n[tool_use grep_search]");
+  });
+
+  it("skips copilot delta and ephemeral events and reduces sub-agent messages to markers", () => {
+    expect(
+      renderActivityEvent(copilotJsonEventText, {
+        type: "assistant.message_delta",
+        data: { content: SENTINEL },
+      }),
+    ).toBeUndefined();
+    expect(
+      renderActivityEvent(copilotJsonEventText, { type: "ephemeral", data: { text: SENTINEL } }),
+    ).toBeUndefined();
+    expect(
+      renderActivityEvent(copilotJsonEventText, {
+        type: "assistant.message",
+        agentId: "agent-1",
+        data: { content: SENTINEL },
+      }),
+    ).toBe("[assistant.message]");
+    expect(
+      renderActivityEvent(copilotJsonEventText, {
+        type: "session.error",
+        data: { message: SENTINEL },
+      }),
+    ).toBe("[session.error]");
+  });
+
+  it("renders pi assistant text parts only, dropping thinking parts", () => {
+    expect(
+      renderActivityEvent(piJsonEventText, {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: SENTINEL },
+            { type: "text", text: "pi review text" },
+          ],
+        },
+      }),
+    ).toBe("pi review text");
+  });
+
+  it("drops pi message_update and reduces user and tool payloads to markers", () => {
+    expect(
+      renderActivityEvent(piJsonEventText, {
+        type: "message_update",
+        message: { role: "assistant", content: [{ type: "text", text: SENTINEL }] },
+      }),
+    ).toBeUndefined();
+    expect(
+      renderActivityEvent(piJsonEventText, {
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "abcdefgh" }] },
+      }),
+    ).toBe("[user message 35 chars]");
+    expect(
+      renderActivityEvent(piJsonEventText, {
+        type: "message_end",
+        message: { role: "toolResult", content: [{ type: "text", text: "abcdefgh" }] },
+      }),
+    ).toBe("[toolResult message 35 chars]");
+    expect(
+      renderActivityEvent(piJsonEventText, { type: "tool_execution_start", toolName: "read" }),
+    ).toBe("[tool_execution_start read]");
+    expect(
+      renderActivityEvent(piJsonEventText, {
+        type: "agent_end",
+        messages: [{ role: "assistant", content: [{ type: "thinking", thinking: SENTINEL }] }],
+      }),
+    ).toBe("[agent_end]");
   });
 });
 

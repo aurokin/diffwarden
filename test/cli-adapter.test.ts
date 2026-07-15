@@ -2193,6 +2193,117 @@ describe("cli adapter streaming debug output", () => {
   );
 });
 
+describe("cli adapter always-JSONL debug summaries", () => {
+  /** Random per-run path segments (temp dirs, generated agent ids) masked out. */
+  function normalizedArgs(args: string[]): string[] {
+    return args.map((arg) =>
+      arg
+        .replace(/diffwarden-cli-[A-Za-z0-9]+/g, "diffwarden-cli-TMP")
+        .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "UUID"),
+    );
+  }
+
+  /**
+   * Runs the same adapter twice — without and with the debug callback — and
+   * enforces the AUR-688 contract: zero invocation changes and byte-identical
+   * review output either way, with summaries only on the debug run.
+   */
+  async function runWithAndWithoutDebug(engine: CliEngine) {
+    const harness = createHarness(engine);
+    const adapter = createCliAdapter(engine);
+    const reviewer = createReviewer(engine, harness.executable);
+
+    const baseline = await adapter.run(createInput(reviewer, harness));
+    const baselineArgs = harness.readInvocation().args;
+
+    const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+    const debugged = await adapter.run({
+      ...createInput(reviewer, harness),
+      debugOutput: {
+        onChunk: (stream, text) => chunks.push({ stream, text }),
+      },
+    });
+    const debugArgs = harness.readInvocation().args;
+
+    // Zero invocation changes: debug output must never alter the argv.
+    expect(normalizedArgs(debugArgs)).toEqual(normalizedArgs(baselineArgs));
+    // The parsed review result is identical with and without debug capture.
+    expect(debugged.structured).toEqual(baseline.structured);
+    expect(debugged.text).toEqual(baseline.text);
+    // Summaries are flagged in metadata only when they are in effect.
+    expect(baseline.metadata).not.toHaveProperty("debugOutputMode");
+    expect(debugged.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+
+    const stdoutText = chunks
+      .filter((chunk) => chunk.stream === "stdout")
+      .map((chunk) => chunk.text)
+      .join("");
+    // Compact summaries, never the raw JSONL envelope.
+    expect(stdoutText).not.toContain('"type"');
+    return { baseline, debugged, stdoutText };
+  }
+
+  it("summarizes Codex debug output, deduping item updates and excluding reasoning", async () => {
+    const { stdoutText } = await runWithAndWithoutDebug("codex");
+
+    expect(stdoutText).toContain("[thread.started]");
+    expect(stdoutText).toContain("[turn.started]");
+    expect(stdoutText).toContain("[command_execution 20 chars]");
+    expect(stdoutText).toContain("codex streaming");
+    expect(stdoutText).toContain("[turn.completed]");
+    // item.updated payloads render once, at item.completed.
+    expect(stdoutText).not.toContain("partial answer");
+    // reasoning items and command output never render.
+    expect(stdoutText).not.toContain("secret reasoning");
+    expect(stdoutText).not.toContain("secret file contents");
+  });
+
+  it("summarizes OpenCode debug output from part-nested payloads", async () => {
+    const { stdoutText } = await runWithAndWithoutDebug("opencode");
+
+    expect(stdoutText).toContain("[step_start]");
+    expect(stdoutText).toContain("[tool_use grep] [input 18 chars] [output 20 chars]");
+    expect(stdoutText).toContain("opencode first");
+    expect(stdoutText).toContain("opencode second");
+    expect(stdoutText).toContain("[step_finish reason=stop]");
+    expect(stdoutText).not.toContain("secret reasoning");
+    expect(stdoutText).not.toContain("secret file contents");
+  });
+
+  it("summarizes Copilot debug output with the strict assistant.message allowlist", async () => {
+    const { stdoutText } = await runWithAndWithoutDebug("copilot");
+
+    expect(stdoutText).toContain("[session.started]");
+    expect(stdoutText).toContain("copilot streaming\n[tool_use grep_search]");
+    // The legacy assistant event renders as a payload-free marker.
+    expect(stdoutText).toContain("[assistant]");
+    // message_delta events are skipped entirely (duplication hazard).
+    expect(stdoutText).not.toContain("secret partial");
+    // Embedded ids never render.
+    expect(stdoutText).not.toContain("sess-1");
+    expect(stdoutText).not.toContain("req-1");
+    expect(stdoutText).not.toContain("call-1");
+  });
+
+  it("summarizes Pi debug output without message_update or payload echoes", async () => {
+    const { stdoutText } = await runWithAndWithoutDebug("pi");
+
+    expect(stdoutText).toContain("[agent_start]");
+    expect(stdoutText).toMatch(/\[user message \d+ chars\]/);
+    expect(stdoutText).toMatch(/\[toolResult message \d+ chars\]/);
+    expect(stdoutText).toContain("[tool_execution_start read]");
+    expect(stdoutText).toContain("pi first");
+    expect(stdoutText).toContain("pi second");
+    expect(stdoutText).toContain("[agent_end]");
+    // message_update re-embeds the full message and is dropped outright.
+    expect(stdoutText).not.toContain("partial answer");
+    expect(stdoutText).not.toContain("secret reasoning");
+    // User echo and tool payloads reduce to size markers.
+    expect(stdoutText).not.toContain("echoed review diff");
+    expect(stdoutText).not.toContain("ignored tool result");
+  });
+});
+
 function createHarness(engine: CliEngine) {
   root = mkdtempSync(path.join(tmpdir(), "diffwarden-cli-adapter-"));
   const cwd = path.join(root, "repo");
@@ -2528,6 +2639,16 @@ const review = {
 if (engine === "codex") {
   const outputIndex = process.argv.indexOf("--output-last-message");
   fs.writeFileSync(process.argv[outputIndex + 1], JSON.stringify(review));
+  // codex --json always emits JSONL on stdout regardless of debug flags.
+  process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "th_1" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "turn.started" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "item_0", type: "reasoning", text: "secret reasoning" } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: "rg diff" } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "item.updated", item: { id: "item_1", type: "command_execution", command: "rg diff", aggregated_output: "secret file contents" } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: "rg diff", aggregated_output: "secret file contents" } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "item.updated", item: { id: "item_2", type: "agent_message", text: "partial answer" } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "item_2", type: "agent_message", text: "codex streaming" } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10 } }) + "\\n");
 } else if (engine === "claude") {
   if (process.argv.includes("stream-json")) {
     process.stdout.write(JSON.stringify({ type: "system", subtype: "init" }) + "\\n");
@@ -2561,16 +2682,28 @@ if (engine === "codex") {
     const message = errorType === "permission" ? "blocked write_file" : "runtime failed before review";
     process.stdout.write(JSON.stringify({ type: "session.error", data: { errorType, message } }) + "\\n");
   }
+  process.stdout.write(JSON.stringify({ type: "session.started", sessionId: "sess-1" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "assistant.message_delta", data: { content: "secret partial", requestId: "req-1" } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "assistant.message", data: { content: "copilot streaming", toolRequests: [{ name: "grep_search" }], sessionId: "sess-1", requestId: "req-1", apiCallId: "call-1" } }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "assistant", message: { result: review } }) + "\\n");
 } else if (engine === "opencode" || engine === "pi") {
   process.stdout.write(JSON.stringify({ type: "tool_use", content: "ignored tool output" }) + "\\n");
   if (engine === "opencode") {
+    process.stdout.write(JSON.stringify({ type: "step_start", part: { type: "step_start" } }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "reasoning", part: { type: "reasoning", text: "secret reasoning" } }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "tool", part: { type: "tool", tool: "grep", state: { status: "completed", input: { pattern: "diff" }, output: "secret file contents" } } }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "text", part: { type: "text", text: engine + " first", time: { end: 1 } } }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "text", part: { type: "text", text: engine + " second", time: { end: 2 } } }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "step_finish", part: { type: "step_finish", reason: "stop" } }) + "\\n");
   } else {
+    process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "echoed review diff" }] } }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: "secret reasoning" }, { type: "text", text: "partial answer" }] } }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "message", message: { role: "toolResult", content: [{ type: "text", text: "ignored tool result" }] } }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "tool_execution_start", toolName: "read" }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: engine + " first" }] } }) + "\\n");
     process.stdout.write(JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: engine + " second" }] } }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "agent_end", messages: [{ role: "assistant", content: [{ type: "thinking", thinking: "secret reasoning" }] }] }) + "\\n");
   }
 } else if (engine === "antigravity") {
   process.stdout.write(engine + " text");
