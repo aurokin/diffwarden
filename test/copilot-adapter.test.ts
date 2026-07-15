@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import {
   copilotReviewAvailableTools,
   copilotReviewExcludedTools,
+  copilotReviewPolicyMetadata,
   copilotSdkReviewAvailableTools,
   createCopilotSdkPermissionHandler,
 } from "../src/adapters/copilot-tool-policy.js";
@@ -1549,6 +1550,286 @@ describe("createCopilotAdapter", () => {
   });
 });
 
+describe("copilotAdapter SDK debug output", () => {
+  const SENTINEL = "LEAK_ME";
+  const reviewContent = JSON.stringify({
+    findings: [],
+    overall_correctness: "patch is correct",
+    overall_explanation: "copilot ok",
+    overall_confidence_score: 1,
+  });
+
+  /** Scripted SessionEvent stream shared by every debug-output test. */
+  function scriptedCopilotEvents(): Array<Record<string, unknown>> {
+    const timestamp = "2026-07-15T00:00:00.000Z";
+    return [
+      {
+        type: "user.message",
+        id: "event-user",
+        parentId: null,
+        timestamp,
+        data: { content: "review prompt", sessionId: SENTINEL, requestId: SENTINEL },
+      },
+      // Deltas and ephemeral events repeat final text; both drop entirely.
+      {
+        type: "assistant.message_delta",
+        id: "event-delta",
+        parentId: "event-user",
+        timestamp,
+        ephemeral: true,
+        data: { content: SENTINEL, messageId: "message-delta" },
+      },
+      {
+        type: "assistant.message",
+        id: "event-ephemeral",
+        parentId: "event-delta",
+        timestamp,
+        ephemeral: true,
+        data: { content: SENTINEL, messageId: "message-ephemeral" },
+      },
+      {
+        type: "assistant.message",
+        id: "event-root",
+        parentId: "event-ephemeral",
+        timestamp,
+        data: {
+          content: "checking the diff",
+          messageId: "message-1",
+          toolRequests: [
+            { name: "grep_search", toolCallId: SENTINEL, arguments: { query: SENTINEL } },
+            { name: "read_file", toolCallId: SENTINEL },
+          ],
+          reasoningText: SENTINEL,
+          requestId: SENTINEL,
+          apiCallId: SENTINEL,
+        },
+      },
+      // Sub-agent reasoning drops via the universal regex like any other.
+      {
+        type: "assistant.reasoning",
+        id: "event-sub-reasoning",
+        parentId: "event-root",
+        timestamp,
+        agentId: "helper-agent",
+        data: { content: SENTINEL },
+      },
+      {
+        type: "assistant.message",
+        id: "event-sub",
+        parentId: "event-sub-reasoning",
+        timestamp,
+        agentId: "helper-agent",
+        data: { content: "scanning tests", messageId: "message-2", sessionId: SENTINEL },
+      },
+      {
+        type: "session.idle",
+        id: "event-sub-idle",
+        parentId: "event-sub",
+        timestamp,
+        agentId: "helper-agent",
+        data: {},
+      },
+      {
+        type: "session.log",
+        id: "event-log",
+        parentId: "event-sub-idle",
+        timestamp,
+        data: { message: SENTINEL },
+      },
+    ];
+  }
+
+  function debugAdapterSetup(extra: Partial<MockCopilotResult> = {}) {
+    const home = mkdtempSync(path.join(tmpdir(), "diffwarden-copilot-debug-home-"));
+    const executable = createCopilotRuntimeFixture();
+    const { adapter, calls } = createMockCopilotAdapter({
+      content: reviewContent,
+      preReviewEvents: scriptedCopilotEvents(),
+      ...extra,
+    });
+    const reviewer = createReviewer({ sdkOptions: { executable } });
+    const env = { HOME: home, PATH: path.dirname(process.execPath) };
+    return { adapter, calls, reviewer, env, home, executable };
+  }
+
+  it("streams copilot SDK event summaries into the debug callback", async () => {
+    const { adapter, reviewer, env } = debugAdapterSetup();
+    const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+
+    const output = await adapter.run(
+      input({
+        reviewer,
+        env,
+        debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+      }),
+    );
+
+    // Exact line sequence: root prose verbatim with tool-request markers,
+    // sub-agent prose behind its agent prefix, deltas/ephemerals dropped, the
+    // user message reduced to a size marker, everything else payload-free.
+    expect(chunks).toEqual([
+      { stream: "stdout", text: "[user message 13 chars]\n" },
+      {
+        stream: "stdout",
+        text: "checking the diff\n[tool_use grep_search]\n[tool_use read_file]\n",
+      },
+      { stream: "stdout", text: "[agent helper-agent] scanning tests\n" },
+      { stream: "stdout", text: "[subagent session.idle]\n" },
+      { stream: "stdout", text: "[session.log]\n" },
+      { stream: "stdout", text: `${reviewContent}\n` },
+      { stream: "stdout", text: "[assistant.usage]\n" },
+      { stream: "stdout", text: "[session.idle]\n" },
+    ]);
+    expect(JSON.stringify(chunks)).not.toContain(SENTINEL);
+    expect(output.structured).toMatchObject({ overall_correctness: "patch is correct" });
+    expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+  });
+
+  it("produces an identical artifact with and without debug capture (non-authoritative debug invariant)", async () => {
+    const { adapter, reviewer, env } = debugAdapterSetup();
+
+    const baseline = await adapter.run(input({ reviewer, env }));
+    const debugged = await adapter.run(
+      input({ reviewer, env, debugOutput: { onChunk: () => {} } }),
+    );
+
+    expect(baseline.metadata).not.toHaveProperty("debugOutputMode");
+    expect(debugged.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+    // Debug output is non-authoritative: removing its metadata key leaves the
+    // artifacts deep-equal (debug_output itself is assembled by the runner
+    // from the recorder, never by the adapter). copilotBaseDirectory is a
+    // fresh per-run mkdtemp staging path — run-unique environment, not debug
+    // state — so it is normalized on both sides after a pattern check.
+    expect(debugged).not.toHaveProperty("debug_output");
+    const {
+      debugOutputMode: _mode,
+      copilotBaseDirectory: debuggedBase,
+      ...debuggedMetadata
+    } = debugged.metadata ?? {};
+    const { copilotBaseDirectory: baselineBase, ...baselineMetadata } = baseline.metadata ?? {};
+    expect(String(debuggedBase)).toContain("diffwarden-copilot-sdk-");
+    expect(String(baselineBase)).toContain("diffwarden-copilot-sdk-");
+    expect({ ...debugged, metadata: debuggedMetadata }).toEqual({
+      ...baseline,
+      metadata: baselineMetadata,
+    });
+  });
+
+  it("keeps the artifact byte-identical without the debug opt-in", async () => {
+    const { adapter, reviewer, env, home, executable } = debugAdapterSetup();
+
+    const output = await adapter.run(input({ reviewer, env }));
+
+    // Full-artifact fixture: the flag-off run carries no debug traces at all.
+    expect(output).toEqual({
+      structured: {
+        findings: [],
+        overall_correctness: "patch is correct",
+        overall_explanation: "copilot ok",
+        overall_confidence_score: 1,
+      },
+      usage: { model: "model" },
+      metadata: {
+        captureMode: "text",
+        readonlyCapability: "tool-restricted",
+        transport: "sdk",
+        ...copilotReviewPolicyMetadata(),
+        sdkVersion: "1.0.0-test",
+        copilotBaseDirectory: expect.stringContaining("diffwarden-copilot-sdk-"),
+        copilotSourceBaseDirectory: path.join(home, ".copilot"),
+        copilotRuntimeSource: "config",
+        executable,
+        resolvedExecutable: executable,
+        model: "model",
+        resolvedModel: "model",
+        modelResolutionSource: "provider-result",
+      },
+    });
+  });
+
+  it("keeps the session invocation identical with and without debug capture", async () => {
+    const { adapter, calls, reviewer, env } = debugAdapterSetup();
+
+    await adapter.run(input({ reviewer, env }));
+    const { onPermissionRequest: baselineHandler, ...baselineConfig } = calls.sessionConfig ?? {};
+    const baselineSend = calls.sendOptions;
+    await adapter.run(input({ reviewer, env, debugOutput: { onChunk: () => {} } }));
+    const { onPermissionRequest: debuggedHandler, ...debuggedConfig } = calls.sessionConfig ?? {};
+
+    // Debug capture is pure observation on a second subscription: same
+    // session config (streaming stays off — no config change) and same prompt.
+    expect(typeof baselineHandler).toBe("function");
+    expect(typeof debuggedHandler).toBe("function");
+    expect(debuggedConfig).toEqual(baselineConfig);
+    expect(debuggedConfig).toMatchObject({
+      streaming: false,
+      includeSubAgentStreamingEvents: false,
+    });
+    expect(calls.sendOptions).toEqual(baselineSend);
+  });
+
+  it("removes the debug subscription after a successful run", async () => {
+    const { adapter, calls, reviewer, env } = debugAdapterSetup();
+
+    await adapter.run(input({ reviewer, env, debugOutput: { onChunk: () => {} } }));
+
+    // All subscriptions — debug, result, and idle — are unsubscribed.
+    expect(calls.session?.activeHandlerCount()).toBe(0);
+  });
+
+  it("removes the debug subscription when the run throws", async () => {
+    // No assistant message in the scripted stream: the run fails after idle.
+    const { adapter, calls, reviewer, env } = debugAdapterSetup({
+      preReviewEvents: [
+        {
+          type: "user.message",
+          id: "event-user",
+          parentId: null,
+          timestamp: "2026-07-15T00:00:00.000Z",
+          data: { content: "review prompt", sessionId: SENTINEL },
+        },
+      ],
+      emitIdleWithoutReview: true,
+    });
+    const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+
+    await expect(
+      adapter.run(
+        input({
+          reviewer,
+          env,
+          debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+        }),
+      ),
+    ).rejects.toThrow("Copilot reviewer became idle without producing an assistant message");
+
+    // The finally path unsubscribed the debug handler alongside the others,
+    // and the events captured before the failure were still summarized.
+    expect(calls.session?.activeHandlerCount()).toBe(0);
+    expect(chunks[0]).toEqual({ stream: "stdout", text: "[user message 13 chars]\n" });
+    expect(JSON.stringify(chunks)).not.toContain(SENTINEL);
+  });
+
+  it("does not fail the run when the debug callback throws", async () => {
+    const { adapter, reviewer, env } = debugAdapterSetup();
+
+    const output = await adapter.run(
+      input({
+        reviewer,
+        env,
+        debugOutput: {
+          onChunk: () => {
+            throw new Error("recorder failed");
+          },
+        },
+      }),
+    );
+
+    expect(output.structured).toMatchObject({ overall_correctness: "patch is correct" });
+    expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+  });
+});
+
 describe.skipIf(isIntegrationDisabled("copilot"))("live Copilot SDK adapter", () => {
   let fixture: LiveFixture | undefined;
 
@@ -1600,6 +1881,7 @@ function input(
     env?: NodeJS.ProcessEnv;
     signal?: AbortSignal;
     timeoutMs?: number;
+    debugOutput?: ReviewAdapterInput["debugOutput"];
   } = {},
 ): ReviewAdapterInput {
   const cwd = options.cwd ?? "/repo";
@@ -1620,6 +1902,7 @@ function input(
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     ...(options.env !== undefined ? { env: options.env } : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(options.debugOutput !== undefined ? { debugOutput: options.debugOutput } : {}),
   };
 }
 
@@ -1719,8 +2002,12 @@ function mockCopilotSdk(
         ...(result.emitSubagentUsageAfterRootUsage !== undefined
           ? { emitSubagentUsageAfterRootUsage: result.emitSubagentUsageAfterRootUsage }
           : {}),
+        ...(result.preReviewEvents !== undefined
+          ? { preReviewEvents: result.preReviewEvents }
+          : {}),
       };
       const session = new MockCopilotSession(calls, sessionResult);
+      calls.session = session;
       result.afterCreateSession?.();
       return session;
     }
@@ -1772,8 +2059,15 @@ class MockCopilotSession {
     return () => this.handlers.delete(handler);
   }
 
+  activeHandlerCount(): number {
+    return this.handlers.size;
+  }
+
   async send(options: unknown): Promise<string> {
     this.calls.sendOptions = options;
+    for (const event of this.result.preReviewEvents ?? []) {
+      this.emit(event as MockCopilotEvent);
+    }
     if (this.result.emitIdleAfterSendBeforeReview === true) {
       return await new Promise((resolve) => {
         queueMicrotask(() => resolve("message-id"));
@@ -2118,6 +2412,8 @@ type MockCopilotResult = {
   emitDelayedReviewAfterIdleMs?: number;
   emitSubagentLifecycleBeforeReview?: boolean;
   emitSubagentUsageAfterRootUsage?: boolean;
+  /** Raw events emitted synchronously at send() time, before the scripted review. */
+  preReviewEvents?: Array<Record<string, unknown>>;
   throwOnClientConstruction?: boolean;
   bundledRuntimeExecutable?: string;
 };
@@ -2143,6 +2439,7 @@ type MockCopilotCalls = {
   aborted?: boolean;
   disconnected?: boolean;
   stopped?: boolean;
+  session?: MockCopilotSession;
 };
 
 type MockCopilotEvent =
@@ -2198,4 +2495,6 @@ type MockCopilotEvent =
         shutdownType: "routine" | "error";
         errorReason?: string;
       };
-    };
+    }
+  // Debug-output tests script arbitrary SessionEvent shapes.
+  | { type: string; [key: string]: unknown };
