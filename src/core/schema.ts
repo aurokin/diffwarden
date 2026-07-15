@@ -229,6 +229,22 @@ export const reviewerErrorSchema = z.object({
 
 const artifactTransportSchema = z.enum(["native", "cli", "app-server"]);
 
+/**
+ * Bounded raw transport transcript captured only when the run opted in via
+ * --debug-reviewer-output. Non-authoritative: never feeds parsing, validation,
+ * or finding gating, and may contain more context than the normalized result.
+ */
+export const reviewerDebugOutputSchema = z
+  .object({
+    stdout: z.string(),
+    stdout_bytes: z.number().int().nonnegative(),
+    stdout_truncated: z.boolean(),
+    stderr: z.string(),
+    stderr_bytes: z.number().int().nonnegative(),
+    stderr_truncated: z.boolean(),
+  })
+  .strict();
+
 const reviewReviewerArtifactBaseSchema = z
   .object({
     id: z.string(),
@@ -253,6 +269,7 @@ const reviewReviewerArtifactBaseSchema = z
     validation: reviewValidationSchema.optional(),
     error: reviewerErrorSchema.optional(),
     timing_ms: z.number().nonnegative().optional(),
+    debug_output: reviewerDebugOutputSchema.optional(),
   })
   .strict();
 
@@ -391,6 +408,7 @@ export type ReviewerSdk = z.infer<typeof reviewerSdkSchema>;
 export type AdapterPreflightCheck = z.infer<typeof adapterPreflightCheckSchema>;
 export type AdapterPreflightResult = z.infer<typeof adapterPreflightResultSchema>;
 export type ReviewerError = z.infer<typeof reviewerErrorSchema>;
+export type ReviewerDebugOutput = z.infer<typeof reviewerDebugOutputSchema>;
 export type ReviewReviewerArtifact = z.infer<typeof reviewReviewerArtifactSchema>;
 export type ReviewArtifact = z.infer<typeof reviewArtifactSchema>;
 export type ReviewLane = z.infer<typeof reviewLaneSchema>;
@@ -414,6 +432,7 @@ export type ReviewEvent =
   | ReviewPreflightStartedEvent
   | ReviewPreflightFinishedEvent
   | ReviewReviewerStartedEvent
+  | ReviewReviewerDebugOutputEvent
   | ReviewReviewerResultEvent
   | ReviewReviewerFailedEvent
   | ReviewLaneFinishedEvent
@@ -449,6 +468,22 @@ export type ReviewReviewerStartedEvent = ReviewEventEnvelope & {
   type: "reviewer_started";
   lane_id?: string;
   reviewer_id: string;
+};
+
+/**
+ * Bounded raw transport output chunk, emitted while a reviewer runs and only
+ * when the run opted in via --debug-reviewer-output. Non-authoritative: not
+ * part of the terminal-frame guarantee and never affects results or gating.
+ * `truncated: true` marks the final chunk for a stream whose per-reviewer
+ * debug budget is exhausted.
+ */
+export type ReviewReviewerDebugOutputEvent = ReviewEventEnvelope & {
+  type: "reviewer_debug_output";
+  lane_id?: string;
+  reviewer_id: string;
+  stream: "stdout" | "stderr";
+  text: string;
+  truncated: boolean;
 };
 
 export type ReviewReviewerResultEvent = ReviewEventEnvelope & {

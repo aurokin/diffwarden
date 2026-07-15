@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, execFile, spawn } from "node:child
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
 import { missingAuth, missingRequirement, reviewerFailed } from "../core/errors.js";
 import type { CliInvocation, CliRunResult } from "./cli-types.js";
@@ -60,8 +61,16 @@ export async function runCli(
       abortKillTimer = setTimeout(() => killChildProcess(child, "SIGKILL"), abortKillGraceMs);
     });
 
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    const debugChunks = createDebugChunkForwarder(input.debugOutput);
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout.push(chunk);
+      debugChunks?.write("stdout", chunk);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr.push(chunk);
+      debugChunks?.write("stderr", chunk);
+    });
     child.stdin.on("error", (error) => {
       if (isNodeErrorWithCode(error, "EPIPE")) {
         return;
@@ -84,6 +93,7 @@ export async function runCli(
       if (abortKillTimer !== undefined) {
         clearTimeout(abortKillTimer);
       }
+      debugChunks?.flush();
       if (abortError !== undefined) {
         rejectOnce(abortError);
         return;
@@ -127,6 +137,40 @@ export async function runCli(
       reject(error);
     }
   });
+}
+
+/**
+ * Decode child output per stream for the opt-in debug capture callback.
+ * StringDecoder keeps multi-byte characters that straddle chunk boundaries
+ * intact; flush() drains any undecoded remainder when the process closes.
+ */
+function createDebugChunkForwarder(
+  debugOutput: ReviewAdapterInput["debugOutput"],
+): { write(stream: "stdout" | "stderr", chunk: Buffer): void; flush(): void } | undefined {
+  if (debugOutput === undefined) {
+    return undefined;
+  }
+
+  const decoders = {
+    stdout: new StringDecoder("utf8"),
+    stderr: new StringDecoder("utf8"),
+  };
+  return {
+    write(stream, chunk) {
+      const text = decoders[stream].write(chunk);
+      if (text !== "") {
+        debugOutput.onChunk(stream, text);
+      }
+    },
+    flush() {
+      for (const stream of ["stdout", "stderr"] as const) {
+        const text = decoders[stream].end();
+        if (text !== "") {
+          debugOutput.onChunk(stream, text);
+        }
+      }
+    },
+  };
 }
 
 function killChildProcess(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {

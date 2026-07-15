@@ -60,6 +60,11 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
    - Use `--ndjson` for incremental consumers that need progress events before the final
      artifact is ready.
    - Omit mode flags only when a human wants to watch the interactive display.
+   - Only when debugging reviewer behavior, add `--debug-reviewer-output` to capture a
+     bounded raw stdout/stderr transcript per CLI-transport reviewer (`debug_output` on the
+     reviewer artifact; streamed `reviewer_debug_output` events with `--ndjson`). It is
+     token-heavy and may contain sensitive raw provider output; leave it off for normal
+     reviews.
 
 5. For CI-like checks, use `--fail-on-findings <P0|P1|P2|P3>` only when the user wants an
    exit-code gate. It preserves normal output and exits `1` when final aggregated findings
@@ -86,6 +91,7 @@ diffwarden review --target base:main --reviewer droid-cli --model claude-opus-4-
 diffwarden review --target base:main --reviewer cursor --json --out review.json
 diffwarden review show review.json --agent
 diffwarden review --target base:main --reviewer-set <name> --ndjson
+diffwarden review --target base:main --reviewer droid-cli --ndjson --debug-reviewer-output
 diffwarden review --target base:main --reviewer-set <name> --agent --focus "focus on state management" --focus "focus on localization"
 diffwarden review --target base:main --reviewer-set <name> --agent --no-overview --focus "focus on state management"
 diffwarden review --target 'custom:Review auth flow and permission checks' --reviewer-set <name> --agent

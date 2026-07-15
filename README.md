@@ -234,6 +234,33 @@ For focus runs, stdout carries a `ReviewBatchArtifact` instead. Batch NDJSON sta
 `lane_failed`, and still terminates with exactly one `final_result` carrying the full batch
 artifact or one `error`. Normal no-focus NDJSON remains unchanged.
 
+### Debugging Reviewer Output (opt-in)
+
+Normal artifacts stay token-efficient by design: reviewer output is reduced to findings,
+verdicts, validation, and limited diagnostics. To inspect what a reviewer transport actually
+printed, opt in with `--debug-reviewer-output`:
+
+```bash
+diffwarden review --target base:main --reviewer droid-cli --debug-reviewer-output --out review.json
+diffwarden review --target base:main --reviewer droid-cli --ndjson --debug-reviewer-output
+```
+
+- Each CLI-transport reviewer artifact gains a bounded `debug_output` field with separate
+  `stdout`/`stderr` transcripts, total byte counts, and per-stream truncation flags. Budget:
+  256 KiB per stream per reviewer (retried runs share the budget, so the failing first
+  attempt is preserved). Transports that cannot expose raw output simply omit the field.
+- With `--ndjson`, bounded `reviewer_debug_output` events additionally stream while the
+  reviewer runs (up to 8 KiB of text per event; a final event with `truncated: true` marks
+  an exhausted stream budget). These events are non-authoritative and never affect results,
+  validation, gating, exit codes, or the terminal-frame guarantee.
+- Without the flag, artifacts and event streams are byte-identical to today.
+
+Sensitivity: debug output is the raw transport transcript. It can contain more context than
+the normalized artifact — prompt fragments, file contents, provider diagnostics — so treat
+it as a local debugging aid, not something to commit or ship to CI logs by default.
+`--report-mode full` reports embed the artifact (including `debug_output` when opted in);
+`--report-mode metadata` reports never do.
+
 Human progress (not a contract): in `--json` mode, when stderr is a TTY, diffwarden prints
 per-reviewer progress lines to **stderr** so long multi-reviewer runs are not silent. This
 is purely informational, is suppressed when stderr is not a TTY (pipes, CI), and never

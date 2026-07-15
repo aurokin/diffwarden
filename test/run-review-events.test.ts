@@ -119,6 +119,90 @@ describe("runReviewEvents", () => {
     expect(returnValue?.warnings).toEqual(["Reviewer claude failed: Claude exploded"]);
   });
 
+  it("emits no debug events and no debug_output fields without the opt-in", async () => {
+    const { cwd, resolved } = await uncommittedTarget();
+
+    const { events, returnValue } = await collect(
+      runReviewEvents({
+        cwd,
+        resolved,
+        reviewer: "fake",
+        env: { DIFFWARDEN_FAKE_DEBUG_CHUNKS: "3" },
+      }),
+    );
+
+    expect(events.some((event) => event.type === "reviewer_debug_output")).toBe(false);
+    expect(returnValue?.reviewers?.[0]?.debug_output).toBeUndefined();
+  });
+
+  it("streams debug events and persists the transcript when opted in", async () => {
+    const { cwd, resolved } = await uncommittedTarget();
+
+    const { events, returnValue } = await collect(
+      runReviewEvents({
+        cwd,
+        resolved,
+        reviewer: "fake",
+        debugReviewerOutput: true,
+        env: { DIFFWARDEN_FAKE_DEBUG_CHUNKS: "3" },
+      }),
+    );
+
+    const debugEvents = events.filter((event) => event.type === "reviewer_debug_output");
+    expect(debugEvents.map((event) => event.stream)).toEqual([
+      "stdout",
+      "stdout",
+      "stdout",
+      "stderr",
+    ]);
+    expect(debugEvents.every((event) => event.reviewer_id === "fake")).toBe(true);
+    expect(debugEvents.every((event) => event.truncated === false)).toBe(true);
+    // Debug chunks stream while the reviewer runs: all before its result frame.
+    expect(lastIndexOfType(events, "reviewer_debug_output")).toBeLessThan(
+      indexOfType(events, "reviewer_result"),
+    );
+
+    const expectedStdout = debugEvents
+      .filter((event) => event.stream === "stdout")
+      .map((event) => event.text)
+      .join("");
+    const expectedStderr = "fake debug: reviewer diagnostics written to stderr\n";
+    expect(returnValue?.reviewers?.[0]?.debug_output).toEqual({
+      stdout: expectedStdout,
+      stdout_bytes: Buffer.byteLength(expectedStdout),
+      stdout_truncated: false,
+      stderr: expectedStderr,
+      stderr_bytes: Buffer.byteLength(expectedStderr),
+      stderr_truncated: false,
+    });
+    expect(() => reviewArtifactSchema.parse(returnValue)).not.toThrow();
+    expectTerminalFrameGuarantee(events);
+  });
+
+  it("keeps the captured transcript on failed reviewer artifacts", async () => {
+    const { cwd, resolved } = await uncommittedTarget();
+
+    const { events, returnValue } = await collect(
+      runReviewEvents({
+        cwd,
+        resolved,
+        reviewers: ["pi", "claude"],
+        debugReviewerOutput: true,
+        adapters: {
+          pi: createSuccessAdapter("pi"),
+          claude: createDebugEmittingFailureAdapter("claude", "Claude exploded"),
+        },
+      }),
+    );
+
+    const failed = events.find((event) => event.type === "reviewer_failed");
+    expect(failed?.type === "reviewer_failed" && failed.reviewer_id).toBe("claude");
+    const failedArtifact = returnValue?.reviewers?.find((reviewer) => reviewer.id === "claude");
+    expect(failedArtifact?.status).toBe("failed");
+    expect(failedArtifact?.debug_output?.stdout).toBe("about to explode\n");
+    expect(failedArtifact?.debug_output?.stderr).toBe("boom diagnostics\n");
+  });
+
   it("emits a terminal error event when every reviewer fails", async () => {
     const { cwd, resolved } = await uncommittedTarget();
 
@@ -243,6 +327,29 @@ describe("runReviewBatchEvents", () => {
       status: "success",
     });
     expect(() => reviewBatchArtifactSchema.parse(returnValue)).not.toThrow();
+  });
+
+  it("tags streamed debug events with their lane id", async () => {
+    const { cwd, resolved } = await uncommittedTarget();
+
+    const { events } = await collectBatch(
+      runReviewBatchEvents({
+        cwd,
+        resolved,
+        reviewer: "fake",
+        debugReviewerOutput: true,
+        env: { DIFFWARDEN_FAKE_DEBUG_CHUNKS: "2" },
+        plan: {
+          include_overview: false,
+          focus: ["focus on state"],
+          lanes: [{ id: "focus-1", kind: "focus", focus: "focus on state" }],
+        },
+      }),
+    );
+
+    const debugEvents = events.filter((event) => event.type === "reviewer_debug_output");
+    expect(debugEvents.length).toBeGreaterThan(0);
+    expect(debugEvents.every((event) => event.lane_id === "focus-1")).toBe(true);
   });
 
   it("returns a partial batch when one lane fails and strict mode is off", async () => {
@@ -420,6 +527,23 @@ function createFailingRunAdapter(name: ReviewAdapter["name"], message: string): 
       return { checks: [{ name: "mock", status: "passed" }] };
     },
     async run() {
+      throw new Error(message);
+    },
+  };
+}
+
+function createDebugEmittingFailureAdapter(
+  name: ReviewAdapter["name"],
+  message: string,
+): ReviewAdapter {
+  return {
+    name,
+    async preflight() {
+      return { checks: [{ name: "mock", status: "passed" }] };
+    },
+    async run(input) {
+      input.debugOutput?.onChunk("stdout", "about to explode\n");
+      input.debugOutput?.onChunk("stderr", "boom diagnostics\n");
       throw new Error(message);
     },
   };

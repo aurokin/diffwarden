@@ -135,6 +135,7 @@ type ReviewCliOptions = {
   overviewConflict?: boolean;
   cwd: string;
   mode: ReviewOutputMode;
+  debugReviewerOutput?: boolean;
   out?: string;
   report?: boolean;
   reportDir?: string;
@@ -178,6 +179,10 @@ const reviewCommand = program
   .option("--agent", "emit plain text optimized for coding agents")
   .option("--json", "emit the final review artifact JSON")
   .option("--ndjson", "emit newline-delimited review events")
+  .option(
+    "--debug-reviewer-output",
+    "capture bounded raw reviewer transport output into artifacts (and stream it with --ndjson)",
+  )
   .option("--out <path>", "write the full review artifact JSON to a file")
   .option("--report", "persist this review to report history")
   .option("--no-report", "disable configured report history")
@@ -200,6 +205,7 @@ const reviewCommand = program
       agent?: boolean;
       json?: boolean;
       ndjson?: boolean;
+      debugReviewerOutput?: boolean;
       out?: string;
       report?: boolean;
       reportDir?: string;
@@ -755,6 +761,7 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
     ...(fallbackModel !== undefined ? { fallbackModel } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     ...(options.strict === true ? { strict: true } : {}),
+    ...(options.debugReviewerOutput === true ? { debugReviewerOutput: true } : {}),
     ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
   };
   const events =

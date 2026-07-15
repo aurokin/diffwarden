@@ -1993,6 +1993,41 @@ describe("createCliAdapter", () => {
   });
 });
 
+describe("cli adapter debug output capture", () => {
+  it("forwards raw child process output to the opt-in debug callback", async () => {
+    const harness = createHarness("gemini");
+    (harness.env as NodeJS.ProcessEnv)[geminiCliTrustWorkspaceEnvVar] = "true";
+    const adapter = createCliAdapter("gemini");
+    const reviewer = createReviewer("gemini", harness.executable, { model: "test-model" });
+
+    const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      debugOutput: {
+        onChunk: (stream, text) => chunks.push({ stream, text }),
+      },
+    });
+
+    const stdoutText = chunks
+      .filter((chunk) => chunk.stream === "stdout")
+      .map((chunk) => chunk.text)
+      .join("");
+    expect(stdoutText).toContain("gemini text");
+    // The callback observes the same bytes the buffered result parses.
+    expect(output.text).toContain("gemini text");
+  });
+
+  it("does not invoke any capture path when debugOutput is absent", async () => {
+    const harness = createHarness("gemini");
+    (harness.env as NodeJS.ProcessEnv)[geminiCliTrustWorkspaceEnvVar] = "true";
+    const adapter = createCliAdapter("gemini");
+    const reviewer = createReviewer("gemini", harness.executable, { model: "test-model" });
+
+    const output = await adapter.run(createInput(reviewer, harness));
+    expect(output.text).toContain("gemini text");
+  });
+});
+
 function createHarness(engine: CliEngine) {
   root = mkdtempSync(path.join(tmpdir(), "diffwarden-cli-adapter-"));
   const cwd = path.join(root, "repo");
