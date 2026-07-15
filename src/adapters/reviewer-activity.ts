@@ -21,9 +21,17 @@ import type { ReviewAdapterInput } from "./types.js";
 
 /**
  * Rendering dialects. Extended as adapters gain debug output; SDK and
- * app-server dialects land with their adapter wiring.
+ * app-server dialects land with their adapter wiring. The `-json` dialects
+ * cover CLIs whose default review invocation already emits JSONL (no
+ * invocation switch involved).
  */
-export type ActivityDialect = "claude-stream-json" | "droid-stream-json";
+export type ActivityDialect =
+  | "claude-stream-json"
+  | "droid-stream-json"
+  | "codex-json"
+  | "opencode-json"
+  | "copilot-json"
+  | "pi-json";
 
 /** Rendered summary line, or undefined to drop the event silently. */
 export type ActivityRenderer = (event: Record<string, unknown>) => string | undefined;
@@ -42,8 +50,16 @@ const reasoningTypePattern = /reasoning|thinking|thought/i;
 /** Marker-embedded metadata (tool names) is bounded independently of the recorder budget. */
 const maxMarkerNameChars = 128;
 
-function activityRenderer(dialect: ActivityDialect): ActivityRenderer {
-  return dialect === "claude-stream-json" ? claudeStreamEventText : droidStreamEventText;
+export function activityRenderer(dialect: ActivityDialect): ActivityRenderer {
+  const renderers: Record<ActivityDialect, ActivityRenderer> = {
+    "claude-stream-json": claudeStreamEventText,
+    "droid-stream-json": droidStreamEventText,
+    "codex-json": codexJsonEventText,
+    "opencode-json": opencodeJsonEventText,
+    "copilot-json": copilotJsonEventText,
+    "pi-json": piJsonEventText,
+  };
+  return renderers[dialect];
 }
 
 /**
@@ -220,6 +236,202 @@ export function droidStreamEventText(event: Record<string, unknown>): string | u
 
   const name = stringField(event, "name") ?? stringField(event, "tool");
   return `[${type}${name !== undefined ? ` ${boundedMarkerName(name)}` : ""}]`;
+}
+
+/**
+ * One safe summary line per Codex `--json` event. Only completed
+ * `agent_message` items surface prose (each one verbatim; the final answer is
+ * the last). `item.started`/`item.updated` are dropped entirely so payloads
+ * render at most once, at `item.completed` (dedupe by construction, no state).
+ * `command_execution.aggregated_output` is unbounded and can echo file
+ * contents, so it reduces to a size marker. Reasoning-typed items are nested
+ * under `item.type`, out of reach of the universal top-level drop, so they are
+ * dropped here explicitly.
+ */
+export function codexJsonEventText(event: Record<string, unknown>): string | undefined {
+  const type = stringField(event, "type");
+  if (type === undefined) {
+    return undefined;
+  }
+
+  if (type === "item.started" || type === "item.updated") {
+    return undefined; // payload renders once, at item.completed
+  }
+
+  if (type === "item.completed") {
+    const item = isRecord(event.item) ? event.item : undefined;
+    const itemType =
+      item === undefined
+        ? undefined
+        : (stringField(item, "type") ?? stringField(item, "item_type"));
+    if (item === undefined || itemType === undefined) {
+      return `[${type}]`;
+    }
+    if (reasoningTypePattern.test(itemType)) {
+      return undefined;
+    }
+    if (itemType === "agent_message") {
+      const text = typeof item.text === "string" ? item.text : undefined;
+      return text === undefined || text.trim() === "" ? undefined : text;
+    }
+    if (itemType === "command_execution") {
+      return sizeMarker("command_execution", contentSize(item.aggregated_output ?? ""));
+    }
+    return `[${boundedMarkerName(itemType)}]`;
+  }
+
+  return `[${type}]`; // thread.started, turn.started, turn.completed, turn.failed, error
+}
+
+/**
+ * One safe summary line per OpenCode `--format json` event. Every payload
+ * nests under `.part` (a top-level-field summarizer misses `part.text`), so
+ * assistant prose is read from `part.text` only. Tool parts reduce to a name
+ * marker plus input/output size markers, and `reasoning` parts (only emitted
+ * under `--thinking`, which review runs never pass) are dropped defensively.
+ */
+export function opencodeJsonEventText(event: Record<string, unknown>): string | undefined {
+  const type = stringField(event, "type");
+  if (type === undefined) {
+    return undefined;
+  }
+
+  const part = isRecord(event.part) ? event.part : undefined;
+  const partType = (part !== undefined ? stringField(part, "type") : undefined) ?? type;
+  if (reasoningTypePattern.test(partType)) {
+    return undefined;
+  }
+
+  if (partType === "text") {
+    const text = part !== undefined && typeof part.text === "string" ? part.text : undefined;
+    return text === undefined || text.trim() === "" ? undefined : text;
+  }
+
+  if (partType === "tool" || partType === "tool_use") {
+    const name =
+      part === undefined ? undefined : (stringField(part, "tool") ?? stringField(part, "name"));
+    const state = part !== undefined && isRecord(part.state) ? part.state : undefined;
+    const markers = [toolUseMarker(name)];
+    if (state?.input !== undefined) {
+      markers.push(sizeMarker("input", contentSize(state.input)));
+    }
+    if (state?.output !== undefined) {
+      markers.push(sizeMarker("output", contentSize(state.output)));
+    }
+    return markers.join(" ");
+  }
+
+  if (partType === "step_finish" || partType === "step-finish") {
+    const reason =
+      (part !== undefined ? stringField(part, "reason") : undefined) ??
+      stringField(event, "reason");
+    return `[${partType}${reason !== undefined ? ` reason=${boundedMarkerName(reason)}` : ""}]`;
+  }
+
+  return `[${type}]`;
+}
+
+/**
+ * One safe summary line per Copilot CLI `--output-format json` event, with a
+ * strict allowlist posture: only root `assistant.message` events surface prose
+ * (`data.content` verbatim plus payload-free tool-request markers). Delta and
+ * ephemeral events are skipped entirely — they re-carry message content and
+ * would duplicate it — and embedded ids (sessionId/requestId/apiCallId) are
+ * never read, so they can never render.
+ */
+export function copilotJsonEventText(event: Record<string, unknown>): string | undefined {
+  const type = stringField(event, "type");
+  if (type === undefined) {
+    return undefined;
+  }
+
+  if (type.includes("delta") || type.includes("ephemeral")) {
+    return undefined; // duplication hazard: content re-arrives on assistant.message
+  }
+
+  if (type === "assistant.message") {
+    // Sub-agent events (agentId) never surface prose; reviews disable subagents anyway.
+    const agentId = event.agentId;
+    const data = isRecord(event.data) ? event.data : undefined;
+    if ((typeof agentId === "string" && agentId.trim() !== "") || data === undefined) {
+      return `[${type}]`;
+    }
+    const parts: string[] = [];
+    const content = renderClaudeContentBlocks(data.content);
+    if (content !== undefined) {
+      parts.push(content);
+    }
+    if (Array.isArray(data.toolRequests)) {
+      for (const request of data.toolRequests) {
+        if (isRecord(request)) {
+          parts.push(
+            toolUseMarker(
+              stringField(request, "name") ??
+                stringField(request, "toolName") ??
+                stringField(request, "tool"),
+            ),
+          );
+        }
+      }
+    }
+    return parts.length === 0 ? undefined : parts.join("\n");
+  }
+
+  return `[${type}]`;
+}
+
+/**
+ * One safe summary line per Pi `--mode json` event. `message_update` re-embeds
+ * the full message on every delta (O(n^2) duplication), so it is dropped
+ * outright. Assistant messages surface their text parts only (thinking parts
+ * never render); user messages echo the whole review diff and toolResult
+ * payloads carry raw file contents, so both reduce to size markers. Everything
+ * else — including `agent_end`/`turn_end`, whose embedded message arrays carry
+ * thinking parts — renders as a payload-free marker.
+ */
+export function piJsonEventText(event: Record<string, unknown>): string | undefined {
+  const type = stringField(event, "type");
+  if (type === undefined) {
+    return undefined;
+  }
+
+  if (type === "message_update") {
+    return undefined; // re-embeds the full message per delta
+  }
+
+  if (type === "message" || type === "message_start" || type === "message_end") {
+    const message = isRecord(event.message) ? event.message : event;
+    const role = stringField(message, "role");
+    if (role === "assistant") {
+      return piAssistantTextParts(message.content);
+    }
+    return sizeMarker(`${role ?? "message"} message`, contentSize(message.content ?? ""));
+  }
+
+  const name = stringField(event, "toolName") ?? stringField(event, "tool_name");
+  return `[${type}${name !== undefined ? ` ${boundedMarkerName(name)}` : ""}]`;
+}
+
+/** Text parts only: thinking/toolCall/unknown parts drop silently. */
+function piAssistantTextParts(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    return content.trim() === "" ? undefined : content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (
+      isRecord(block) &&
+      stringField(block, "type") === "text" &&
+      typeof block.text === "string" &&
+      block.text.trim() !== ""
+    ) {
+      parts.push(block.text);
+    }
+  }
+  return parts.length === 0 ? undefined : parts.join("\n");
 }
 
 /** Payload-free tool marker; the name is bounded, never the tool input. */

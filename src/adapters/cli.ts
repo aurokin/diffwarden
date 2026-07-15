@@ -1018,13 +1018,13 @@ type CliStreamDebugCapture = {
 };
 
 /**
- * When the invocation switched to a native stream output mode, route stdout
- * debug chunks through the stream parser so the debug callback receives
- * compact event summaries (reasoning excluded) instead of raw JSONL. Stderr
- * passes through untouched. The summaries deliberately feed both the live
- * events and the artifact's debug_output recorder: raw stream-json embeds
- * reasoning content the debug contract excludes, and its envelope overhead
- * would waste the bounded per-stream budget.
+ * When the invocation's stdout is a JSONL event stream (native stream mode or
+ * an always-JSONL engine), route stdout debug chunks through the stream parser
+ * so the debug callback receives compact event summaries (reasoning excluded)
+ * instead of raw JSONL. Stderr passes through untouched. The summaries
+ * deliberately feed both the live events and the artifact's debug_output
+ * recorder: raw JSONL embeds reasoning content the debug contract excludes,
+ * and its envelope overhead would waste the bounded per-stream budget.
  */
 function createCliStreamDebugCapture(
   invocation: CliInvocation,
@@ -1036,6 +1036,7 @@ function createCliStreamDebugCapture(
   }
 
   const parser = createCliStreamChunkParser(invocation.streamFormat);
+  invocation.metadata = { ...invocation.metadata, debugOutputMode: "event-summary" };
   return {
     input: {
       ...input,

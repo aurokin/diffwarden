@@ -15,7 +15,12 @@ export type CliInvocation = {
   droidLogGroupId?: string | undefined;
   droidSessionDirectory?: string;
   claudeAuthMode?: "api-key" | "claude-code";
-  /** Set when the invocation was switched to a native stream output mode. */
+  /**
+   * Set when the invocation's stdout is a JSONL event stream: either switched
+   * to a native stream output mode (claude, droid) or always JSONL by default
+   * (codex, opencode, copilot, pi). Debug stdout chunks are summarized through
+   * this dialect whenever debug output is requested.
+   */
   streamFormat?: CliStreamFormat;
   /** Invocation-level metadata merged into the run output metadata. */
   metadata?: Record<string, string>;
