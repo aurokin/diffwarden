@@ -34,7 +34,8 @@ export type ActivityDialect =
   | "copilot-json"
   | "pi-json"
   | "claude-sdk"
-  | "droid-sdk";
+  | "droid-sdk"
+  | "copilot-sdk";
 
 /** Rendered summary line, or undefined to drop the event silently. */
 export type ActivityRenderer = (event: Record<string, unknown>) => string | undefined;
@@ -66,6 +67,7 @@ export function activityRenderer(dialect: ActivityDialect): ActivityRenderer {
     // lines, so the claude renderer applies verbatim.
     "claude-sdk": claudeStreamEventText,
     "droid-sdk": droidSdkStreamEventText,
+    "copilot-sdk": copilotSessionEventText,
   };
   return renderers[dialect];
 }
@@ -461,6 +463,76 @@ export function copilotJsonEventText(event: Record<string, unknown>): string | u
   }
 
   return `[${type}]`;
+}
+
+/**
+ * One safe summary line per Copilot SDK SessionEvent, forked from the CLI
+ * copilot-json dialect with the same strict allowlist posture: only
+ * `assistant.message` events surface prose (`data.content` verbatim plus one
+ * payload-free `[tool_use <name>]` marker per `data.toolRequests[]` entry).
+ * `assistant.message_delta` and ANY event flagged `ephemeral` are dropped
+ * entirely — deltas repeat the final message text, so rendering them would
+ * duplicate prose — and embedded ids and reasoning fields
+ * (sessionId/requestId/apiCallId/reasoningText/encryptedContent) are never
+ * read, so they can never render. Reasoning-typed events, including sub-agent
+ * `assistant.reasoning*` variants, are dropped by the universal reasoning
+ * regex before this renderer runs. Unlike the CLI dialect, sub-agent
+ * assistant messages surface prose behind a bounded `[agent <agentId>] `
+ * prefix (user-decided 2026-07-15); every other sub-agent event reduces to a
+ * payload-free `[subagent <type>]` marker.
+ */
+export function copilotSessionEventText(event: Record<string, unknown>): string | undefined {
+  const type = stringField(event, "type");
+  if (type === undefined) {
+    return undefined;
+  }
+
+  // Duplication hazard: deltas and ephemeral events re-carry message content
+  // that arrives again on the final assistant.message. The flag check is
+  // truthy on purpose — dropping more is the safe direction for debug output.
+  if (type.includes("delta") || type.includes("ephemeral") || Boolean(event.ephemeral)) {
+    return undefined;
+  }
+
+  // agentId is untrusted: only a non-blank string counts, bounded like tool names.
+  const agentId = stringField(event, "agentId");
+  const agentMarker =
+    agentId !== undefined && agentId.trim() !== ""
+      ? `[agent ${boundedMarkerName(agentId)}]`
+      : undefined;
+
+  if (type === "assistant.message") {
+    const data = isRecord(event.data) ? event.data : undefined;
+    if (data === undefined) {
+      return agentMarker === undefined ? `[${type}]` : `[subagent ${type}]`;
+    }
+    const parts: string[] = [];
+    if (typeof data.content === "string" && data.content.trim() !== "") {
+      parts.push(data.content);
+    }
+    if (Array.isArray(data.toolRequests)) {
+      for (const request of data.toolRequests) {
+        parts.push(toolUseMarker(isRecord(request) ? stringField(request, "name") : undefined));
+      }
+    }
+    if (parts.length === 0) {
+      return undefined;
+    }
+    const rendered = parts.join("\n");
+    return agentMarker === undefined ? rendered : `${agentMarker} ${rendered}`;
+  }
+
+  if (agentMarker !== undefined) {
+    return `[subagent ${type}]`;
+  }
+
+  if (type === "user.message") {
+    // The echoed user message is our own review prompt; size marker only.
+    const data = isRecord(event.data) ? event.data : undefined;
+    return sizeMarker("user message", contentSize(data?.content ?? ""));
+  }
+
+  return `[${type}]`; // session lifecycle, assistant.usage, unknown types
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   claudeStreamEventText,
   codexJsonEventText,
   copilotJsonEventText,
+  copilotSessionEventText,
   createReviewerActivitySink,
   cursorStreamEventText,
   droidSdkStreamEventText,
@@ -32,6 +33,7 @@ const dialectRenderers: Array<[ActivityDialect, ActivityRenderer]> = [
   // Resolved through the dialect map so the SDK wiring itself is under test.
   ["claude-sdk", activityRenderer("claude-sdk")],
   ["droid-sdk", activityRenderer("droid-sdk")],
+  ["copilot-sdk", activityRenderer("copilot-sdk")],
 ];
 
 /**
@@ -117,6 +119,29 @@ const adversarialEvents: Array<[string, unknown]> = [
     {
       type: "assistant.message",
       data: { content: "ok", sessionId: SENTINEL, requestId: SENTINEL, apiCallId: SENTINEL },
+    },
+  ],
+  [
+    "copilot user message ids",
+    {
+      type: "user.message",
+      data: { content: "hi", sessionId: SENTINEL, requestId: SENTINEL, apiCallId: SENTINEL },
+    },
+  ],
+  [
+    "copilot ephemeral reasoning fields",
+    {
+      type: "assistant.message",
+      ephemeral: true,
+      data: { content: "ok", reasoningText: SENTINEL, encryptedContent: SENTINEL },
+    },
+  ],
+  [
+    "copilot sub-agent lifecycle ids",
+    {
+      type: "session.error",
+      agentId: "helper-agent",
+      data: { message: SENTINEL, sessionId: SENTINEL, requestId: SENTINEL, apiCallId: SENTINEL },
     },
   ],
   [
@@ -510,6 +535,159 @@ describe("renderActivityEvent dialect rendering", () => {
         data: { message: SENTINEL },
       }),
     ).toBe("[session.error]");
+  });
+
+  it("forks the copilot-sdk dialect from the copilot CLI renderer", () => {
+    // The SDK dialect diverges on sub-agent prose (prefixed, not reduced to a
+    // marker) and on the top-level ephemeral flag, so it is a fork.
+    expect(activityRenderer("copilot-sdk")).toBe(copilotSessionEventText);
+    expect(copilotSessionEventText).not.toBe(copilotJsonEventText);
+  });
+
+  it("renders copilot-sdk root messages with content and tool markers, never embedded ids", () => {
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "assistant.message",
+        id: "event-1",
+        parentId: null,
+        timestamp: "2026-07-15T00:00:00Z",
+        data: {
+          content: "reviewing the patch",
+          messageId: "message-1",
+          toolRequests: [
+            { name: "grep_search", toolCallId: SENTINEL, arguments: { query: SENTINEL } },
+            { name: "read_file", toolCallId: SENTINEL },
+          ],
+          sessionId: SENTINEL,
+          requestId: SENTINEL,
+          apiCallId: SENTINEL,
+          reasoningText: SENTINEL,
+          encryptedContent: SENTINEL,
+        },
+      }),
+    ).toBe("reviewing the patch\n[tool_use grep_search]\n[tool_use read_file]");
+  });
+
+  it("prefixes copilot-sdk sub-agent messages with a bounded agent marker", () => {
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "assistant.message",
+        agentId: "helper-agent",
+        data: { content: "scanning tests", sessionId: SENTINEL, requestId: SENTINEL },
+      }),
+    ).toBe("[agent helper-agent] scanning tests");
+    // agentId is untrusted: bounded to 128 chars like tool names.
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "assistant.message",
+        agentId: "x".repeat(500) + SENTINEL,
+        data: { content: "bounded prefix" },
+      }),
+    ).toBe(`[agent ${"x".repeat(128)}] bounded prefix`);
+    // Non-string / blank agentIds do not count as sub-agent events.
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "assistant.message",
+        agentId: 42,
+        data: { content: "root content" },
+      }),
+    ).toBe("root content");
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "assistant.message",
+        agentId: "  ",
+        data: { content: "root content" },
+      }),
+    ).toBe("root content");
+    // Sub-agent tool requests take the same allowlist path as root.
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "assistant.message",
+        agentId: "helper-agent",
+        data: { content: "", toolRequests: [{ name: "view", arguments: { path: SENTINEL } }] },
+      }),
+    ).toBe("[agent helper-agent] [tool_use view]");
+  });
+
+  it("drops copilot-sdk deltas, ephemeral events, and sub-agent reasoning entirely", () => {
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "assistant.message_delta",
+        data: { content: SENTINEL },
+      }),
+    ).toBeUndefined();
+    // The ephemeral flag drops the event regardless of its type.
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "assistant.message",
+        ephemeral: true,
+        data: { content: SENTINEL },
+      }),
+    ).toBeUndefined();
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "assistant.message",
+        agentId: "helper-agent",
+        ephemeral: true,
+        data: { content: SENTINEL },
+      }),
+    ).toBeUndefined();
+    // Sub-agent reasoning types fall to the universal reasoning drop.
+    expect(
+      renderActivityEvent(activityRenderer("copilot-sdk"), {
+        type: "assistant.reasoning",
+        agentId: "helper-agent",
+        data: { content: SENTINEL },
+      }),
+    ).toBeUndefined();
+    expect(
+      renderActivityEvent(activityRenderer("copilot-sdk"), {
+        type: "assistant.reasoning_delta",
+        data: { content: SENTINEL },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("reduces copilot-sdk user messages and non-message events to safe markers", () => {
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "user.message",
+        data: {
+          content: "abcdefgh",
+          sessionId: SENTINEL,
+          requestId: SENTINEL,
+          apiCallId: SENTINEL,
+        },
+      }),
+    ).toBe("[user message 8 chars]");
+    // Sub-agent non-message events are payload-free [subagent <type>] markers.
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "session.idle",
+        agentId: "helper-agent",
+        data: { sessionId: SENTINEL },
+      }),
+    ).toBe("[subagent session.idle]");
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "user.message",
+        agentId: "helper-agent",
+        data: { content: SENTINEL },
+      }),
+    ).toBe("[subagent user.message]");
+    // Root lifecycle/unknown events are payload-free [<type>] markers.
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "session.start",
+        data: { sessionId: SENTINEL },
+      }),
+    ).toBe("[session.start]");
+    expect(
+      renderActivityEvent(copilotSessionEventText, {
+        type: "assistant.usage",
+        data: { model: "gpt-x", apiCallId: SENTINEL },
+      }),
+    ).toBe("[assistant.usage]");
   });
 
   it("renders pi assistant text parts only, dropping thinking parts", () => {

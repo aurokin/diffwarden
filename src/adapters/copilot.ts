@@ -42,6 +42,7 @@ import {
   sdkOutputMetadata,
   sdkPreflightMetadata,
 } from "./metadata.js";
+import { activitySinkFromDebugOutput } from "./reviewer-activity.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -214,6 +215,9 @@ export function createCopilotAdapter(
             packageVersion,
             model: result.model,
             effort: result.effort,
+            // Keyed on the opt-in itself: SDK debug capture is pure
+            // observation, so there is no streaming gate to reflect.
+            debugCapture: input.debugOutput !== undefined,
           }),
         );
         if (result.usage !== undefined) {
@@ -934,6 +938,30 @@ async function runCopilotSession(
   input: ReviewAdapterInput,
   deadline: CopilotRunDeadline,
 ): Promise<CopilotSessionResult> {
+  // Debug capture rides a second, debug-only subscription so a defect in the
+  // summary renderer stays structurally separated from the result handler
+  // below. Event summaries deliberately feed both the live debug events and
+  // the artifact's debug_output recorder (mirroring the claude/droid SDK
+  // adapters): raw SessionEvents embed reasoning fields the debug contract
+  // excludes. Observation only — the session invocation is identical either
+  // way (`streaming: false` stays; events arrive incrementally regardless).
+  const activity = activitySinkFromDebugOutput("copilot-sdk", input.debugOutput);
+  const unsubscribeDebug =
+    activity === undefined ? undefined : session.on((event: SessionEvent) => activity.event(event));
+  try {
+    return await runCopilotSessionInner(session, input, deadline);
+  } finally {
+    // Both paths — success and throw — drop the debug subscription and flush.
+    unsubscribeDebug?.();
+    activity?.end();
+  }
+}
+
+async function runCopilotSessionInner(
+  session: CopilotSession,
+  input: ReviewAdapterInput,
+  deadline: CopilotRunDeadline,
+): Promise<CopilotSessionResult> {
   let lastAssistantContent: string | undefined;
   let lastAssistantModel: string | undefined;
   let lastUsage: unknown;
@@ -1178,10 +1206,12 @@ function copilotOutputMetadata(
     packageVersion?: string | undefined;
     model?: string | undefined;
     effort?: string | undefined;
+    debugCapture?: boolean | undefined;
   },
 ): NonNullable<ReviewAdapterOutput["metadata"]> {
   return sdkOutputMetadata("copilot", {
     ...copilotReviewPolicyMetadata(),
+    ...(options.debugCapture === true ? { debugOutputMode: "event-summary" } : {}),
     ...(options.packageVersion !== undefined ? { sdkVersion: options.packageVersion } : {}),
     copilotBaseDirectory: options.baseDirectory,
     ...(options.sourceBaseDirectory !== undefined
