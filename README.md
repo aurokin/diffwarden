@@ -276,6 +276,14 @@ diffwarden review --target base:main --reviewer droid-cli --ndjson --debug-revie
   is no child stderr to tee, and event capture is withheld entirely — recorded as
   `debugOutputDropped: "shared-server-unverified"` in reviewer metadata — until thread
   scoping of shared-daemon notifications is verified against a live attach-mode capture.
+- Antigravity reviewers have no machine-readable stdout mode, so with
+  `--debug-reviewer-output` the adapter instead tails the transcript JSONL the CLI
+  live-appends under the review's isolated home directory and renders the same one-line
+  summaries (planner prose verbatim, tool activity as `[tool_use ...]` markers, the prompt
+  echo and checkpoints as size markers, chain-of-thought excluded). This is a filesystem
+  poll only — the invocation never changes — and it degrades silently if the transcript
+  never appears (recorded as `debugOutputDropped: "transcript-unavailable"` in reviewer
+  metadata). The raw stdout passthrough (the review text) is captured either way.
 - Without the flag, artifacts and event streams are byte-identical to today.
 
 Sensitivity: debug output is the raw transport transcript. It can contain more context than

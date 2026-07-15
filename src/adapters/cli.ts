@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { invalidCli, missingRequirement, reviewerFailed } from "../core/errors.js";
+import { antigravityTranscriptDebugCapture } from "./antigravity-transcript.js";
 import { assertAntigravityExecutableSupportsReviewPolicy } from "./antigravity.js";
 import { claudeCliReviewPolicyCliFlags } from "./claude-tool-policy.js";
 import {
@@ -219,11 +220,33 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
         // the debug callback; the flush drains any trailing partial line even
         // when the child process fails.
         const streamCapture = createCliStreamDebugCapture(invocation, input);
+        // ⚠️ HARD SAFETY RULE: agy has no machine-readable stdout mode, and it
+        // does NOT reject unknown flags in print mode — it folds them into the
+        // prompt and launches a paid, tool-executing agent run (live-verified
+        // 2026-07-15). Antigravity debug capture therefore never touches the
+        // invocation: it tails the transcript JSONL agy live-appends under the
+        // isolated HOME, a spend-free filesystem probe that degrades silently
+        // when the file never appears. See antigravity-transcript.ts.
+        const transcriptTail = antigravityTranscriptDebugCapture(invocation, input);
         let result: CliRunResult;
         try {
           result = await runCli(invocation, streamCapture?.input ?? input);
         } finally {
           streamCapture?.flush();
+          // stop() never throws; the final drain catches transcript lines the
+          // interval polls missed, even when the child process failed.
+          await transcriptTail?.stop();
+        }
+        if (transcriptTail !== undefined) {
+          // Like pi's live-subscription keying: event-summary mode is reported
+          // only when the transcript was actually discovered (events could
+          // flow); a never-appearing transcript records the degrade instead.
+          invocation.metadata = {
+            ...invocation.metadata,
+            ...(transcriptTail.transcriptDiscovered()
+              ? { debugOutputMode: "event-summary" }
+              : { debugOutputDropped: "transcript-unavailable" }),
+          };
         }
         const output = await spec.parseOutput(result, invocation);
         output.metadata = mergeResolutionMetadataRecords(
