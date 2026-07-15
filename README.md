@@ -252,7 +252,8 @@ diffwarden review --target base:main --reviewer droid-cli --ndjson --debug-revie
 - With `--ndjson`, bounded `reviewer_debug_output` events additionally stream while the
   reviewer runs (up to 8 KiB of text per event; a final event with `truncated: true` marks
   an exhausted stream budget). These events are non-authoritative and never affect results,
-  validation, gating, exit codes, or the terminal-frame guarantee.
+  validation, gating, exit codes, or the terminal-frame guarantee. Consumers must ignore
+  unknown fields on NDJSON events; new optional fields are additive within a schema version.
 - When both `--ndjson` and `--debug-reviewer-output` are set, adapters with a native stream
   output mode switch to it so debug events arrive live instead of at process exit: Claude
   CLI runs with `--output-format stream-json --verbose` and Droid with

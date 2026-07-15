@@ -6,13 +6,26 @@
  * mode, raw JSONL chunks are parsed into compact single-line summaries for
  * reviewer_debug_output events, and the final review result is extracted from
  * the stream transcript so the artifact parses exactly as in the non-stream
- * mode. Reasoning/thinking content is excluded from the rendered summaries.
+ * mode. Per-event rendering (and the reasoning-exclusion policy) lives in the
+ * shared reviewer-activity module; this file is the line-framing layer.
  *
  * Parsing is best-effort by contract: any line that is not valid JSON flips
  * the parser into raw passthrough for the rest of the run, and a transcript
  * with no recognizable final event falls back to the existing parse/repair
  * pipeline. Stream problems must never fail the review.
  */
+
+// stringField/numberField stay imported: the stream-result extractors below
+// still consume them (only per-event rendering moved to reviewer-activity).
+import {
+  type ActivityRenderer,
+  claudeStreamEventText,
+  droidStreamEventText,
+  isRecord,
+  numberField,
+  renderActivityEvent,
+  stringField,
+} from "./reviewer-activity.js";
 
 export type CliStreamFormat = "claude-stream-json" | "droid-stream-json";
 
@@ -22,8 +35,6 @@ export type CliStreamChunkParser = {
   /** Drain the trailing partial line when the process closes. */
   flush(): string[];
 };
-
-type StreamEventRenderer = (event: Record<string, unknown>) => string | undefined;
 
 export function createCliStreamChunkParser(format: CliStreamFormat): CliStreamChunkParser {
   const render = format === "claude-stream-json" ? claudeStreamEventText : droidStreamEventText;
@@ -75,7 +86,7 @@ export function createCliStreamChunkParser(format: CliStreamFormat): CliStreamCh
 }
 
 /** Rendered text, "" to skip the event silently, or undefined for invalid JSON. */
-function renderStreamLine(line: string, render: StreamEventRenderer): string | undefined {
+function renderStreamLine(line: string, render: ActivityRenderer): string | undefined {
   const trimmed = line.trim();
   if (trimmed === "") {
     return "";
@@ -89,106 +100,7 @@ function renderStreamLine(line: string, render: StreamEventRenderer): string | u
   if (!isRecord(event)) {
     return undefined;
   }
-  return render(event) ?? "";
-}
-
-/**
- * One safe summary line per Claude stream-json event. Assistant text is
- * surfaced verbatim; thinking blocks are dropped; tool payloads are reduced to
- * names/sizes so transcripts stay compact and reasoning stays private.
- */
-function claudeStreamEventText(event: Record<string, unknown>): string | undefined {
-  const type = stringField(event, "type");
-  if (type === undefined) {
-    return undefined;
-  }
-
-  if (type === "system") {
-    const subtype = stringField(event, "subtype") ?? "event";
-    return `[system:${subtype}]`;
-  }
-
-  if (type === "assistant" || type === "user") {
-    const message = isRecord(event.message) ? event.message : event;
-    return renderClaudeContentBlocks(message.content);
-  }
-
-  if (type === "result") {
-    const subtype = stringField(event, "subtype") ?? "unknown";
-    const turns = numberField(event, "num_turns");
-    const durationMs = numberField(event, "duration_ms");
-    return `[result:${subtype}${turns !== undefined ? ` turns=${turns}` : ""}${
-      durationMs !== undefined ? ` duration_ms=${durationMs}` : ""
-    }]`;
-  }
-
-  return `[${type}]`;
-}
-
-function renderClaudeContentBlocks(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content.trim() === "" ? undefined : content;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!isRecord(block)) {
-      continue;
-    }
-    const blockType = stringField(block, "type");
-    if (blockType === "text" && typeof block.text === "string" && block.text.trim() !== "") {
-      parts.push(block.text);
-    } else if (blockType === "tool_use") {
-      parts.push(`[tool_use${typeof block.name === "string" ? ` ${block.name}` : ""}]`);
-    } else if (blockType === "tool_result") {
-      parts.push(`[tool_result ${contentSize(block.content)} chars]`);
-    }
-    // thinking / redacted_thinking blocks are intentionally dropped.
-  }
-  return parts.length === 0 ? undefined : parts.join("\n");
-}
-
-/**
- * One safe summary line per Droid stream-json event. The echoed user message
- * is our own review prompt, so it is reduced to a size marker; any
- * reasoning-flavored event type is dropped.
- */
-function droidStreamEventText(event: Record<string, unknown>): string | undefined {
-  const type = stringField(event, "type");
-  if (type === undefined) {
-    return undefined;
-  }
-  if (/reasoning|thinking/i.test(type)) {
-    return undefined;
-  }
-
-  if (type === "system") {
-    const subtype = stringField(event, "subtype") ?? "event";
-    return `[system:${subtype}]`;
-  }
-
-  if (type === "message") {
-    const role = stringField(event, "role");
-    const text = typeof event.text === "string" ? event.text : undefined;
-    if (role === "assistant") {
-      return text === undefined || text.trim() === "" ? undefined : text;
-    }
-    return `[${role ?? "message"} message ${text?.length ?? 0} chars]`;
-  }
-
-  if (type === "completion") {
-    const turns = numberField(event, "numTurns");
-    const durationMs = numberField(event, "durationMs");
-    return `[completion${turns !== undefined ? ` turns=${turns}` : ""}${
-      durationMs !== undefined ? ` duration_ms=${durationMs}` : ""
-    }]`;
-  }
-
-  const name = stringField(event, "name") ?? stringField(event, "tool");
-  return `[${type}${name !== undefined ? ` ${name}` : ""}]`;
+  return renderActivityEvent(render, event) ?? "";
 }
 
 /**
@@ -270,29 +182,4 @@ function parseJsonRecord(line: string): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
-}
-
-function contentSize(content: unknown): number {
-  if (typeof content === "string") {
-    return content.length;
-  }
-  try {
-    return JSON.stringify(content)?.length ?? 0;
-  } catch {
-    return 0;
-  }
-}
-
-function stringField(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
-
-function numberField(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
