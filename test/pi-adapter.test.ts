@@ -1264,6 +1264,251 @@ describe("piAdapter", () => {
   );
 });
 
+describe("piAdapter SDK debug output", () => {
+  const SENTINEL = "LEAK_ME";
+
+  /** Scripted AgentSession subscribe events shared by every debug-output test. */
+  function scriptedPiSessionEvents(): unknown[] {
+    return [
+      { type: "agent_start" },
+      { type: "turn_start" },
+      { type: "message_start", message: { role: "user", content: "review this diff" } },
+      { type: "message_end", message: { role: "user", content: "review this diff" } },
+      { type: "message_start", message: { role: "assistant", content: [] } },
+      {
+        type: "message_update",
+        message: { role: "assistant", content: [{ type: "text", text: `${SENTINEL} partial` }] },
+        assistantMessageEvent: { type: "text_delta", delta: `${SENTINEL} partial` },
+      },
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: `${SENTINEL} reasoning` },
+            { type: "text", text: "checking the diff" },
+            { type: "toolCall", id: "t1", name: "read", arguments: { path: SENTINEL } },
+          ],
+        },
+      },
+      {
+        type: "tool_execution_start",
+        toolCallId: "t1",
+        toolName: "read",
+        args: { path: SENTINEL },
+      },
+      {
+        type: "tool_execution_update",
+        toolCallId: "t1",
+        toolName: "read",
+        args: {},
+        partialResult: SENTINEL,
+      },
+      {
+        type: "tool_execution_end",
+        toolCallId: "t1",
+        toolName: "read",
+        result: { content: [{ type: "text", text: SENTINEL }] },
+        isError: false,
+      },
+      {
+        type: "message_end",
+        message: {
+          role: "toolResult",
+          toolCallId: "t1",
+          toolName: "read",
+          content: [{ type: "text", text: SENTINEL }],
+          isError: false,
+        },
+      },
+      {
+        type: "turn_end",
+        message: { role: "assistant", content: [{ type: "thinking", thinking: SENTINEL }] },
+        toolResults: [{ role: "toolResult", content: [{ type: "text", text: SENTINEL }] }],
+      },
+      { type: "queue_update", steering: [], followUp: [] },
+      {
+        type: "agent_end",
+        messages: [{ role: "assistant", content: [{ type: "thinking", thinking: SENTINEL }] }],
+      },
+    ];
+  }
+
+  function createDebugMockPiAdapter(options: { sessionWithoutSubscribe?: boolean } = {}) {
+    return createMockPiAdapter([{ provider: "test", id: "test-model" }], {
+      ...options,
+      async prompt({ tool, emit }) {
+        for (const event of scriptedPiSessionEvents()) {
+          emit(event);
+        }
+        await tool.execute("tool-call-1", validReview());
+      },
+    });
+  }
+
+  it("streams pi SDK event summaries into the debug callback", async () => {
+    const { adapter } = createDebugMockPiAdapter();
+    const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+
+    const output = await adapter.run({
+      ...input(),
+      debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+    });
+
+    // Exact line sequence: assistant prose renders once at message_end (the
+    // assistant message_start shell and every message_update delta drop),
+    // thinking parts never render, the echoed prompt reduces to size markers,
+    // tool payloads reduce to markers, and agent_end/turn_end render as bare
+    // markers with their embedded thinking-bearing messages dropped.
+    expect(chunks).toEqual([
+      { stream: "stdout", text: "[agent_start]\n" },
+      { stream: "stdout", text: "[turn_start]\n" },
+      { stream: "stdout", text: "[user message 16 chars]\n" },
+      { stream: "stdout", text: "[user message 16 chars]\n" },
+      { stream: "stdout", text: "checking the diff\n" },
+      { stream: "stdout", text: "[tool_use read]\n" },
+      { stream: "stdout", text: "[tool_result]\n" },
+      { stream: "stdout", text: "[tool_result]\n" },
+      { stream: "stdout", text: "[turn_end]\n" },
+      { stream: "stdout", text: "[queue_update]\n" },
+      { stream: "stdout", text: "[agent_end]\n" },
+    ]);
+    expect(JSON.stringify(chunks)).not.toContain(SENTINEL);
+    expect(output.structured).toEqual(validReview());
+    expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+  });
+
+  it("produces an identical artifact with and without debug capture (non-authoritative debug invariant)", async () => {
+    const { adapter } = createDebugMockPiAdapter();
+
+    const baseline = await adapter.run(input());
+    const debugged = await adapter.run({
+      ...input(),
+      debugOutput: { onChunk: () => {} },
+    });
+
+    expect(baseline.metadata).not.toHaveProperty("debugOutputMode");
+    expect(debugged.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+    // Debug output is non-authoritative: removing its metadata key leaves the
+    // artifacts deep-equal (debug_output itself is assembled by the runner
+    // from the recorder, never by the adapter).
+    expect(debugged).not.toHaveProperty("debug_output");
+    const { debugOutputMode: _mode, ...debuggedMetadata } = debugged.metadata ?? {};
+    expect({ ...debugged, metadata: debuggedMetadata }).toEqual(baseline);
+  });
+
+  it("keeps the artifact byte-identical without the debug opt-in", async () => {
+    const { adapter } = createDebugMockPiAdapter();
+
+    const output = await adapter.run(input());
+
+    // Full-artifact fixture: the flag-off run carries no debug traces at all.
+    expect(output).toEqual({
+      structured: validReview(),
+      metadata: {
+        captureMode: "tool-call",
+        readonlyCapability: "tool-restricted",
+        transport: "sdk",
+        availableModelCount: 1,
+        model: "test/test-model",
+        resolvedModel: "test/test-model",
+        modelResolutionSource: "adapter-selection",
+        authSource: "isolated",
+        piImplicitModelSelection: true,
+        piImplicitModelCandidateCount: 1,
+        piImplicitModelSelectionScope: "all-authenticated-models",
+        piSettingsSource: "in-memory",
+        piSettingsDiskInheritance: false,
+        piTimeoutPolicy: "diffwarden-configured-reviewer-timeout",
+        piTransport: "auto",
+        piTransportSource: "settings",
+        piSteeringMode: "one-at-a-time",
+        piSteeringModeSource: "settings",
+        piFollowUpMode: "one-at-a-time",
+        piFollowUpModeSource: "settings",
+        piThinkingBudgets: null,
+        piThinkingBudgetsSource: "unset",
+        piRetryEnabled: true,
+        piRetryMaxRetries: 3,
+        piRetryBaseDelayMs: 2000,
+        piProviderTimeoutMs: null,
+        piProviderTimeoutSource: "sdk-default",
+        piProviderMaxRetries: null,
+        piProviderMaxRetriesSource: "sdk-default",
+        piProviderMaxRetryDelayMs: 60_000,
+        piCompactionEnabled: true,
+        piCompactionReserveTokens: 16_384,
+        piCompactionKeepRecentTokens: 20_000,
+        piHttpIdleTimeoutMs: 300_000,
+        piHttpIdleTimeoutSource: "sdk-default",
+      },
+    });
+  });
+
+  it("subscribes only when a debug sink exists and unsubscribes on success", async () => {
+    const { adapter, calls } = createDebugMockPiAdapter();
+
+    await adapter.run(input());
+    expect(calls.subscribes).toBe(0);
+
+    await adapter.run({ ...input(), debugOutput: { onChunk: () => {} } });
+    expect(calls.subscribes).toBe(1);
+    expect(calls.unsubscribes).toBe(1);
+  });
+
+  it("unsubscribes and disposes when the prompt throws", async () => {
+    const { adapter, calls } = createMockPiAdapter([{ provider: "test", id: "test-model" }], {
+      async prompt() {
+        throw new Error("prompt failed");
+      },
+    });
+
+    await expect(
+      adapter.run({ ...input(), debugOutput: { onChunk: () => {} } }),
+    ).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: "Pi reviewer failed: prompt failed",
+    });
+
+    expect(calls.subscribes).toBe(1);
+    expect(calls.unsubscribes).toBe(1);
+    expect(calls.disposed).toBe(1);
+  });
+
+  it("yields no debug output and no error when the session lacks subscribe", async () => {
+    const { adapter, calls } = createDebugMockPiAdapter({ sessionWithoutSubscribe: true });
+    const chunks: unknown[] = [];
+
+    const output = await adapter.run({
+      ...input(),
+      debugOutput: { onChunk: (stream, text) => chunks.push([stream, text]) },
+    });
+
+    // A session without subscribe is a well-defined absence, not an error:
+    // the review result is untouched and no event-summary mode is claimed.
+    expect(chunks).toEqual([]);
+    expect(calls.subscribes).toBe(0);
+    expect(output.structured).toEqual(validReview());
+    expect(output.metadata).not.toHaveProperty("debugOutputMode");
+  });
+
+  it("does not fail the run when the debug callback throws", async () => {
+    const { adapter } = createDebugMockPiAdapter();
+
+    const output = await adapter.run({
+      ...input(),
+      debugOutput: {
+        onChunk: () => {
+          throw new Error("recorder failed");
+        },
+      },
+    });
+
+    expect(output.structured).toEqual(validReview());
+    expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+  });
+});
+
 type MockPiPromptHandler = (input: {
   prompt: string;
   model: unknown;
@@ -1271,6 +1516,7 @@ type MockPiPromptHandler = (input: {
     execute(toolCallId: string, params: unknown): Promise<unknown>;
   };
   apiKey(provider: string): string | undefined;
+  emit(event: unknown): void;
 }) => Promise<void>;
 
 type MockPiModel = {
@@ -1347,7 +1593,12 @@ type MockPiSettingsManager = {
 
 function createMockPiAdapter(
   availableModels: MockPiModel[] | ((authStorage: MockPiAuthStorage) => MockPiModel[]),
-  options: { prompt?: MockPiPromptHandler; settings?: MockPiSettings } = {},
+  options: {
+    prompt?: MockPiPromptHandler;
+    settings?: MockPiSettings;
+    /** Simulate an older Pi SDK whose sessions expose no subscribe method. */
+    sessionWithoutSubscribe?: boolean;
+  } = {},
 ) {
   const settingsManager = createMockPiSettingsManager(options.settings);
   const calls: {
@@ -1370,6 +1621,8 @@ function createMockPiAdapter(
     }>;
     aborted: number;
     disposed: number;
+    subscribes: number;
+    unsubscribes: number;
     registerProvider: Array<{
       providerName: string;
       config: { baseUrl?: string; apiKey?: string };
@@ -1385,6 +1638,8 @@ function createMockPiAdapter(
     createAgentSession: [],
     aborted: 0,
     disposed: 0,
+    subscribes: 0,
+    unsubscribes: 0,
     registerProvider: [],
     authStorage: createMockPiAuthStorage(),
     settingsManager,
@@ -1440,6 +1695,7 @@ function createMockPiAdapter(
             throw new Error("Missing review_output tool");
           }
 
+          const listeners = new Set<(event: unknown) => void>();
           return {
             session: {
               async prompt(prompt: string) {
@@ -1450,6 +1706,11 @@ function createMockPiAdapter(
                   apiKey(provider) {
                     return calls.authStorage.getRuntimeApiKey(provider);
                   },
+                  emit(event) {
+                    for (const listener of listeners) {
+                      listener(event);
+                    }
+                  },
                 });
               },
               async abort() {
@@ -1458,6 +1719,18 @@ function createMockPiAdapter(
               dispose() {
                 calls.disposed += 1;
               },
+              ...(options.sessionWithoutSubscribe === true
+                ? {}
+                : {
+                    subscribe(listener: (event: unknown) => void) {
+                      listeners.add(listener);
+                      calls.subscribes += 1;
+                      return () => {
+                        listeners.delete(listener);
+                        calls.unsubscribes += 1;
+                      };
+                    },
+                  }),
             },
           };
         },
@@ -1524,6 +1797,7 @@ function createEnvSensitiveMockPiAdapter(options: { prompt?: MockPiPromptHandler
                   apiKey(provider) {
                     return authStorage.getRuntimeApiKey(provider);
                   },
+                  emit() {},
                 });
               },
               async abort() {},

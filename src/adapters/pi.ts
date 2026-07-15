@@ -19,6 +19,7 @@ import {
   sdkPreflightMetadata,
 } from "./metadata.js";
 import { piReviewOutputToolName, piSdkReviewTools } from "./pi-tool-policy.js";
+import { activitySinkFromDebugOutput } from "./reviewer-activity.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -168,6 +169,14 @@ export function createPiAdapter(
       );
       const settingsManager = createPiSettingsManager(sdk, input.reviewer);
 
+      // Event summaries deliberately feed the artifact's debug_output recorder
+      // (mirroring the claude/droid/copilot SDK adapters): raw AgentSession
+      // events embed thinking parts and full tool payloads the debug contract
+      // excludes. Observation only — the prompt invocation is identical either
+      // way, and the review_output capture path stays untouched.
+      const activity = activitySinkFromDebugOutput("pi-sdk", input.debugOutput);
+      let debugCaptureActive = false;
+
       try {
         const sessionManager = sdk.SessionManager.inMemory(input.cwd);
         const { session } = await sdk.createAgentSession({
@@ -190,10 +199,25 @@ export function createPiAdapter(
         });
 
         const removeAbortListener = bindAbortSignal(input.signal, () => session.abort());
+        let unsubscribeDebug: (() => void) | undefined;
         try {
           throwIfAborted(input.signal, "Pi reviewer aborted before prompting");
+          // Subscribe only when a debug sink exists; a session without
+          // subscribe yields zero debug output rather than an error.
+          if (activity !== undefined && typeof session.subscribe === "function") {
+            unsubscribeDebug = session.subscribe((event) => activity.event(event));
+            debugCaptureActive = true;
+          }
           await session.prompt(input.prompt);
         } finally {
+          // Both paths — success and throw — drop the debug subscription and
+          // flush; debug teardown never fails the review.
+          try {
+            unsubscribeDebug?.();
+          } catch {
+            // Debug never fails the review.
+          }
+          activity?.end();
           removeAbortListener();
           session.dispose();
         }
@@ -215,6 +239,10 @@ export function createPiAdapter(
       }
 
       const metadata: ReviewAdapterOutput["metadata"] = sdkOutputMetadata("pi", {
+        // Keyed on the live subscription, not the opt-in alone: unlike the
+        // other SDK adapters, a Pi session without subscribe captures nothing,
+        // so event-summary mode is only reported when events could flow.
+        ...(debugCaptureActive ? { debugOutputMode: "event-summary" } : {}),
         availableModelCount: availableModels.length,
         model: formatPiModel(selectedModel),
         ...piModelResolutionMetadata(input.reviewer, selectedModel),
@@ -357,6 +385,12 @@ type PiSession = {
   prompt(text: string): Promise<void>;
   abort(): Promise<void>;
   dispose(): void;
+  /**
+   * Live event feed running alongside `prompt`. Optional: older Pi SDKs may
+   * not expose it, and its absence means zero debug output — a well-defined
+   * absence, never an error.
+   */
+  subscribe?(listener: (event: unknown) => void): () => void;
 };
 
 type PiToolDefinition = {

@@ -15,6 +15,7 @@ import {
   droidStreamEventText,
   opencodeJsonEventText,
   piJsonEventText,
+  piSessionEventText,
   renderActivityEvent,
 } from "../src/adapters/reviewer-activity.js";
 
@@ -34,6 +35,7 @@ const dialectRenderers: Array<[ActivityDialect, ActivityRenderer]> = [
   ["claude-sdk", activityRenderer("claude-sdk")],
   ["droid-sdk", activityRenderer("droid-sdk")],
   ["copilot-sdk", activityRenderer("copilot-sdk")],
+  ["pi-sdk", activityRenderer("pi-sdk")],
 ];
 
 /**
@@ -163,6 +165,55 @@ const adversarialEvents: Array<[string, unknown]> = [
     {
       type: "agent_end",
       messages: [{ role: "assistant", content: [{ type: "thinking", thinking: SENTINEL }] }],
+    },
+  ],
+  [
+    "pi turn_end embedded message and tool results",
+    {
+      type: "turn_end",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: SENTINEL },
+          { type: "text", text: SENTINEL },
+        ],
+      },
+      toolResults: [{ role: "toolResult", content: [{ type: "text", text: SENTINEL }] }],
+    },
+  ],
+  [
+    "pi huge message_update re-embedding",
+    {
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: SENTINEL.repeat(200_000) }],
+      },
+      assistantMessageEvent: { type: "text_delta", delta: SENTINEL },
+    },
+  ],
+  [
+    "pi tool execution args",
+    { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: SENTINEL } },
+  ],
+  [
+    "pi tool execution partial result",
+    {
+      type: "tool_execution_update",
+      toolCallId: "t1",
+      toolName: "read",
+      args: {},
+      partialResult: SENTINEL,
+    },
+  ],
+  [
+    "pi tool execution result",
+    {
+      type: "tool_execution_end",
+      toolCallId: "t1",
+      toolName: "read",
+      result: { content: [{ type: "text", text: SENTINEL }] },
+      isError: false,
     },
   ],
 ];
@@ -733,6 +784,115 @@ describe("renderActivityEvent dialect rendering", () => {
         messages: [{ role: "assistant", content: [{ type: "thinking", thinking: SENTINEL }] }],
       }),
     ).toBe("[agent_end]");
+  });
+
+  it("forks the pi-sdk dialect from the pi CLI renderer", () => {
+    expect(activityRenderer("pi-sdk")).toBe(piSessionEventText);
+    expect(activityRenderer("pi-sdk")).not.toBe(piJsonEventText);
+  });
+
+  it("renders pi-sdk assistant prose once, at message_end, dropping thinking and toolCall parts", () => {
+    // message_start carries the in-progress shell of the same message and
+    // message_update re-embeds the accumulated message per delta; only
+    // message_end renders, so prose appears at most once by construction.
+    expect(
+      renderActivityEvent(piSessionEventText, {
+        type: "message_start",
+        message: { role: "assistant", content: [{ type: "text", text: SENTINEL }] },
+      }),
+    ).toBeUndefined();
+    expect(
+      renderActivityEvent(piSessionEventText, {
+        type: "message_update",
+        message: { role: "assistant", content: [{ type: "text", text: SENTINEL }] },
+        assistantMessageEvent: { type: "text_delta", delta: SENTINEL },
+      }),
+    ).toBeUndefined();
+    expect(
+      renderActivityEvent(piSessionEventText, {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: SENTINEL },
+            { type: "text", text: "pi sdk review text" },
+            { type: "toolCall", id: "t1", name: "read", arguments: { path: SENTINEL } },
+          ],
+        },
+      }),
+    ).toBe("pi sdk review text");
+  });
+
+  it("reduces pi-sdk user, tool, and lifecycle events to safe markers", () => {
+    expect(
+      renderActivityEvent(piSessionEventText, {
+        type: "message_start",
+        message: { role: "user", content: "review this diff", timestamp: 1 },
+      }),
+    ).toBe("[user message 16 chars]");
+    expect(
+      renderActivityEvent(piSessionEventText, {
+        type: "message_end",
+        message: { role: "user", content: [{ type: "text", text: "abcdefgh" }] },
+      }),
+    ).toBe("[user message 35 chars]");
+    expect(
+      renderActivityEvent(piSessionEventText, {
+        type: "tool_execution_start",
+        toolCallId: "t1",
+        toolName: "read",
+        args: { path: SENTINEL },
+      }),
+    ).toBe("[tool_use read]");
+    expect(
+      renderActivityEvent(piSessionEventText, {
+        type: "tool_execution_update",
+        toolCallId: "t1",
+        toolName: "read",
+        args: {},
+        partialResult: SENTINEL,
+      }),
+    ).toBeUndefined();
+    expect(
+      renderActivityEvent(piSessionEventText, {
+        type: "tool_execution_end",
+        toolCallId: "t1",
+        toolName: "read",
+        result: { content: [{ type: "text", text: SENTINEL }] },
+        isError: false,
+      }),
+    ).toBe("[tool_result]");
+    expect(
+      renderActivityEvent(piSessionEventText, {
+        type: "message_end",
+        message: { role: "toolResult", content: [{ type: "text", text: SENTINEL }] },
+      }),
+    ).toBe("[tool_result]");
+    expect(
+      renderActivityEvent(piSessionEventText, {
+        type: "turn_end",
+        message: { role: "assistant", content: [{ type: "thinking", thinking: SENTINEL }] },
+        toolResults: [{ role: "toolResult", content: [{ type: "text", text: SENTINEL }] }],
+      }),
+    ).toBe("[turn_end]");
+    expect(
+      renderActivityEvent(piSessionEventText, {
+        type: "agent_end",
+        messages: [{ role: "assistant", content: [{ type: "thinking", thinking: SENTINEL }] }],
+      }),
+    ).toBe("[agent_end]");
+    for (const type of [
+      "agent_settled",
+      "queue_update",
+      "compaction_start",
+      "compaction_end",
+      "auto_retry_start",
+      "auto_retry_end",
+    ]) {
+      expect(renderActivityEvent(piSessionEventText, { type, payload: SENTINEL })).toBe(
+        `[${type}]`,
+      );
+    }
   });
 });
 

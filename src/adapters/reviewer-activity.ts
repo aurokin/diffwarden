@@ -35,7 +35,8 @@ export type ActivityDialect =
   | "pi-json"
   | "claude-sdk"
   | "droid-sdk"
-  | "copilot-sdk";
+  | "copilot-sdk"
+  | "pi-sdk";
 
 /** Rendered summary line, or undefined to drop the event silently. */
 export type ActivityRenderer = (event: Record<string, unknown>) => string | undefined;
@@ -68,6 +69,7 @@ export function activityRenderer(dialect: ActivityDialect): ActivityRenderer {
     "claude-sdk": claudeStreamEventText,
     "droid-sdk": droidSdkStreamEventText,
     "copilot-sdk": copilotSessionEventText,
+    "pi-sdk": piSessionEventText,
   };
   return renderers[dialect];
 }
@@ -565,6 +567,70 @@ export function piJsonEventText(event: Record<string, unknown>): string | undefi
 
   const name = stringField(event, "toolName") ?? stringField(event, "tool_name");
   return `[${type}${name !== undefined ? ` ${boundedMarkerName(name)}` : ""}]`;
+}
+
+/**
+ * One safe summary line per Pi SDK `AgentSession.subscribe` event. Forked from
+ * the pi-json CLI dialect rather than shared: the SDK's typed AgentEvent union
+ * carries tool activity as `tool_execution_*` events (top-level toolName) that
+ * reduce to `[tool_use <name>]`/`[tool_result]` markers, and tool-result
+ * message artifacts reduce to a bare `[tool_result]` marker because their
+ * payloads carry raw tool output (file contents). The shared hazards match
+ * pi-json:
+ *
+ * - `message_update` re-embeds the full accumulated message on every delta
+ *   (O(n^2) duplication), so it is dropped outright — no delta coalescer;
+ *   pi debug output is terminal-message-granular by design.
+ * - Assistant prose renders once, at `message_end` (text parts only, thinking
+ *   parts drop); `message_start` carries the in-progress shell of the same
+ *   message and never renders prose.
+ * - User messages echo the full review prompt including the diff, so they
+ *   reduce to `[user message N chars]` size markers.
+ * - `agent_end`/`turn_end` embed full message arrays (thinking parts included)
+ *   that never render — bare markers only.
+ *
+ * Everything else (queue_update, compaction_*, auto_retry_*, unknown future
+ * types) is a payload-free `[<type>]` marker.
+ */
+export function piSessionEventText(event: Record<string, unknown>): string | undefined {
+  const type = stringField(event, "type");
+  if (type === undefined) {
+    return undefined;
+  }
+
+  if (type === "message_update") {
+    return undefined; // re-embeds the full accumulated message per delta
+  }
+
+  if (type === "message_start" || type === "message_end") {
+    const message = isRecord(event.message) ? event.message : undefined;
+    if (message === undefined) {
+      return `[${type}]`;
+    }
+    const role = stringField(message, "role");
+    if (role === "assistant") {
+      // Prose renders once, at message_end (dedupe by construction).
+      return type === "message_end" ? piAssistantTextParts(message.content) : undefined;
+    }
+    if (role === "toolResult") {
+      return "[tool_result]"; // payload carries raw tool output
+    }
+    return sizeMarker(`${role ?? "message"} message`, contentSize(message.content ?? ""));
+  }
+
+  if (type === "tool_execution_start") {
+    return toolUseMarker(stringField(event, "toolName"));
+  }
+  if (type === "tool_execution_update") {
+    return undefined; // partialResult streams per delta; markers render at start/end
+  }
+  if (type === "tool_execution_end") {
+    return "[tool_result]";
+  }
+
+  // agent_start/agent_end/turn_start/turn_end (their embedded messages never
+  // render), queue_update, compaction_*, auto_retry_*, and unknown types.
+  return `[${type}]`;
 }
 
 /** Text parts only: thinking/toolCall/unknown parts drop silently. */
