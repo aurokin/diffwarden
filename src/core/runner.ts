@@ -71,6 +71,11 @@ export type RunReviewOptions = {
   promptFocus?: string;
   /** Opt-in bounded raw transport capture (--debug-reviewer-output). */
   debugReviewerOutput?: boolean;
+  /**
+   * True when debug events have a live consumer (--ndjson). Lets transports
+   * switch to native stream output modes; requires debugReviewerOutput.
+   */
+  debugReviewerStreaming?: boolean;
 };
 
 export type RunReviewBatchOptions = RunReviewOptions & {
@@ -471,7 +476,9 @@ async function* runPhase(params: {
   const runs = runnable.map(({ index, outcome }) => {
     const reviewerId = reviewers[index]?.id ?? "unknown";
     const debug =
-      options.debugReviewerOutput === true ? reviewerDebugCapture(reviewerId, queue) : undefined;
+      options.debugReviewerOutput === true
+        ? reviewerDebugCapture(reviewerId, queue, options.debugReviewerStreaming === true)
+        : undefined;
     return runReviewerOutcome({
       outcome,
       cwd: options.cwd,
@@ -514,6 +521,7 @@ async function* runPhase(params: {
 
 type ReviewerDebugCapture = {
   recorder: DebugOutputRecorder;
+  streaming: boolean;
   onChunk: (stream: "stdout" | "stderr", text: string) => void;
 };
 
@@ -524,10 +532,12 @@ type ReviewerDebugCapture = {
 function reviewerDebugCapture(
   reviewerId: string,
   queue: AsyncEventQueue<ReviewEvent>,
+  streaming: boolean,
 ): ReviewerDebugCapture {
   const recorder = createDebugOutputRecorder();
   return {
     recorder,
+    streaming,
     onChunk(stream, text) {
       for (const chunk of recorder.record(stream, text)) {
         queue.push(
@@ -783,7 +793,9 @@ async function runReviewerOutcome(options: {
       ),
       changedLineRanges: options.changedLineRanges,
       env: options.env,
-      ...(options.debug !== undefined ? { onDebugChunk: options.debug.onChunk } : {}),
+      ...(options.debug !== undefined
+        ? { onDebugChunk: options.debug.onChunk, debugStreaming: options.debug.streaming }
+        : {}),
     });
     return withDebugOutput(
       {
@@ -856,6 +868,7 @@ type SingleReviewerOptions = {
   changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
   env: NodeJS.ProcessEnv;
   onDebugChunk?: (stream: "stdout" | "stderr", text: string) => void;
+  debugStreaming?: boolean;
 };
 
 /**
@@ -932,7 +945,12 @@ async function runReviewerAttempt(
     // Both attempts share the reviewer's recorder, so a retried run's transcript
     // includes the failing first attempt under the same per-stream budget.
     ...(options.onDebugChunk !== undefined
-      ? { debugOutput: { onChunk: options.onDebugChunk } }
+      ? {
+          debugOutput: {
+            onChunk: options.onDebugChunk,
+            ...(options.debugStreaming === true ? { streaming: true } : {}),
+          },
+        }
       : {}),
   };
   const output = await withTimeout(

@@ -762,6 +762,9 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     ...(options.strict === true ? { strict: true } : {}),
     ...(options.debugReviewerOutput === true ? { debugReviewerOutput: true } : {}),
+    // Streaming intent lets transports switch to native stream output modes;
+    // it exists only when the events have a live consumer (--ndjson).
+    ...(options.debugReviewerOutput === true && ndjson ? { debugReviewerStreaming: true } : {}),
     ...(loadedConfig !== undefined ? { config: loadedConfig.config } : {}),
   };
   const events =

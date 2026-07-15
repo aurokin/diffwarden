@@ -62,7 +62,9 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
    - Omit mode flags only when a human wants to watch the interactive display.
    - Only when debugging reviewer behavior, add `--debug-reviewer-output` to capture a
      bounded raw stdout/stderr transcript per CLI-transport reviewer (`debug_output` on the
-     reviewer artifact; streamed `reviewer_debug_output` events with `--ndjson`). It is
+     reviewer artifact; streamed `reviewer_debug_output` events with `--ndjson`). With
+     `--ndjson`, Claude and Droid CLI reviewers switch to their native stream output so
+     debug events arrive live as compact summaries with reasoning excluded. It is
      token-heavy and may contain sensitive raw provider output; leave it off for normal
      reviews.
 

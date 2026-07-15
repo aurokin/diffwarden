@@ -2028,6 +2028,171 @@ describe("cli adapter debug output capture", () => {
   });
 });
 
+describe("cli adapter streaming debug output", () => {
+  function collectChunks() {
+    const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+    return {
+      chunks,
+      onChunk: (stream: "stdout" | "stderr", text: string) => chunks.push({ stream, text }),
+      stdoutText: () =>
+        chunks
+          .filter((chunk) => chunk.stream === "stdout")
+          .map((chunk) => chunk.text)
+          .join(""),
+    };
+  }
+
+  function claudeStreamSetup(supportsStreamJson = true) {
+    const harness = createHarness("claude");
+    const adapter = createCliAdapter("claude");
+    const reviewer = createReviewer("claude", harness.executable, {
+      sdkOptions: { authMode: "api-key" },
+    });
+    const env = {
+      ...harness.env,
+      ANTHROPIC_API_KEY: "test-key",
+      ...(supportsStreamJson ? { DIFFWARDEN_FAKE_CLAUDE_OPTIONAL_HELP: "1" } : {}),
+    };
+    return { harness, adapter, reviewer, env };
+  }
+
+  it("switches Claude to stream-json output only when streaming is requested", async () => {
+    const { harness, adapter, reviewer, env } = claudeStreamSetup();
+    const capture = collectChunks();
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env,
+      debugOutput: { onChunk: capture.onChunk, streaming: true },
+    });
+    const invocation = harness.readInvocation();
+
+    const formatIndex = invocation.args.indexOf("--output-format");
+    expect(invocation.args[formatIndex + 1]).toBe("stream-json");
+    expect(invocation.args).toContain("--verbose");
+    expect(output.metadata).toMatchObject({ debugStreamMode: "stream-json" });
+    // The artifact parses from the extracted terminal result event.
+    expect(output.structured).toMatchObject({ overall_explanation: "claude ok" });
+    // Debug chunks are compact event summaries, with reasoning excluded.
+    const stdoutText = capture.stdoutText();
+    expect(stdoutText).toContain("[system:init]");
+    expect(stdoutText).toContain("claude streaming");
+    expect(stdoutText).toContain("[result:success turns=2 duration_ms=5]");
+    expect(stdoutText).not.toContain("secret reasoning");
+  });
+
+  it("keeps the Claude invocation on json output when capture is not streaming", async () => {
+    const { harness, adapter, reviewer, env } = claudeStreamSetup();
+    const capture = collectChunks();
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env,
+      debugOutput: { onChunk: capture.onChunk },
+    });
+    const invocation = harness.readInvocation();
+
+    const formatIndex = invocation.args.indexOf("--output-format");
+    expect(invocation.args[formatIndex + 1]).toBe("json");
+    expect(invocation.args).not.toContain("stream-json");
+    expect(invocation.args).not.toContain("--verbose");
+    expect(output.metadata).not.toHaveProperty("debugStreamMode");
+    expect(output.structured).toMatchObject({ overall_explanation: "claude ok" });
+    // Raw passthrough: the callback sees the buffered json output unmodified.
+    expect(capture.stdoutText()).toContain('"result"');
+  });
+
+  it("degrades Claude streaming to json output when the CLI lacks stream-json", async () => {
+    const { harness, adapter, reviewer, env } = claudeStreamSetup(false);
+    const capture = collectChunks();
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      env,
+      debugOutput: { onChunk: capture.onChunk, streaming: true },
+    });
+    const invocation = harness.readInvocation();
+
+    const formatIndex = invocation.args.indexOf("--output-format");
+    expect(invocation.args[formatIndex + 1]).toBe("json");
+    expect(invocation.args).not.toContain("--verbose");
+    expect(output.metadata).toMatchObject({ debugStreamModeDropped: "cli-unsupported" });
+    expect(output.structured).toMatchObject({ overall_explanation: "claude ok" });
+  });
+
+  it("switches Droid to stream-json output when the probe confirms support", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable);
+    const capture = collectChunks();
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      debugOutput: { onChunk: capture.onChunk, streaming: true },
+    });
+    const invocation = harness.readInvocation();
+
+    const formatIndex = invocation.args.indexOf("--output-format");
+    expect(invocation.args[formatIndex + 1]).toBe("stream-json");
+    expect(output.metadata).toMatchObject({ debugStreamMode: "stream-json" });
+    // The artifact parses from the completion event mapped onto the json envelope.
+    expect(output.text).toContain("droid text");
+    const stdoutText = capture.stdoutText();
+    expect(stdoutText).toContain("[system:init]");
+    expect(stdoutText).toContain("[user message");
+    expect(stdoutText).toContain("droid streaming");
+    expect(stdoutText).toContain("[completion turns=1 duration_ms=4]");
+    expect(stdoutText).not.toContain("secret reasoning");
+  });
+
+  it("keeps the Droid invocation on json output when capture is not streaming", async () => {
+    const harness = createHarness("droid");
+    const adapter = createCliAdapter("droid");
+    const reviewer = createReviewer("droid", harness.executable);
+    const capture = collectChunks();
+
+    const output = await adapter.run({
+      ...createInput(reviewer, harness),
+      debugOutput: { onChunk: capture.onChunk },
+    });
+    const invocation = harness.readInvocation();
+
+    const formatIndex = invocation.args.indexOf("--output-format");
+    expect(invocation.args[formatIndex + 1]).toBe("json");
+    expect(invocation.args).not.toContain("stream-json");
+    expect(output.metadata).not.toHaveProperty("debugStreamMode");
+    expect(output.text).toContain("droid text");
+  });
+
+  it.each([
+    ["canonical wording", "1"],
+    ["alternative wording", "alt"],
+  ])(
+    "degrades Droid streaming to json when the probe rejects stream-json (%s)",
+    async (_name, variant) => {
+      const harness = createHarness("droid");
+      const adapter = createCliAdapter("droid");
+      const reviewer = createReviewer("droid", harness.executable);
+      const capture = collectChunks();
+
+      const output = await adapter.run({
+        ...createInput(reviewer, harness),
+        env: {
+          ...harness.env,
+          DIFFWARDEN_FAKE_DROID_NO_STREAM_JSON: variant,
+        },
+        debugOutput: { onChunk: capture.onChunk, streaming: true },
+      });
+      const invocation = harness.readInvocation();
+
+      const formatIndex = invocation.args.indexOf("--output-format");
+      expect(invocation.args[formatIndex + 1]).toBe("json");
+      expect(output.metadata).toMatchObject({ debugStreamModeDropped: "cli-unsupported" });
+      expect(output.text).toContain("droid text");
+    },
+  );
+});
+
 function createHarness(engine: CliEngine) {
   root = mkdtempSync(path.join(tmpdir(), "diffwarden-cli-adapter-"));
   const cwd = path.join(root, "repo");
@@ -2250,6 +2415,27 @@ if (engine === "droid" && process.argv[2] === "exec" && process.argv.includes("-
   process.stdout.write(JSON.stringify(tools));
   process.exit(0);
 }
+if (
+  engine === "droid" &&
+  process.argv[2] === "exec" &&
+  !process.argv.includes("--help") &&
+  !process.argv.includes("--list-tools") &&
+  !process.argv.includes("--file")
+) {
+  // Output-format probe: droid validates arguments before reading any prompt.
+  const formatIndex = process.argv.indexOf("--output-format");
+  const format = formatIndex === -1 ? undefined : process.argv[formatIndex + 1];
+  if (format === "stream-json" && process.env.DIFFWARDEN_FAKE_DROID_NO_STREAM_JSON) {
+    if (process.env.DIFFWARDEN_FAKE_DROID_NO_STREAM_JSON === "alt") {
+      process.stderr.write("error: invalid value 'stream-json' for '--output-format <FORMAT>'");
+    } else {
+      process.stderr.write("error: Invalid --output-format value: stream-json");
+    }
+    process.exit(1);
+  }
+  process.stderr.write("error: a prompt or --file is required");
+  process.exit(1);
+}
 if (engine === "antigravity" && process.argv.includes("--version")) {
   if (process.env.DIFFWARDEN_ANTIGRAVITY_VERSION_HOME_CAPTURE_PATH) {
     fs.appendFileSync(
@@ -2343,13 +2529,30 @@ if (engine === "codex") {
   const outputIndex = process.argv.indexOf("--output-last-message");
   fs.writeFileSync(process.argv[outputIndex + 1], JSON.stringify(review));
 } else if (engine === "claude") {
-  process.stdout.write(JSON.stringify({ result: review }));
+  if (process.argv.includes("stream-json")) {
+    process.stdout.write(JSON.stringify({ type: "system", subtype: "init" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [
+      { type: "thinking", thinking: "secret reasoning" },
+      { type: "text", text: "claude streaming" },
+    ] } }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "result", subtype: "success", num_turns: 2, duration_ms: 5, result: review }) + "\\n");
+  } else {
+    process.stdout.write(JSON.stringify({ result: review }));
+  }
 } else if (engine === "cursor") {
   process.stdout.write(JSON.stringify({ result: engine + " text" }));
 } else if (engine === "gemini") {
   process.stdout.write(JSON.stringify({ response: engine + " text" }));
 } else if (engine === "droid") {
-  process.stdout.write(JSON.stringify({ result: engine + " text", session_id: process.env.DIFFWARDEN_FAKE_DROID_SESSION_ID }));
+  if (process.argv.includes("stream-json")) {
+    process.stdout.write(JSON.stringify({ type: "system", subtype: "init" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "message", role: "user", text: "review prompt" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "reasoning", text: "secret reasoning" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "message", role: "assistant", text: "droid streaming" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "completion", finalText: engine + " text", numTurns: 1, durationMs: 4, session_id: process.env.DIFFWARDEN_FAKE_DROID_SESSION_ID }) + "\\n");
+  } else {
+    process.stdout.write(JSON.stringify({ result: engine + " text", session_id: process.env.DIFFWARDEN_FAKE_DROID_SESSION_ID }));
+  }
 } else if (engine === "grok") {
   process.stdout.write(JSON.stringify({ result: engine + " text" }));
 } else if (engine === "copilot") {

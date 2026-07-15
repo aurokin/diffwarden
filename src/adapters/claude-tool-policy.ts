@@ -38,6 +38,9 @@ export const claudeCliOptionalCliFlags = [
   "--bare",
   "--fallback-model",
   "--max-budget-usd",
+  // Not a flag: the --output-format value that gates stream-mode switching.
+  // Probed with the same help-text inclusion check as the flags above.
+  "stream-json",
 ] as const;
 
 export function claudeReviewToolList(): string[] {

@@ -28,6 +28,12 @@ export type ReviewAdapterInput = {
    */
   debugOutput?: {
     onChunk: (stream: "stdout" | "stderr", text: string) => void;
+    /**
+     * True when a live consumer is attached (--ndjson). Only then may a
+     * transport switch the engine to its native stream output mode; without
+     * it invocations must stay identical to a run with no debug capture.
+     */
+    streaming?: boolean;
   };
 };
 

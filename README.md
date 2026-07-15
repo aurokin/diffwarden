@@ -253,6 +253,19 @@ diffwarden review --target base:main --reviewer droid-cli --ndjson --debug-revie
   reviewer runs (up to 8 KiB of text per event; a final event with `truncated: true` marks
   an exhausted stream budget). These events are non-authoritative and never affect results,
   validation, gating, exit codes, or the terminal-frame guarantee.
+- When both `--ndjson` and `--debug-reviewer-output` are set, adapters with a native stream
+  output mode switch to it so debug events arrive live instead of at process exit: Claude
+  CLI runs with `--output-format stream-json --verbose` and Droid with
+  `--output-format stream-json` (support is probed first; CLIs without the mode silently
+  stay on `json`, recorded as `debugStreamModeDropped` in reviewer metadata). Stream events
+  are rendered as compact one-line summaries — assistant text verbatim, tool activity as
+  `[tool_use ...]`-style markers, reasoning/thinking content excluded — and the final
+  review result is extracted from the stream so the artifact parses identically to
+  non-stream runs. In stream mode the artifact's `debug_output.stdout` records those same
+  summaries rather than the raw JSONL (which embeds reasoning content and would waste the
+  bounded budget), so the artifact transcript matches the streamed events. Unparseable stream output degrades to raw passthrough; stream problems
+  never fail the review. Without `--ndjson`, invocations are unchanged even when
+  `--debug-reviewer-output` is set.
 - Without the flag, artifacts and event streams are byte-identical to today.
 
 Sensitivity: debug output is the raw transport transcript. It can contain more context than
