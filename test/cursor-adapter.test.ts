@@ -356,6 +356,213 @@ describe("cursorAdapter", () => {
     });
   });
 
+  describe("SDK debug output (onStep step summaries)", () => {
+    const SENTINEL = "LEAK_ME";
+
+    /**
+     * Scripted ConversationSteps mirroring the live-captured shapes
+     * (2026-07-15): thinking text, a read toolCall whose result embeds the
+     * raw file body, an mcp toolCall, plus defensive user-flavored and
+     * unknown step types. Synthetic fixtures only — no raw provider capture.
+     */
+    function scriptedCursorSteps(): unknown[] {
+      return [
+        {
+          type: "thinkingMessage",
+          message: { text: `${SENTINEL} reasoning`, thinkingDurationMs: 5 },
+        },
+        { type: "assistantMessage", message: { text: "checking the diff" } },
+        {
+          type: "toolCall",
+          message: {
+            type: "read",
+            args: { path: "/repo/file.ts" },
+            result: { status: "success", value: { content: SENTINEL, totalLines: 1 } },
+          },
+        },
+        {
+          type: "toolCall",
+          message: { type: "mcp", args: { toolName: "search-docs", args: { query: SENTINEL } } },
+        },
+        { type: "userMessage", message: { text: "12345678" } },
+        { type: "somethingNew", payload: SENTINEL },
+        { type: "assistantMessage", message: { text: "cursor ok" } },
+      ];
+    }
+
+    type RecordedSend = { prompt: string; options: MockCursorSendOptions | undefined };
+
+    function createStepAdapter(
+      sendCalls: RecordedSend[],
+      resultOverrides: Partial<Awaited<ReturnType<MockCursorRun["wait"]>>> = {},
+    ) {
+      return createCursorAdapter({
+        async loadSdk() {
+          return mockCursorSdk({
+            async createAgent() {
+              return {
+                agentId: "agent-1",
+                async send(prompt, options) {
+                  sendCalls.push({ prompt, options });
+                  return {
+                    id: "run-1",
+                    async cancel() {},
+                    async wait() {
+                      // Steps fire while wait() is pending, from the SDK's own
+                      // stream loop; the mock replays them before resolving.
+                      for (const step of scriptedCursorSteps()) {
+                        await options?.onStep?.({ step });
+                      }
+                      return {
+                        status: "finished",
+                        result: "cursor ok",
+                        model: "composer-2.5",
+                        durationMs: 12,
+                        ...resultOverrides,
+                      };
+                    },
+                  };
+                },
+                async [Symbol.asyncDispose]() {},
+              };
+            },
+          });
+        },
+      });
+    }
+
+    it("streams cursor SDK step summaries into the debug callback", async () => {
+      const adapter = createStepAdapter([]);
+      const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+
+      const output = await adapter.run({
+        ...input({ env: { CURSOR_API_KEY: "key" } }),
+        debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+      });
+
+      // Exact line sequence: assistant text verbatim, thinking steps never
+      // render (universal reasoning drop), tool payloads reduce to bounded
+      // name markers, user-flavored steps reduce to size markers, unknown
+      // steps degrade to payload-free markers, and the adapter synthesizes a
+      // terminal result marker after wait() resolves.
+      expect(chunks).toEqual([
+        { stream: "stdout", text: "checking the diff\n" },
+        { stream: "stdout", text: "[tool_use read]\n" },
+        { stream: "stdout", text: "[tool_use mcp:search-docs]\n" },
+        { stream: "stdout", text: "[user message 8 chars]\n" },
+        { stream: "stdout", text: "[somethingNew]\n" },
+        { stream: "stdout", text: "cursor ok\n" },
+        { stream: "stdout", text: "[result:finished duration_ms=12]\n" },
+      ]);
+      expect(JSON.stringify(chunks)).not.toContain(SENTINEL);
+      expect(output.text).toBe("cursor ok");
+      expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+    });
+
+    it("produces an identical artifact with and without debug capture (non-authoritative debug invariant)", async () => {
+      const adapter = createStepAdapter([]);
+
+      const baseline = await adapter.run(input({ env: { CURSOR_API_KEY: "key" } }));
+      const debugged = await adapter.run({
+        ...input({ env: { CURSOR_API_KEY: "key" } }),
+        debugOutput: { onChunk: () => {} },
+      });
+
+      expect(baseline.metadata).not.toHaveProperty("debugOutputMode");
+      expect(debugged.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+      // Debug output is non-authoritative: removing its metadata key leaves
+      // the artifacts deep-equal (debug_output itself is assembled by the
+      // runner from the recorder, never by the adapter).
+      expect(debugged).not.toHaveProperty("debug_output");
+      const { debugOutputMode: _mode, ...debuggedMetadata } = debugged.metadata ?? {};
+      expect({ ...debugged, metadata: debuggedMetadata }).toEqual(baseline);
+    });
+
+    it("keeps the artifact byte-identical without the debug opt-in", async () => {
+      const adapter = createStepAdapter([]);
+
+      const output = await adapter.run(input({ env: { CURSOR_API_KEY: "key" } }));
+
+      // Full-artifact fixture: the flag-off run carries no debug traces at all.
+      expect(output).toEqual({
+        text: "cursor ok",
+        metadata: {
+          captureMode: "text",
+          readonlyCapability: "prompt-only",
+          transport: "sdk",
+          agentId: "agent-1",
+          runId: "run-1",
+          cursorMode: cursorReviewMode,
+          cursorAutoReview: cursorReviewAutoReview,
+          cursorSandboxEnabled: cursorReviewSandboxOptions.enabled,
+          cursorSettingSources: cursorReviewSettingSources,
+          cursorMcpServers: [],
+          cursorStore: "jsonl-ephemeral",
+          model: "composer-2.5",
+          requestedModel: "composer-2.5",
+          resolvedModel: "composer-2.5",
+          modelResolutionSource: "provider-result",
+          durationMs: 12,
+        },
+      });
+    });
+
+    it("keeps the send invocation identical apart from the onStep observer", async () => {
+      const sendCalls: RecordedSend[] = [];
+      const adapter = createStepAdapter(sendCalls);
+
+      await adapter.run(input({ env: { CURSOR_API_KEY: "key" } }));
+      await adapter.run({
+        ...input({ env: { CURSOR_API_KEY: "key" } }),
+        debugOutput: { onChunk: () => {} },
+      });
+
+      // Flag-off keeps the exact `send(prompt)` invocation (no options
+      // argument at all); the debug run adds only the onStep observer.
+      expect(sendCalls).toHaveLength(2);
+      expect(sendCalls[0]?.options).toBeUndefined();
+      expect(sendCalls[1]?.prompt).toBe(sendCalls[0]?.prompt);
+      expect(Object.keys(sendCalls[1]?.options ?? {})).toEqual(["onStep"]);
+    });
+
+    it("does not fail the run when the debug callback throws", async () => {
+      const adapter = createStepAdapter([]);
+
+      const output = await adapter.run({
+        ...input({ env: { CURSOR_API_KEY: "key" } }),
+        debugOutput: {
+          onChunk: () => {
+            throw new Error("recorder failed");
+          },
+        },
+      });
+
+      expect(output.text).toBe("cursor ok");
+      expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+    });
+
+    it("still captures step summaries and the terminal marker when the run fails", async () => {
+      const adapter = createStepAdapter([], { status: "error", result: "" });
+      const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+
+      await expect(
+        adapter.run({
+          ...input({ env: { CURSOR_API_KEY: "key" } }),
+          debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+        }),
+      ).rejects.toMatchObject({
+        code: "reviewer_failed",
+        message: "Cursor reviewer finished with status: error",
+      });
+
+      // The throw path still flushed the captured steps and the synthesized
+      // terminal marker (debug teardown lives in the adapter's finally).
+      expect(chunks.map((chunk) => chunk.text)).toContain("[result:error duration_ms=12]\n");
+      expect(chunks.map((chunk) => chunk.text)).toContain("checking the diff\n");
+      expect(JSON.stringify(chunks)).not.toContain(SENTINEL);
+    });
+  });
+
   it.skipIf(isIntegrationDisabled("cursor") || !process.env.CURSOR_API_KEY)(
     "runs a live Cursor local review smoke test",
     async () => {
@@ -400,9 +607,13 @@ type MockCursorRun = {
   }>;
 };
 
+type MockCursorSendOptions = {
+  onStep?: (args: { step: unknown }) => void | Promise<void>;
+};
+
 type MockCursorAgent = {
   agentId: string;
-  send(prompt: string): Promise<MockCursorRun>;
+  send(prompt: string, options?: MockCursorSendOptions): Promise<MockCursorRun>;
   [Symbol.asyncDispose](): Promise<void>;
 };
 

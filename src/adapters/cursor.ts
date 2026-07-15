@@ -22,6 +22,7 @@ import {
   sdkOutputMetadata,
   sdkPreflightMetadata,
 } from "./metadata.js";
+import { activitySinkFromDebugOutput, boundedMarkerName } from "./reviewer-activity.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -130,6 +131,16 @@ export function createCursorAdapter(
       let removeAbortListener: (() => void) | undefined;
       const storeDirectory = await mkdtemp(path.join(tmpdir(), "diffwarden-cursor-sdk-"));
 
+      // Step summaries deliberately feed the artifact's debug_output recorder
+      // (mirroring the claude/droid/copilot/pi SDK adapters): raw
+      // ConversationSteps embed thinking text and tool args/results (live
+      // capture 2026-07-15: a read toolCall result carried the full file
+      // body) the debug contract excludes. The SDK invokes onStep inside its
+      // own stream loop — the same loop run.wait() already awaits — so the
+      // result path gains no new await dependency, and a flag-off run keeps
+      // the exact `send(prompt)` invocation (no options argument).
+      const activity = activitySinkFromDebugOutput("cursor-sdk", input.debugOutput);
+
       try {
         const store = new JsonlLocalAgentStore(storeDirectory) as CursorLocalStore;
         agent = await Agent.create({
@@ -158,13 +169,33 @@ export function createCursorAdapter(
         });
         throwIfAborted(input.signal, "Cursor reviewer aborted before sending prompt");
 
-        run = await agent.send(input.prompt);
+        run =
+          activity === undefined
+            ? await agent.send(input.prompt)
+            : await agent.send(input.prompt, {
+                // The sink never throws, but the SDK awaits onStep inside its
+                // stream loop, so a defensive catch keeps debug plumbing
+                // structurally unable to perturb the run.
+                onStep: ({ step }) => {
+                  try {
+                    activity.event(step);
+                  } catch {
+                    // Debug never fails the review.
+                  }
+                },
+              });
         if (input.signal?.aborted) {
           await cancelCursorRun(run);
           throwIfAborted(input.signal, "Cursor reviewer aborted before waiting for result");
         }
 
         const result = await run.wait();
+        // Adapter-synthesized terminal marker: onStep has no result event.
+        activity?.note(
+          `[result:${boundedMarkerName(result.status)}${
+            result.durationMs !== undefined ? ` duration_ms=${result.durationMs}` : ""
+          }]`,
+        );
 
         if (result.status !== "finished") {
           throw reviewerFailed(`Cursor reviewer finished with status: ${result.status}`);
@@ -173,6 +204,9 @@ export function createCursorAdapter(
         return {
           text: result.result ?? "",
           metadata: sdkOutputMetadata("cursor", {
+            // Keyed on the opt-in itself: onStep capture is pure observation,
+            // so there is no streaming gate to reflect.
+            ...(input.debugOutput !== undefined ? { debugOutputMode: "event-summary" } : {}),
             agentId: agent.agentId,
             runId: run.id,
             cursorMode: cursorReviewMode,
@@ -219,6 +253,10 @@ export function createCursorAdapter(
         }
         throw error;
       } finally {
+        // Success and throw paths both flush; the per-send onStep callback
+        // needs no unsubscribe (it dies with the run), and debug teardown
+        // never fails the review (sink methods swallow internally).
+        activity?.end();
         removeAbortListener?.();
         await disposeCursorAgent(agent);
         await rm(storeDirectory, { force: true, recursive: true });
@@ -250,8 +288,17 @@ type CursorModel = {
 
 type CursorAgent = {
   agentId: string;
-  send(prompt: string): Promise<CursorRun>;
+  send(prompt: string, options?: CursorSendOptions): Promise<CursorRun>;
   [Symbol.asyncDispose](): Promise<void>;
+};
+
+/**
+ * Structural subset of the SDK's SendOptions: only the onStep callback is
+ * used, receiving each synthesized ConversationStep (typed unknown here; the
+ * cursor-sdk dialect renderer re-validates every field it reads).
+ */
+type CursorSendOptions = {
+  onStep: (args: { step: unknown }) => void | Promise<void>;
 };
 
 type CursorRun = {
