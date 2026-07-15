@@ -17,6 +17,8 @@ type ExecCliFileOptions = {
   maxBuffer?: number;
   signal?: AbortSignal;
   timeout?: number;
+  /** Close the child's stdin immediately, for CLIs that wait for stdin EOF. */
+  closeStdin?: boolean;
 };
 
 export async function runCli(
@@ -241,10 +243,15 @@ export async function execCliFile(
   args: string[],
   options: ExecCliFileOptions = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  const { stdout, stderr } = await execFileAsync(executable, args, {
-    ...options,
+  const { closeStdin, ...execOptions } = options;
+  const pending = execFileAsync(executable, args, {
+    ...execOptions,
     shell: shouldUseWindowsCommandShell(executable),
   });
+  if (closeStdin) {
+    pending.child.stdin?.end();
+  }
+  const { stdout, stderr } = await pending;
   return {
     stdout: String(stdout),
     stderr: String(stderr),

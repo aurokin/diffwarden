@@ -34,6 +34,7 @@ import {
   stringCliOption,
 } from "./cli-helpers.js";
 import { cliRuntimeResolutionMetadata } from "./cli-runtime-metadata.js";
+import { extractClaudeStreamResultStdout, extractDroidStreamResultStdout } from "./cli-stream.js";
 import type { CliEngine, CliSpec } from "./cli-types.js";
 import {
   codexCliCwdArg,
@@ -1011,10 +1012,20 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         captureMode: "native-structured",
       };
     },
-    async parseOutput(result) {
-      return normalizeJsonLikeAdapterOutput(result.stdout, {
+    async parseOutput(result, invocation) {
+      // Stream mode: the terminal result event has the same envelope as the
+      // whole stdout of --output-format json; a transcript without one falls
+      // back to the raw stdout and the normal parse/repair pipeline.
+      const stdout =
+        invocation.streamFormat === "claude-stream-json"
+          ? (extractClaudeStreamResultStdout(result.stdout) ?? result.stdout)
+          : result.stdout;
+      return normalizeJsonLikeAdapterOutput(stdout, {
         captureMode: "native-structured",
         readonlyCapability: "tool-restricted",
+        // Deliberately the full transcript, not the extracted result line:
+        // cliRuntimeResolutionMetadata parses JSONL per line, and in stream
+        // mode init events carry runtime info the result event lacks.
         ...cliRuntimeResolutionMetadata(result.stdout),
       });
     },
@@ -1215,11 +1226,18 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
       };
     },
     async parseOutput(result, invocation) {
+      // Stream mode: map the terminal completion event onto the
+      // --output-format json envelope; a transcript without one falls back to
+      // the raw stdout and the normal parse/repair pipeline.
+      const stdout =
+        invocation.streamFormat === "droid-stream-json"
+          ? (extractDroidStreamResultStdout(result.stdout) ?? result.stdout)
+          : result.stdout;
       const settingsMetadata = await droidCliSessionSettingsMetadata(
-        result.stdout,
+        stdout,
         invocation.droidSessionDirectory,
       );
-      return normalizeJsonLikeAdapterOutput(result.stdout, {
+      return normalizeJsonLikeAdapterOutput(stdout, {
         captureMode: "text",
         readonlyCapability: "enforced",
         ...droidCliReviewPolicyMetadata(),
@@ -1227,6 +1245,9 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
           ? { droidLogGroupId: invocation.droidLogGroupId }
           : {}),
         ...settingsMetadata,
+        // Deliberately the full transcript, not the extracted result line:
+        // cliRuntimeResolutionMetadata parses JSONL per line, and in stream
+        // mode init events carry runtime info the completion event lacks.
         ...cliRuntimeResolutionMetadata(result.stdout),
       });
     },

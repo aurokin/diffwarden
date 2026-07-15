@@ -22,7 +22,8 @@ import {
 } from "./cli-helpers.js";
 import { resolveExecutable, runCli, trimForMetadata } from "./cli-process.js";
 import { cliSpecs } from "./cli-specs.js";
-import type { CliEngine, CliInvocation } from "./cli-types.js";
+import { createCliStreamChunkParser } from "./cli-stream.js";
+import type { CliEngine, CliInvocation, CliRunResult } from "./cli-types.js";
 import { codexCliWebSearchPolicy, codexWebSearchMetadata } from "./codex-options.js";
 import {
   copilotCliReviewPolicyCliFlags,
@@ -207,7 +208,16 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
             preparedPolicyCheck !== undefined,
           );
         }
-        const result = await runCli(invocation, input);
+        // Stream-mode runs parse raw JSONL chunks into compact summaries for
+        // the debug callback; the flush drains any trailing partial line even
+        // when the child process fails.
+        const streamCapture = createCliStreamDebugCapture(invocation, input);
+        let result: CliRunResult;
+        try {
+          result = await runCli(invocation, streamCapture?.input ?? input);
+        } finally {
+          streamCapture?.flush();
+        }
         const output = await spec.parseOutput(result, invocation);
         output.metadata = mergeResolutionMetadataRecords(
           cliSelectionMetadata(engine, input.reviewer),
@@ -542,7 +552,7 @@ function cliPolicyCheckRunPolicyFingerprint(
     return undefined;
   }
   return droidCliReviewPolicyOptionsFingerprint(
-    droidCliReviewPolicyOptions(input.reviewer, input.cwd),
+    droidCliReviewPolicyOptions(input.reviewer, input.cwd, droidStreamingRequested(input)),
   );
 }
 
@@ -819,6 +829,24 @@ function applyClaudeCliOptionalFlags(
     metadata.maxBudgetUsd = String(input.reviewer.maxBudgetUsd);
   }
 
+  // Buffering the full stream transcript in result.stdout is fine: runCli's
+  // spawn path has no capture cap that could abort, and JSONL-transcript
+  // engines (opencode, pi, copilot) already buffer whole event streams today.
+  if (input.debugOutput?.streaming === true) {
+    if (supportedFlags.has("stream-json")) {
+      const formatIndex = invocation.args.indexOf("--output-format");
+      if (formatIndex !== -1) {
+        invocation.args[formatIndex + 1] = "stream-json";
+        // stream-json with --print requires --verbose.
+        invocation.args.push("--verbose");
+        invocation.streamFormat = "claude-stream-json";
+        metadata.debugStreamMode = "stream-json";
+      }
+    } else {
+      metadata.debugStreamModeDropped = "cli-unsupported";
+    }
+  }
+
   invocation.metadata = { ...invocation.metadata, ...metadata };
 }
 
@@ -853,9 +881,9 @@ async function prepareDroidCliInvocation(
     (await assertDroidExecutableSupportsReviewPolicy(
       invocation.resolvedExecutable,
       env,
-      droidCliReviewPolicyOptions(input.reviewer, input.cwd),
+      droidCliReviewPolicyOptions(input.reviewer, input.cwd, droidStreamingRequested(input)),
     ));
-  applyDroidCliPolicySupport(invocation, support);
+  applyDroidCliPolicySupport(invocation, input, support);
 }
 
 async function prepareCopilotCliInvocation(
@@ -880,8 +908,22 @@ async function prepareCopilotCliInvocation(
 
 function applyDroidCliPolicySupport(
   invocation: CliInvocation,
+  input: ReviewAdapterInput,
   support: DroidCliReviewPolicySupport,
 ): void {
+  if (droidStreamingRequested(input)) {
+    if (support.streamJson === true) {
+      const formatIndex = invocation.args.indexOf("--output-format");
+      if (formatIndex !== -1) {
+        invocation.args[formatIndex + 1] = "stream-json";
+        invocation.streamFormat = "droid-stream-json";
+        invocation.metadata = { ...invocation.metadata, debugStreamMode: "stream-json" };
+      }
+    } else {
+      invocation.metadata = { ...invocation.metadata, debugStreamModeDropped: "cli-unsupported" };
+    }
+  }
+
   if (support.logGroupId) {
     return;
   }
@@ -893,9 +935,14 @@ function applyDroidCliPolicySupport(
   invocation.droidLogGroupId = undefined;
 }
 
+function droidStreamingRequested(input: ReviewAdapterInput): boolean {
+  return input.debugOutput?.streaming === true;
+}
+
 function droidCliReviewPolicyOptions(
   reviewer: ReviewReviewerConfig,
   cwd: string,
+  streamJson = false,
 ): DroidCliReviewPolicyOptions {
   const model = providerQualifiedModel(reviewer);
   const effort =
@@ -906,6 +953,9 @@ function droidCliReviewPolicyOptions(
     cwd,
     ...(model !== undefined ? { model } : {}),
     ...(effort !== undefined ? { effort } : {}),
+    // Only ever true or absent: an explicit false would change the policy
+    // fingerprint and defeat the preflight cache on non-streaming runs.
+    ...(streamJson ? { streamJson: true } : {}),
   };
 }
 
@@ -914,6 +964,7 @@ function droidCliReviewPolicyOptionsFingerprint(options: DroidCliReviewPolicyOpt
     cwd: options.cwd,
     model: options.model,
     effort: options.effort,
+    streamJson: options.streamJson,
   });
 }
 
@@ -959,6 +1010,54 @@ async function assertCopilotCliExecutableOutsideWorkspace(
       "Copilot CLI executable resolved inside the review workspace; install Copilot outside the repository or set cliOptions.executable to an external binary.",
     );
   }
+}
+
+type CliStreamDebugCapture = {
+  input: ReviewAdapterInput;
+  flush(): void;
+};
+
+/**
+ * When the invocation switched to a native stream output mode, route stdout
+ * debug chunks through the stream parser so the debug callback receives
+ * compact event summaries (reasoning excluded) instead of raw JSONL. Stderr
+ * passes through untouched. The summaries deliberately feed both the live
+ * events and the artifact's debug_output recorder: raw stream-json embeds
+ * reasoning content the debug contract excludes, and its envelope overhead
+ * would waste the bounded per-stream budget.
+ */
+function createCliStreamDebugCapture(
+  invocation: CliInvocation,
+  input: ReviewAdapterInput,
+): CliStreamDebugCapture | undefined {
+  const debugOutput = input.debugOutput;
+  if (invocation.streamFormat === undefined || debugOutput === undefined) {
+    return undefined;
+  }
+
+  const parser = createCliStreamChunkParser(invocation.streamFormat);
+  return {
+    input: {
+      ...input,
+      debugOutput: {
+        ...debugOutput,
+        onChunk(stream, text) {
+          if (stream !== "stdout") {
+            debugOutput.onChunk(stream, text);
+            return;
+          }
+          for (const rendered of parser.push(text)) {
+            debugOutput.onChunk("stdout", rendered);
+          }
+        },
+      },
+    },
+    flush() {
+      for (const rendered of parser.flush()) {
+        debugOutput.onChunk("stdout", rendered);
+      }
+    },
+  };
 }
 
 function cliInvocationEnv(

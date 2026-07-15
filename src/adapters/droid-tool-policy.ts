@@ -35,6 +35,8 @@ const droidCliRequiredReviewPolicyCliFlags = [
 
 export type DroidCliReviewPolicySupport = {
   logGroupId: boolean;
+  /** Present only when the stream-json probe ran (streaming was requested). */
+  streamJson?: boolean;
 };
 
 export type DroidCliReviewPolicyOptions = {
@@ -42,6 +44,8 @@ export type DroidCliReviewPolicyOptions = {
   model?: string;
   effort?: string;
   requiredFlags?: readonly string[];
+  /** Set true only when stream output was requested; adds the stream-json probe. */
+  streamJson?: boolean;
 };
 
 export function droidCliReviewAllowedToolsArg(): string {
@@ -104,7 +108,77 @@ export async function assertDroidExecutableSupportsReviewPolicy(
 
   return {
     logGroupId: helpOutputHasFlag(output, "--log-group-id"),
+    ...(options.streamJson === true
+      ? { streamJson: await droidCliSupportsStreamJsonOutput(executable, env) }
+      : {}),
   };
+}
+
+/**
+ * Droid help does not enumerate --output-format values, so probe by running
+ * exec with the format and no prompt: argument validation happens before any
+ * prompt handling or model spend, and an unsupported value prints
+ * "Invalid --output-format value" while a supported one fails on the missing
+ * prompt. Unsupported or inconclusive probes degrade (json mode stays); they
+ * never fail the review.
+ */
+async function droidCliSupportsStreamJsonOutput(
+  executable: string,
+  env: NodeJS.ProcessEnv | undefined,
+): Promise<boolean> {
+  try {
+    const { stdout, stderr } = await execCliFile(
+      executable,
+      ["exec", "--output-format", "stream-json"],
+      {
+        ...(env !== undefined ? { env } : {}),
+        maxBuffer: 1024 * 1024,
+        timeout: 10_000,
+        // Droid treats piped stdin as a prompt source and waits for EOF
+        // before rejecting the missing prompt; leaving stdin open would stall
+        // the probe until the timeout.
+        closeStdin: true,
+      },
+    );
+    return !droidInvalidOutputFormat(`${stdout}${stderr}`);
+  } catch (error) {
+    if (droidInvalidOutputFormat(execCliErrorText(error))) {
+      return false;
+    }
+    // An inconclusive probe (timeout, spawn failure) must not switch the real
+    // review to an unverified output format; staying on json is always safe.
+    return probeExitedWithoutFormatComplaint(error);
+  }
+}
+
+function droidInvalidOutputFormat(output: string): boolean {
+  return (
+    /--output-format|output format/i.test(output) &&
+    /invalid|unknown|unsupported|unexpected/i.test(output)
+  );
+}
+
+/** True only for a clean nonzero exit, the expected missing-prompt rejection. */
+function probeExitedWithoutFormatComplaint(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const record = error as { code?: unknown; killed?: unknown; signal?: unknown };
+  return (
+    typeof record.code === "number" &&
+    record.killed !== true &&
+    (record.signal === null || record.signal === undefined)
+  );
+}
+
+function execCliErrorText(error: unknown): string {
+  if (typeof error !== "object" || error === null) {
+    return String(error);
+  }
+  const record = error as { stdout?: unknown; stderr?: unknown; message?: unknown };
+  return [record.stdout, record.stderr, record.message]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n");
 }
 
 async function assertDroidToolAllowlist(

@@ -1,3 +1,4 @@
+import type { CliStreamFormat } from "./cli-stream.js";
 import type { ReviewAdapterInput, ReviewAdapterOutput, ReviewReviewerConfig } from "./types.js";
 
 export type CliEngine = Exclude<ReviewReviewerConfig["sdk"], "fake">;
@@ -14,6 +15,8 @@ export type CliInvocation = {
   droidLogGroupId?: string | undefined;
   droidSessionDirectory?: string;
   claudeAuthMode?: "api-key" | "claude-code";
+  /** Set when the invocation was switched to a native stream output mode. */
+  streamFormat?: CliStreamFormat;
   /** Invocation-level metadata merged into the run output metadata. */
   metadata?: Record<string, string>;
   captureMode: NonNullable<ReviewAdapterOutput["metadata"]>["captureMode"];
