@@ -19,6 +19,7 @@ import {
   sdkOutputMetadata,
   sdkPreflightMetadata,
 } from "./metadata.js";
+import { activitySinkFromDebugOutput } from "./reviewer-activity.js";
 import type {
   ListModelsInput,
   ModelCatalogEntry,
@@ -152,6 +153,9 @@ export function createClaudeAdapter(
         throw reviewerFailed(`Claude reviewer failed: ${detail}`);
       }
     },
+    // Deliberately not wired to reviewer activity/debug output: repair and
+    // one-shot invocations never emit debug output by construction
+    // (RunStructuredInput carries no debugOutput channel).
     async runStructured(input: RunStructuredInput): Promise<RunStructuredOutput> {
       const { query } = await dependencies.loadSdk();
       const runContext = claudeRunContext(input.runContext);
@@ -637,12 +641,19 @@ async function runClaudeQuery(options: RunClaudeQueryInput): Promise<ClaudeResul
   let result: ClaudeResultMessage | undefined;
   const abortBridge = createAbortBridge(options.input.signal);
   const queryOptions = buildClaudeQueryOptions(options, abortBridge.controller);
+  // Event summaries deliberately feed both the live debug events and the
+  // artifact's debug_output recorder (mirroring createCliStreamDebugCapture):
+  // raw SDK messages embed reasoning content the debug contract excludes.
+  // Observation only — the query invocation is identical either way, and
+  // includePartialMessages stays off.
+  const activity = activitySinkFromDebugOutput("claude-sdk", options.input.debugOutput);
 
   try {
     for await (const message of options.query({
       prompt: options.input.prompt,
       options: queryOptions,
     })) {
+      activity?.event(message);
       if (message.type === "assistant" && message.error === "authentication_failed") {
         throw missingAuth("Claude reviewer authentication failed");
       }
@@ -652,6 +663,7 @@ async function runClaudeQuery(options: RunClaudeQueryInput): Promise<ClaudeResul
       }
     }
   } finally {
+    activity?.end();
     abortBridge.dispose();
   }
 
@@ -780,6 +792,10 @@ function claudeOutputMetadata(options: {
   const model = options.input.reviewer.model ?? defaultClaudeModel;
   const metadata = sdkOutputMetadata("claude", {
     captureMode: options.captureMode,
+    // Debug capture is pure observation on the SDK transport, so the flag is
+    // keyed on the opt-in itself (no streaming gate: nothing about the
+    // invocation changes either way).
+    ...(options.input.debugOutput !== undefined ? { debugOutputMode: "event-summary" } : {}),
     sessionId: options.result.session_id,
     model,
     ...claudeModelResolutionMetadata(options.input.reviewer, model),

@@ -27,6 +27,7 @@ import {
   sdkOutputMetadata,
   sdkPreflightMetadata,
 } from "./metadata.js";
+import { activitySinkFromDebugOutput } from "./reviewer-activity.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -97,6 +98,13 @@ export function createDroidAdapter(
         resolvedSettings = resolveDroidSettings(session.initResult.settings);
 
         let result: DroidResultMessage | undefined;
+        // Event summaries deliberately feed both the live debug events and the
+        // artifact's debug_output recorder (mirroring
+        // createCliStreamDebugCapture): raw SDK messages embed reasoning
+        // content the debug contract excludes. Observation only — the stream
+        // invocation is identical either way, and the default non-partial
+        // overload (includePartialMessages off) never emits thinking events.
+        const activity = activitySinkFromDebugOutput("droid-sdk", input.debugOutput);
         try {
           for await (const message of session.stream(input.prompt, {
             outputFormat: {
@@ -105,11 +113,13 @@ export function createDroidAdapter(
             } as OutputFormat,
             ...(input.signal !== undefined ? { abortSignal: input.signal } : {}),
           })) {
+            activity?.event(message);
             if (message.type === sdk.DroidMessageType.Result) {
               result = message;
             }
           }
         } finally {
+          activity?.end();
           await session.close().catch(() => undefined);
         }
 
@@ -135,6 +145,9 @@ export function createDroidAdapter(
             resolvedSettings,
             {
               captureMode: "native-structured",
+              // Keyed on the opt-in itself: SDK debug capture is pure
+              // observation, so there is no streaming gate to reflect.
+              ...(input.debugOutput !== undefined ? { debugOutputMode: "event-summary" } : {}),
             },
           ),
         });
