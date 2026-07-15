@@ -1399,6 +1399,144 @@ describe("claudeAdapter", () => {
   );
 });
 
+describe("claudeAdapter SDK debug output", () => {
+  const SENTINEL = "LEAK_ME";
+
+  /** Scripted SDK message stream shared by every debug-output test. */
+  function scriptedClaudeStream(): MockClaudeStreamMessage[] {
+    return [
+      { type: "system", subtype: "init", session_id: "debug-session" },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "thinking", thinking: `${SENTINEL} reasoning` },
+            { type: "text", text: "checking the diff" },
+            { type: "tool_use", name: "Read", input: { secret: SENTINEL } },
+          ],
+        },
+      },
+      { type: "user", message: { content: [{ type: "tool_result", content: "abcdefgh" }] } },
+      // thinking_tokens-style kinds are dropped by the universal reasoning regex.
+      { type: "thinking_tokens", tokens: 42, text: SENTINEL },
+      {
+        type: "result",
+        subtype: "success",
+        structured_output: validReview(),
+        duration_ms: 12,
+        total_cost_usd: 0.1,
+        session_id: "debug-session",
+        num_turns: 2,
+      },
+    ];
+  }
+
+  it("streams claude SDK event summaries into the debug callback", async () => {
+    const { adapter } = createMockClaudeStreamAdapter(scriptedClaudeStream());
+    const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+
+    const output = await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+      }),
+    );
+
+    // Exact line sequence: assistant text verbatim, tool payloads as markers,
+    // thinking blocks and thinking-typed events never render.
+    expect(chunks).toEqual([
+      { stream: "stdout", text: "[system:init]\n" },
+      { stream: "stdout", text: "checking the diff\n[tool_use Read]\n" },
+      { stream: "stdout", text: "[tool_result 8 chars]\n" },
+      { stream: "stdout", text: "[result:success turns=2 duration_ms=12]\n" },
+    ]);
+    expect(JSON.stringify(chunks)).not.toContain(SENTINEL);
+    expect(output.structured).toEqual(validReview());
+    expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+  });
+
+  it("produces an identical artifact with and without debug capture (non-authoritative debug invariant)", async () => {
+    const { adapter } = createMockClaudeStreamAdapter(scriptedClaudeStream());
+
+    const baseline = await adapter.run(input({ env: { ANTHROPIC_API_KEY: "test-key" } }));
+    const debugged = await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        debugOutput: { onChunk: () => {} },
+      }),
+    );
+
+    expect(baseline.metadata).not.toHaveProperty("debugOutputMode");
+    expect(debugged.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+    // Debug output is non-authoritative: removing its metadata key leaves the
+    // artifacts deep-equal (debug_output itself is assembled by the runner
+    // from the recorder, never by the adapter).
+    expect(debugged).not.toHaveProperty("debug_output");
+    const { debugOutputMode: _mode, ...debuggedMetadata } = debugged.metadata ?? {};
+    expect({ ...debugged, metadata: debuggedMetadata }).toEqual(baseline);
+  });
+
+  it("keeps the artifact byte-identical without the debug opt-in", async () => {
+    const { adapter, calls } = createMockClaudeStreamAdapter(scriptedClaudeStream());
+
+    const output = await adapter.run(input({ env: { ANTHROPIC_API_KEY: "test-key" } }));
+
+    // Full-artifact fixture: the flag-off run carries no debug traces at all.
+    expect(output).toEqual({
+      structured: validReview(),
+      metadata: {
+        captureMode: "native-structured",
+        readonlyCapability: "tool-restricted",
+        transport: "sdk",
+        sessionId: "debug-session",
+        model: "sonnet",
+        requestedModel: "sonnet",
+        resolvedModel: "sonnet",
+        modelResolutionSource: "requested",
+        durationMs: 12,
+        totalCostUsd: 0.1,
+        authMode: "api-key",
+        authPreference: "auto",
+      },
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps the query invocation identical with and without debug capture", async () => {
+    const { adapter, calls } = createMockClaudeStreamAdapter(scriptedClaudeStream());
+
+    await adapter.run(input({ env: { ANTHROPIC_API_KEY: "test-key" } }));
+    await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        debugOutput: { onChunk: () => {} },
+      }),
+    );
+
+    // SDK debug capture is pure observation: same prompt, same options.
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual(calls[0]);
+  });
+
+  it("does not fail the run when the debug callback throws", async () => {
+    const { adapter } = createMockClaudeStreamAdapter(scriptedClaudeStream());
+
+    const output = await adapter.run(
+      input({
+        env: { ANTHROPIC_API_KEY: "test-key" },
+        debugOutput: {
+          onChunk: () => {
+            throw new Error("recorder failed");
+          },
+        },
+      }),
+    );
+
+    expect(output.structured).toEqual(validReview());
+    expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+  });
+});
+
 type MockClaudeResult = {
   type: "result";
   subtype: string;
@@ -1418,6 +1556,8 @@ type MockClaudeQueryCall = {
   };
 };
 
+type MockClaudeStreamMessage = { type: string; [key: string]: unknown };
+
 type MockClaudeModel = {
   value: string;
   displayName?: string;
@@ -1433,6 +1573,28 @@ function createMockClaudeAdapter(results: MockClaudeResult[]) {
     const result = pendingResults.shift();
     if (result !== undefined) {
       yield result;
+    }
+  };
+
+  const adapter = createClaudeAdapter({
+    async loadSdk() {
+      return { query };
+    },
+    async resolveRuntime() {
+      return { authMode: "api-key", authPreference: "auto" };
+    },
+  });
+
+  return { adapter, calls };
+}
+
+/** Replays the same scripted SDK message stream on every run call. */
+function createMockClaudeStreamAdapter(messages: MockClaudeStreamMessage[]) {
+  const calls: MockClaudeQueryCall[] = [];
+  const query = async function* (params: MockClaudeQueryCall) {
+    calls.push(params);
+    for (const message of messages) {
+      yield message;
     }
   };
 

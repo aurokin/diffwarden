@@ -366,6 +366,168 @@ describe("droidAdapter", () => {
   );
 });
 
+describe("droidAdapter SDK debug output", () => {
+  const SENTINEL = "LEAK_ME";
+
+  /** Scripted SDK stream messages shared by every debug-output test. */
+  function scriptedDroidStream(): Array<{ type: string; [key: string]: unknown }> {
+    return [
+      {
+        type: "assistant",
+        text: `${SENTINEL} aggregated text is never read`,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: `${SENTINEL} reasoning` },
+            { type: "text", text: "checking the diff" },
+          ],
+        },
+      },
+      {
+        type: "tool_call",
+        toolUse: { type: "tool_use", id: "t1", name: "grep", input: { pattern: SENTINEL } },
+      },
+      {
+        type: "tool_result",
+        toolUseId: "t1",
+        toolName: "grep",
+        content: "abcdefgh",
+        isError: false,
+      },
+      {
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: "review prompt" }] },
+      },
+    ];
+  }
+
+  function createStreamAdapter(calls: unknown[]) {
+    return createDroidAdapter({
+      loadSdk: async () => mockDroidSdk(calls, {}, undefined, scriptedDroidStream()),
+      checkExecutable: async (executable) => executable,
+    });
+  }
+
+  it("streams droid SDK event summaries into the debug callback", async () => {
+    const calls: unknown[] = [];
+    const adapter = createStreamAdapter(calls);
+    const chunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+
+    const output = await adapter.run({
+      ...createInput(createReviewer()),
+      debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+    });
+
+    // Exact line sequence: assistant text verbatim, tool payloads as markers,
+    // thinking blocks never render, the echoed prompt reduces to a size marker.
+    expect(chunks).toEqual([
+      { stream: "stdout", text: "checking the diff\n" },
+      { stream: "stdout", text: "[tool_use grep]\n" },
+      { stream: "stdout", text: "[tool_result 8 chars]\n" },
+      { stream: "stdout", text: "[user message 40 chars]\n" },
+      // The mock result carries turnCount only; the renderer accepts either
+      // numTurns or turnCount (the real SDK emits both with the same value).
+      { stream: "stdout", text: "[result:success turns=1 duration_ms=123]\n" },
+    ]);
+    expect(JSON.stringify(chunks)).not.toContain(SENTINEL);
+    expect(output.structured).toMatchObject({ overall_explanation: "droid ok" });
+    expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+  });
+
+  it("produces an identical artifact with and without debug capture (non-authoritative debug invariant)", async () => {
+    const adapter = createStreamAdapter([]);
+
+    const baseline = await adapter.run(createInput(createReviewer()));
+    const debugged = await adapter.run({
+      ...createInput(createReviewer()),
+      debugOutput: { onChunk: () => {} },
+    });
+
+    expect(baseline.metadata).not.toHaveProperty("debugOutputMode");
+    expect(debugged.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+    // Debug output is non-authoritative: removing its metadata key leaves the
+    // artifacts deep-equal (debug_output itself is assembled by the runner
+    // from the recorder, never by the adapter).
+    expect(debugged).not.toHaveProperty("debug_output");
+    const { debugOutputMode: _mode, ...debuggedMetadata } = debugged.metadata ?? {};
+    expect({ ...debugged, metadata: debuggedMetadata }).toEqual(baseline);
+  });
+
+  it("keeps the artifact byte-identical without the debug opt-in", async () => {
+    const adapter = createStreamAdapter([]);
+
+    const output = await adapter.run(createInput(createReviewer()));
+
+    // Full-artifact fixture: the flag-off run carries no debug traces at all.
+    expect(output).toEqual({
+      structured: {
+        findings: [],
+        overall_correctness: "patch is correct",
+        overall_explanation: "droid ok",
+        overall_confidence_score: 1,
+      },
+      usage: { inputTokens: 10 },
+      metadata: {
+        captureMode: "native-structured",
+        readonlyCapability: "enforced",
+        transport: "sdk",
+        droidInteractionMode: "spec",
+        droidAutonomyLevel: "off",
+        droidToolPolicy: "allowlist",
+        droidAllowedTools: ["Read", "Glob", "Grep", "LS", "ExitSpecMode"],
+        executable: "droid",
+        sessionId: "session-1",
+        durationMs: 123,
+        turnCount: 1,
+        resolvedModel: "droid-default-model",
+        modelResolutionSource: "provider-init",
+        resolvedEffort: "medium",
+        effortResolutionSource: "provider-init",
+      },
+    });
+  });
+
+  it("keeps the stream invocation identical with and without debug capture", async () => {
+    const calls: unknown[] = [];
+    const adapter = createStreamAdapter(calls);
+
+    await adapter.run(createInput(createReviewer()));
+    await adapter.run({
+      ...createInput(createReviewer()),
+      debugOutput: { onChunk: () => {} },
+    });
+
+    // SDK debug capture is pure observation: same session options, same
+    // prompt, same stream options (and includePartialMessages stays off).
+    const sessionCalls = calls.filter(
+      (call) => typeof call === "object" && call !== null && "createSessionOptions" in call,
+    );
+    const streamCalls = calls.filter(
+      (call) => typeof call === "object" && call !== null && "streamPrompt" in call,
+    );
+    expect(sessionCalls).toHaveLength(2);
+    expect(streamCalls).toHaveLength(2);
+    expect(sessionCalls[1]).toEqual(sessionCalls[0]);
+    expect(streamCalls[1]).toEqual(streamCalls[0]);
+  });
+
+  it("does not fail the run when the debug callback throws", async () => {
+    const adapter = createStreamAdapter([]);
+
+    const output = await adapter.run({
+      ...createInput(createReviewer()),
+      debugOutput: {
+        onChunk: () => {
+          throw new Error("recorder failed");
+        },
+      },
+    });
+
+    expect(output.structured).toMatchObject({ overall_explanation: "droid ok" });
+    expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
+  });
+});
+
 function createReviewer(extra: Partial<ReviewReviewerConfig> = {}): ReviewReviewerConfig {
   return {
     id: "droid",
@@ -397,6 +559,8 @@ function mockDroidSdk(
   calls: unknown[],
   overrides: Partial<MockDroidResult> = {},
   createSessionOverride?: () => never,
+  /** Scripted stream messages replayed before the result on every stream call. */
+  streamMessages: Array<{ type: string; [key: string]: unknown }> = [],
 ) {
   return {
     SDK_VERSION: "0.3.0-test",
@@ -427,6 +591,9 @@ function mockDroidSdk(
         },
         async *stream(prompt: string, streamOptions: unknown) {
           calls.push({ streamPrompt: prompt, options: streamOptions });
+          for (const message of streamMessages) {
+            yield message;
+          }
           yield {
             type: "result",
             subtype: "success",

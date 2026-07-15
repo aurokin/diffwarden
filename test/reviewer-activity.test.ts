@@ -10,6 +10,7 @@ import {
   copilotJsonEventText,
   createReviewerActivitySink,
   cursorStreamEventText,
+  droidSdkStreamEventText,
   droidStreamEventText,
   opencodeJsonEventText,
   piJsonEventText,
@@ -28,6 +29,9 @@ const dialectRenderers: Array<[ActivityDialect, ActivityRenderer]> = [
   ["opencode-json", opencodeJsonEventText],
   ["copilot-json", copilotJsonEventText],
   ["pi-json", piJsonEventText],
+  // Resolved through the dialect map so the SDK wiring itself is under test.
+  ["claude-sdk", activityRenderer("claude-sdk")],
+  ["droid-sdk", activityRenderer("droid-sdk")],
 ];
 
 /**
@@ -293,6 +297,77 @@ describe("renderActivityEvent dialect rendering", () => {
     expect(
       renderActivityEvent(render, { type: "result", subtype: "success", duration_ms: 12 }),
     ).toBe("[result:success duration_ms=12]");
+  });
+
+  it("aliases the claude-sdk dialect to the claude stream renderer", () => {
+    // Claude Agent SDK messages are structurally identical to parsed CLI
+    // stream-json lines, so the dialect is an alias, not a fork.
+    expect(activityRenderer("claude-sdk")).toBe(claudeStreamEventText);
+  });
+
+  it("forks the droid-sdk dialect from the droid CLI renderer", () => {
+    // The Droid SDK's stream shapes differ from the CLI's stream-json
+    // envelope, so droid-sdk is a fork (see droidSdkStreamEventText).
+    expect(activityRenderer("droid-sdk")).toBe(droidSdkStreamEventText);
+    expect(droidSdkStreamEventText).not.toBe(droidStreamEventText);
+  });
+
+  it("renders droid-sdk assistant content blocks, dropping thinking blocks", () => {
+    const rendered = renderActivityEvent(droidSdkStreamEventText, {
+      type: "assistant",
+      text: `${SENTINEL} aggregated text is never read`,
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: SENTINEL },
+          { type: "text", text: "checking the diff" },
+          { type: "tool_use", name: "read_file", input: { path: SENTINEL } },
+        ],
+      },
+    });
+    expect(rendered).toBe("checking the diff\n[tool_use read_file]");
+  });
+
+  it("reduces droid-sdk user, tool, and result events to safe markers", () => {
+    expect(
+      renderActivityEvent(droidSdkStreamEventText, {
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: "abcdefgh" }] },
+      }),
+    ).toBe("[user message 35 chars]");
+    expect(
+      renderActivityEvent(droidSdkStreamEventText, {
+        type: "tool_call",
+        toolUse: { type: "tool_use", name: "grep", input: { pattern: SENTINEL } },
+      }),
+    ).toBe("[tool_use grep]");
+    expect(
+      renderActivityEvent(droidSdkStreamEventText, {
+        type: "tool_result",
+        toolName: "grep",
+        content: "abcdefgh",
+        isError: false,
+      }),
+    ).toBe("[tool_result 8 chars]");
+    expect(
+      renderActivityEvent(droidSdkStreamEventText, {
+        type: "result",
+        subtype: "success",
+        numTurns: 3,
+        durationMs: 42,
+        text: SENTINEL,
+        messages: [{ type: "assistant", text: SENTINEL }],
+      }),
+    ).toBe("[result:success turns=3 duration_ms=42]");
+    // The SDK emits both numTurns and turnCount; either key renders turns.
+    expect(
+      renderActivityEvent(droidSdkStreamEventText, {
+        type: "result",
+        subtype: "success",
+        turnCount: 2,
+        durationMs: 7,
+      }),
+    ).toBe("[result:success turns=2 duration_ms=7]");
   });
 
   it("reduces droid user messages to size markers", () => {

@@ -32,7 +32,9 @@ export type ActivityDialect =
   | "codex-json"
   | "opencode-json"
   | "copilot-json"
-  | "pi-json";
+  | "pi-json"
+  | "claude-sdk"
+  | "droid-sdk";
 
 /** Rendered summary line, or undefined to drop the event silently. */
 export type ActivityRenderer = (event: Record<string, unknown>) => string | undefined;
@@ -60,6 +62,10 @@ export function activityRenderer(dialect: ActivityDialect): ActivityRenderer {
     "opencode-json": opencodeJsonEventText,
     "copilot-json": copilotJsonEventText,
     "pi-json": piJsonEventText,
+    // SDKMessage objects are structurally identical to parsed CLI stream-json
+    // lines, so the claude renderer applies verbatim.
+    "claude-sdk": claudeStreamEventText,
+    "droid-sdk": droidSdkStreamEventText,
   };
   return renderers[dialect];
 }
@@ -258,6 +264,60 @@ export function droidStreamEventText(event: Record<string, unknown>): string | u
   }
 
   const name = stringField(event, "name") ?? stringField(event, "tool");
+  return `[${type}${name !== undefined ? ` ${boundedMarkerName(name)}` : ""}]`;
+}
+
+/**
+ * One safe summary line per Droid SDK stream message (the default non-partial
+ * `session.stream()` overload). Forked from droidStreamEventText rather than
+ * aliased: the SDK's DroidStreamMessage shapes differ from the CLI's
+ * stream-json envelope (verified against @factory/droid-sdk types) —
+ * assistant/user events carry a Claude-shaped `message.content` block array
+ * instead of role/text fields, tool activity arrives as tool_call/tool_result
+ * events, and the terminal event is `result` (numTurns/durationMs), not
+ * `completion`. Assistant prose renders through the shared content-block
+ * allowlist, so thinking blocks drop structurally; thinking_* event types only
+ * exist in the partial overload but the universal reasoning regex drops them
+ * anyway if that ever drifts.
+ */
+export function droidSdkStreamEventText(event: Record<string, unknown>): string | undefined {
+  const type = stringField(event, "type");
+  if (type === undefined) {
+    return undefined;
+  }
+
+  if (type === "assistant") {
+    const message = isRecord(event.message) ? event.message : undefined;
+    return message === undefined ? undefined : renderClaudeContentBlocks(message.content);
+  }
+
+  if (type === "user") {
+    // The echoed user message is our own review prompt; size marker only.
+    const message = isRecord(event.message) ? event.message : event;
+    return sizeMarker("user message", contentSize(message.content ?? ""));
+  }
+
+  if (type === "tool_call") {
+    const toolUse = isRecord(event.toolUse) ? event.toolUse : undefined;
+    return toolUseMarker(toolUse === undefined ? undefined : stringField(toolUse, "name"));
+  }
+
+  if (type === "tool_result") {
+    return sizeMarker("tool_result", contentSize(event.content ?? ""));
+  }
+
+  if (type === "result") {
+    const subtype = stringField(event, "subtype") ?? "unknown";
+    // The SDK's DroidResultBase declares BOTH numTurns and turnCount and its
+    // implementation emits both with the same value; either key works here.
+    const turns = numberField(event, "numTurns") ?? numberField(event, "turnCount");
+    const durationMs = numberField(event, "durationMs");
+    return `[result:${subtype}${turns !== undefined ? ` turns=${turns}` : ""}${
+      durationMs !== undefined ? ` duration_ms=${durationMs}` : ""
+    }]`;
+  }
+
+  const name = stringField(event, "toolName");
   return `[${type}${name !== undefined ? ` ${boundedMarkerName(name)}` : ""}]`;
 }
 
