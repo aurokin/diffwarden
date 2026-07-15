@@ -51,6 +51,11 @@ import {
   effortResolutionMetadata,
   modelResolutionMetadata,
 } from "./metadata.js";
+import {
+  type ReviewerActivitySink,
+  activitySinkFromDebugOutput,
+  boundedMarkerName,
+} from "./reviewer-activity.js";
 import type {
   ReviewAdapter,
   ReviewAdapterInput,
@@ -263,16 +268,28 @@ class CodexAppServerSession {
     | { turnId: string; resolve: () => void; reject: (error: Error) => void }
     | undefined;
   private usage: unknown;
+  private readonly activity: ReviewerActivitySink | undefined;
 
   constructor(
     private readonly input: ReviewAdapterInput,
     private readonly executable: string,
     private readonly executableSelection: CliExecutableSelection,
     private readonly options: CodexAppServerOptions,
-  ) {}
+  ) {
+    // Debug capture is enabled ONLY for stdio-isolated runs: the child is
+    // single-tenant, so every accepted notification is verifiably ours.
+    // Shared-daemon modes (attach/auto/launch) withhold capture until a live
+    // attach-mode capture proves threadId presence on real notifications
+    // (decided 2026-07-15); see debugOutputMetadata for the dropped marker.
+    this.activity =
+      options.mode === "stdio-isolated"
+        ? activitySinkFromDebugOutput("codex-app-server", input.debugOutput)
+        : undefined;
+  }
 
   async run(): Promise<ReviewAdapterOutput> {
     throwIfAborted(this.input.signal, "codex app-server reviewer aborted before start");
+    const onStderrChunk = this.stderrDebugTee();
     const connection = await openCodexAppServerConnection({
       executable: this.executable,
       env: this.input.env,
@@ -282,6 +299,7 @@ class CodexAppServerSession {
         this.rejectAll(error);
         this.turnCompletion?.reject(error);
       },
+      ...(onStderrChunk !== undefined ? { onStderrChunk } : {}),
     });
     this.connection = connection;
     const removeAbortListener = bindAbortSignal(this.input.signal, () => {
@@ -322,9 +340,41 @@ class CodexAppServerSession {
       }
       return await this.runStructuredReview(connection, threadId);
     } finally {
+      this.activity?.end();
       removeAbortListener();
       await this.close();
     }
+  }
+
+  /**
+   * Raw child-stderr tee for debug capture, stdio-isolated only: that mode
+   * owns a spawned child whose stderr genuinely belongs to this review.
+   * Attach/auto/launch talk to a shared daemon over a socket and have no
+   * child stderr at all — the asymmetry is documented in the README's
+   * debugging section.
+   */
+  private stderrDebugTee(): ((text: string) => void) | undefined {
+    const debugOutput = this.input.debugOutput;
+    if (this.options.mode !== "stdio-isolated" || debugOutput === undefined) {
+      return undefined;
+    }
+    return (text) => {
+      try {
+        debugOutput.onChunk("stderr", text);
+      } catch {
+        // Debug never fails the review.
+      }
+    };
+  }
+
+  /** Reviewer-metadata debug markers; see the constructor for the withhold decision. */
+  private debugOutputMetadata(): Record<string, string> {
+    if (this.input.debugOutput === undefined) {
+      return {};
+    }
+    return this.options.mode === "stdio-isolated"
+      ? { debugOutputMode: "event-summary" }
+      : { debugOutputDropped: "shared-server-unverified" };
   }
 
   private async runStructuredReview(
@@ -365,6 +415,7 @@ class CodexAppServerSession {
       stderr: trimForMetadata(connection.stderr()),
       ...codexAppServerWebSearchMetadata(this.options),
       ...codexAppServerSelectionMetadata(this.input.reviewer),
+      ...this.debugOutputMetadata(),
     });
     return {
       ...output,
@@ -408,6 +459,7 @@ class CodexAppServerSession {
         stderr: trimForMetadata(connection.stderr()),
         ...codexAppServerWebSearchMetadata(this.options),
         ...codexAppServerSelectionMetadata(this.input.reviewer),
+        ...this.debugOutputMetadata(),
       },
     });
   }
@@ -495,6 +547,11 @@ class CodexAppServerSession {
       return;
     }
 
+    // Observation only, after the thread filter accepts: the sink renders a
+    // bounded summary line (or drops the event) and swallows every failure —
+    // it never returns early and never alters the handling below.
+    this.activity?.event(message);
+
     const method = typeof message.method === "string" ? message.method : "";
     if (method === "item/agentMessage/delta") {
       const params = isRecord(message.params) ? message.params : {};
@@ -567,33 +624,41 @@ class CodexAppServerSession {
 
   private onServerRequest(message: JsonRpcMessage): void {
     const method = typeof message.method === "string" ? message.method : "";
+    const decision = this.answerServerRequest(message.id, method);
+    // After the conservative answer: method + decision only, never params.
+    this.activity?.note(`[request ${boundedMarkerName(method)} -> ${decision}]`);
+  }
+
+  /** Answers a server-initiated request conservatively; returns the decision label for debug notes. */
+  private answerServerRequest(id: unknown, method: string): string {
     switch (method) {
       case "item/commandExecution/requestApproval":
       case "item/fileChange/requestApproval":
-        this.respond(message.id, { decision: "decline" });
-        return;
+        this.respond(id, { decision: "decline" });
+        return "decline";
       case "applyPatchApproval":
       case "execCommandApproval":
-        this.respond(message.id, { decision: "denied" });
-        return;
+        this.respond(id, { decision: "denied" });
+        return "denied";
       case "item/permissions/requestApproval":
-        this.respond(message.id, {
+        this.respond(id, {
           permissions: {},
           scope: "turn",
           strictAutoReview: true,
         });
-        return;
+        return "restricted";
       case "item/tool/requestUserInput":
-        this.respond(message.id, { answers: {} });
-        return;
+        this.respond(id, { answers: {} });
+        return "empty-answers";
       case "item/tool/call":
-        this.respond(message.id, {
+        this.respond(id, {
           success: false,
           contentItems: [{ type: "inputText", text: "Diffwarden does not expose dynamic tools." }],
         });
-        return;
+        return "declined";
       default:
-        this.respondError(message.id, -32601, `Unsupported Codex app-server request: ${method}`);
+        this.respondError(id, -32601, `Unsupported Codex app-server request: ${method}`);
+        return "unsupported";
     }
   }
 
@@ -666,6 +731,8 @@ async function openCodexAppServerConnection(options: {
   options: CodexAppServerOptions;
   onMessage: (message: JsonRpcMessage) => void;
   onFailure: (error: Error) => void;
+  /** Raw child-stderr tee; only meaningful for stdio-isolated, which owns a child. */
+  onStderrChunk?: (text: string) => void;
 }): Promise<AppServerConnection> {
   if (options.options.mode === "stdio-isolated") {
     return await openStdioIsolatedConnection(options);
@@ -679,6 +746,7 @@ async function openStdioIsolatedConnection(options: {
   options: CodexAppServerOptions;
   onMessage: (message: JsonRpcMessage) => void;
   onFailure: (error: Error) => void;
+  onStderrChunk?: (text: string) => void;
 }): Promise<AppServerConnection> {
   const spawned = await spawnCodexAppServer({
     executable: options.executable,
@@ -693,8 +761,12 @@ async function openStdioIsolatedConnection(options: {
       options.onMessage(message);
     }
   });
-  spawned.child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
+  // setEncoding decodes statefully, so multibyte UTF-8 characters split
+  // across stream chunks are never corrupted in the raw stderr tee.
+  spawned.child.stderr.setEncoding("utf8");
+  spawned.child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+    options.onStderrChunk?.(chunk);
   });
   spawned.child.stdin.on("error", (error) => {
     options.onFailure(reviewerFailed(`codex app-server stdin failed: ${formatError(error)}`));

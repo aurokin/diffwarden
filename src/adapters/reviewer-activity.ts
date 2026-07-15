@@ -30,6 +30,7 @@ export type ActivityDialect =
   | "cursor-stream-json"
   | "droid-stream-json"
   | "codex-json"
+  | "codex-app-server"
   | "opencode-json"
   | "copilot-json"
   | "pi-json"
@@ -61,6 +62,7 @@ export function activityRenderer(dialect: ActivityDialect): ActivityRenderer {
     "cursor-stream-json": cursorStreamEventText,
     "droid-stream-json": droidStreamEventText,
     "codex-json": codexJsonEventText,
+    "codex-app-server": codexAppServerNotificationText,
     "opencode-json": opencodeJsonEventText,
     "copilot-json": copilotJsonEventText,
     "pi-json": piJsonEventText,
@@ -371,6 +373,72 @@ export function codexJsonEventText(event: Record<string, unknown>): string | und
 }
 
 /**
+ * One safe summary line per Codex app-server JSON-RPC notification, keyed on
+ * `method` (renderActivityEvent's universal reasoning drop inspects `method`
+ * too, so reasoning-flavored methods never reach this renderer — the app-server
+ * API is experimental and method drift is expected). v1 policy:
+ *
+ * - `item/agentMessage/delta` drops entirely: reply assembly consumes deltas,
+ *   and prose renders once, at `item/completed` (no coalescer in v1).
+ * - Completed `agentMessage` items surface `item.text` verbatim, and completed
+ *   `exitedReviewMode` items surface their `review` text verbatim (native
+ *   review mode; the structured-JSON duplication matches the codex-json CLI
+ *   dialect's accepted precedent). Reasoning-typed items are nested under
+ *   `item.type`, out of reach of the universal top-level drop, so they are
+ *   dropped here explicitly.
+ * - Every other item type reduces to an `[item:<type>]` marker —
+ *   `aggregated_output` is unbounded and can echo file contents, so it is
+ *   never read.
+ * - `thread/tokenUsage/updated` drops entirely; `error` reduces to a
+ *   payload-free retryability marker; unknown methods render `[<method>]`
+ *   with params dropped.
+ */
+export function codexAppServerNotificationText(event: Record<string, unknown>): string | undefined {
+  // JSON-RPC notifications carry `method`; the `type` fallback keeps the
+  // shared unknown-shape invariant (`[<type>]` marker) for typed events.
+  const method = stringField(event, "method") ?? stringField(event, "type");
+  if (method === undefined) {
+    return undefined;
+  }
+
+  if (method === "item/agentMessage/delta" || method === "thread/tokenUsage/updated") {
+    return undefined;
+  }
+
+  if (method === "item/completed") {
+    const params = isRecord(event.params) ? event.params : undefined;
+    const item = params !== undefined && isRecord(params.item) ? params.item : undefined;
+    const itemType = item === undefined ? undefined : stringField(item, "type");
+    if (item === undefined || itemType === undefined) {
+      return `[${method}]`;
+    }
+    if (reasoningTypePattern.test(itemType)) {
+      return undefined;
+    }
+    if (itemType === "agentMessage") {
+      const text = typeof item.text === "string" ? item.text : undefined;
+      return text === undefined || text.trim() === "" ? undefined : text;
+    }
+    if (itemType === "exitedReviewMode") {
+      const review = typeof item.review === "string" ? item.review : undefined;
+      return review === undefined || review.trim() === "" ? undefined : review;
+    }
+    return `[item:${boundedMarkerName(itemType)}]`; // never aggregated_output
+  }
+
+  if (method === "turn/completed") {
+    return "[turn:completed]";
+  }
+
+  if (method === "error") {
+    const willRetry = isRecord(event.params) && event.params.willRetry === true;
+    return `[error willRetry=${willRetry}]`;
+  }
+
+  return `[${method}]`;
+}
+
+/**
  * One safe summary line per OpenCode `--format json` event. Every payload
  * nests under `.part` (a top-level-field summarizer misses `part.text`), so
  * assistant prose is read from `part.text` only. Tool parts reduce to a name
@@ -665,7 +733,8 @@ export function sizeMarker(label: string, chars: number): string {
   return `[${label} ${chars} chars]`;
 }
 
-function boundedMarkerName(name: string): string {
+/** Bounded server/tool-provided name for marker embedding (exported for adapter-synthesized notes). */
+export function boundedMarkerName(name: string): string {
   return name.length > maxMarkerNameChars ? name.slice(0, maxMarkerNameChars) : name;
 }
 
