@@ -71,6 +71,9 @@ export function renderHumanReviewEvent(
       )}: ${event.error.message}`;
     case "error":
       return `${style.danger("Review failed")}: ${event.error.message}`;
+    case "reviewer_debug_output":
+      // Debug chunks are an ndjson-only surface; human mode stays quiet.
+      return undefined;
     case "final_result":
       return undefined;
   }

@@ -13,6 +13,7 @@ import type {
   ReviewReviewerConfig,
 } from "../adapters/types.js";
 import type { DiffwardenConfig } from "./config.js";
+import { type DebugOutputRecorder, createDebugOutputRecorder } from "./debug-output.js";
 import { parseChangedLineRanges } from "./diff.js";
 import {
   DiffwardenError,
@@ -68,6 +69,8 @@ export type RunReviewOptions = {
   env?: NodeJS.ProcessEnv;
   adapters?: Partial<Record<string, ReviewAdapter>>;
   promptFocus?: string;
+  /** Opt-in bounded raw transport capture (--debug-reviewer-output). */
+  debugReviewerOutput?: boolean;
 };
 
 export type RunReviewBatchOptions = RunReviewOptions & {
@@ -461,38 +464,84 @@ async function* runPhase(params: {
     yield event({ type: "reviewer_started", reviewer_id: reviewers[index]?.id ?? "unknown" });
   }
 
-  const settled = settleInCompletionOrder(
-    runnable.map(({ index, outcome }) =>
-      runReviewerOutcome({
-        outcome,
-        cwd: options.cwd,
-        resolved: options.resolved,
-        ...(options.promptFocus !== undefined ? { promptFocus: options.promptFocus } : {}),
-        changedLineRanges,
-        env,
-      }).then((artifact) => ({ originalIndex: index, artifact })),
-    ),
-  );
-  for await (const { value } of settled) {
-    const { originalIndex, artifact } = value;
-    reviewerArtifacts[originalIndex] = artifact;
-    const reviewerId = reviewers[originalIndex]?.id ?? "unknown";
-    if (isFailedReviewerArtifact(artifact)) {
-      yield event({
-        type: "reviewer_failed",
-        reviewer_id: reviewerId,
-        error: artifact.error,
-        timing_ms: artifact.timing_ms ?? 0,
-      });
-    } else {
-      yield event({
-        type: "reviewer_result",
-        reviewer_id: reviewerId,
-        provisional: true,
-        artifact,
-      });
-    }
+  // A queue rather than settleInCompletionOrder: opt-in debug chunks arrive
+  // *while* reviewers run, so lifecycle events and debug events merge into one
+  // stream. Settlement events keep completion order exactly as before.
+  const queue = new AsyncEventQueue<ReviewEvent>();
+  const runs = runnable.map(({ index, outcome }) => {
+    const reviewerId = reviewers[index]?.id ?? "unknown";
+    const debug =
+      options.debugReviewerOutput === true ? reviewerDebugCapture(reviewerId, queue) : undefined;
+    return runReviewerOutcome({
+      outcome,
+      cwd: options.cwd,
+      resolved: options.resolved,
+      ...(options.promptFocus !== undefined ? { promptFocus: options.promptFocus } : {}),
+      changedLineRanges,
+      env,
+      ...(debug !== undefined ? { debug } : {}),
+    }).then((artifact) => {
+      reviewerArtifacts[index] = artifact;
+      if (isFailedReviewerArtifact(artifact)) {
+        queue.push(
+          event({
+            type: "reviewer_failed",
+            reviewer_id: reviewerId,
+            error: artifact.error,
+            timing_ms: artifact.timing_ms ?? 0,
+          }),
+        );
+      } else {
+        queue.push(
+          event({
+            type: "reviewer_result",
+            reviewer_id: reviewerId,
+            provisional: true,
+            artifact,
+          }),
+        );
+      }
+    });
+  });
+  void Promise.all(runs).finally(() => queue.close());
+
+  for await (const reviewEvent of queue) {
+    yield reviewEvent;
   }
+
+  await Promise.all(runs);
+}
+
+type ReviewerDebugCapture = {
+  recorder: DebugOutputRecorder;
+  onChunk: (stream: "stdout" | "stderr", text: string) => void;
+};
+
+/**
+ * One recorder per reviewer: bounds the persisted transcript and fans bounded
+ * reviewer_debug_output events into the run-phase queue as chunks arrive.
+ */
+function reviewerDebugCapture(
+  reviewerId: string,
+  queue: AsyncEventQueue<ReviewEvent>,
+): ReviewerDebugCapture {
+  const recorder = createDebugOutputRecorder();
+  return {
+    recorder,
+    onChunk(stream, text) {
+      for (const chunk of recorder.record(stream, text)) {
+        queue.push(
+          event({
+            type: "reviewer_debug_output",
+            reviewer_id: reviewerId,
+            stream: chunk.stream,
+            text: chunk.text,
+            truncated: chunk.truncated,
+          }),
+        );
+      }
+    },
+  };
 }
 
 /**
@@ -709,6 +758,7 @@ async function runReviewerOutcome(options: {
   promptFocus?: string;
   changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
   env: NodeJS.ProcessEnv;
+  debug?: ReviewerDebugCapture;
 }): Promise<ReviewReviewerArtifact> {
   if (options.outcome.type === "failure") {
     return options.outcome.artifact;
@@ -733,19 +783,36 @@ async function runReviewerOutcome(options: {
       ),
       changedLineRanges: options.changedLineRanges,
       env: options.env,
+      ...(options.debug !== undefined ? { onDebugChunk: options.debug.onChunk } : {}),
     });
-    return {
-      ...artifact,
-      timing_ms: Date.now() - options.outcome.startedAt,
-    };
+    return withDebugOutput(
+      {
+        ...artifact,
+        timing_ms: Date.now() - options.outcome.startedAt,
+      },
+      options.debug,
+    );
   } catch (error) {
-    return createFailedReviewerArtifact(
-      context.reviewer,
-      error,
-      options.outcome.startedAt,
-      context.preflight,
+    // Failed runs keep their captured transcript: debugging failures is the
+    // primary use case for --debug-reviewer-output.
+    return withDebugOutput(
+      createFailedReviewerArtifact(
+        context.reviewer,
+        error,
+        options.outcome.startedAt,
+        context.preflight,
+      ),
+      options.debug,
     );
   }
+}
+
+function withDebugOutput<T extends ReviewReviewerArtifact>(
+  artifact: T,
+  debug: ReviewerDebugCapture | undefined,
+): T {
+  const debugOutput = debug?.recorder.finalize();
+  return debugOutput === undefined ? artifact : { ...artifact, debug_output: debugOutput };
 }
 
 type ReviewerPromptSelection = {
@@ -788,6 +855,7 @@ type SingleReviewerOptions = {
   promptSelection: ReviewerPromptSelection;
   changedLineRanges: ReturnType<typeof parseChangedLineRanges>;
   env: NodeJS.ProcessEnv;
+  onDebugChunk?: (stream: "stdout" | "stderr", text: string) => void;
 };
 
 /**
@@ -861,6 +929,11 @@ async function runReviewerAttempt(
     readonly: true,
     env: options.env,
     ...(options.runContext !== undefined ? { runContext: options.runContext } : {}),
+    // Both attempts share the reviewer's recorder, so a retried run's transcript
+    // includes the failing first attempt under the same per-stream budget.
+    ...(options.onDebugChunk !== undefined
+      ? { debugOutput: { onChunk: options.onDebugChunk } }
+      : {}),
   };
   const output = await withTimeout(
     () => options.adapter.run(adapterInput),

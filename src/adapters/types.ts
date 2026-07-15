@@ -21,6 +21,14 @@ export type ReviewAdapterInput = {
   readonly: boolean;
   env?: NodeJS.ProcessEnv;
   runContext?: unknown;
+  /**
+   * Present only when the run opted into --debug-reviewer-output. Transports
+   * that can observe raw incremental output call onChunk per chunk; transports
+   * that cannot simply ignore it, so absence of debug output is well-defined.
+   */
+  debugOutput?: {
+    onChunk: (stream: "stdout" | "stderr", text: string) => void;
+  };
 };
 
 export type ReviewReviewerConfig = {
