@@ -27,6 +27,7 @@ import type { ReviewAdapterInput } from "./types.js";
  */
 export type ActivityDialect =
   | "claude-stream-json"
+  | "cursor-stream-json"
   | "droid-stream-json"
   | "codex-json"
   | "opencode-json"
@@ -53,6 +54,7 @@ const maxMarkerNameChars = 128;
 export function activityRenderer(dialect: ActivityDialect): ActivityRenderer {
   const renderers: Record<ActivityDialect, ActivityRenderer> = {
     "claude-stream-json": claudeStreamEventText,
+    "cursor-stream-json": cursorStreamEventText,
     "droid-stream-json": droidStreamEventText,
     "codex-json": codexJsonEventText,
     "opencode-json": opencodeJsonEventText,
@@ -198,6 +200,27 @@ export function renderClaudeContentBlocks(content: unknown): string | undefined 
     // thinking / redacted_thinking blocks are intentionally dropped.
   }
   return parts.length === 0 ? undefined : parts.join("\n");
+}
+
+/**
+ * One safe summary line per Cursor stream-json event. Cursor's envelope
+ * matches Claude's (live-verified 2026-07-15: system events with a subtype,
+ * assistant events with message content blocks, and a result event keyed by
+ * subtype/duration_ms — no num_turns, so the summary omits turns), so those
+ * render through claudeStreamEventText. The one live-observed divergence:
+ * cursor re-echoes the review prompt as a `user` text event, so user events
+ * reduce to a size marker like droid's — rendering the echoed prompt verbatim
+ * would burn the bounded debug budget on our own prompt. Cursor's top-level
+ * `thinking` delta events never reach this renderer (universal reasoning
+ * drop), and unverified shapes (e.g. tool_call, never captured with a
+ * triggered tool) degrade to the payload-free `[type]` marker.
+ */
+export function cursorStreamEventText(event: Record<string, unknown>): string | undefined {
+  if (stringField(event, "type") === "user") {
+    const message = isRecord(event.message) ? event.message : event;
+    return sizeMarker("user message", contentSize(message.content ?? ""));
+  }
+  return claudeStreamEventText(event);
 }
 
 /**

@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   type ActivityDialect,
   type ActivityRenderer,
+  activityRenderer,
   activitySinkFromDebugOutput,
   claudeStreamEventText,
   codexJsonEventText,
   copilotJsonEventText,
   createReviewerActivitySink,
+  cursorStreamEventText,
   droidStreamEventText,
   opencodeJsonEventText,
   piJsonEventText,
@@ -19,6 +21,8 @@ const SENTINEL = "LEAK_ME";
 /** Every dialect renderer must run through the shared policy wrapper. */
 const dialectRenderers: Array<[ActivityDialect, ActivityRenderer]> = [
   ["claude-stream-json", claudeStreamEventText],
+  // Resolved through the dialect map so the wiring itself is under test.
+  ["cursor-stream-json", activityRenderer("cursor-stream-json")],
   ["droid-stream-json", droidStreamEventText],
   ["codex-json", codexJsonEventText],
   ["opencode-json", opencodeJsonEventText],
@@ -247,6 +251,48 @@ describe("renderActivityEvent dialect rendering", () => {
       name: longName,
     });
     expect(droid).toBe(`[tool_call ${"x".repeat(128)}]`);
+  });
+
+  it("routes the cursor dialect to its claude-delegating renderer", () => {
+    // Cursor's stream-json events share Claude's envelope (live-verified
+    // 2026-07-15), so cursorStreamEventText delegates to claudeStreamEventText
+    // for everything except the echoed-prompt user events.
+    expect(activityRenderer("cursor-stream-json")).toBe(cursorStreamEventText);
+  });
+
+  it("reduces cursor user events (the echoed review prompt) to size markers", () => {
+    // Live-observed 2026-07-15: cursor re-echoes the review prompt as a user
+    // text event; rendering it verbatim would burn the bounded debug budget.
+    expect(
+      renderActivityEvent(cursorStreamEventText, {
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: SENTINEL }] },
+      }),
+    ).toMatch(/^\[user message \d+ chars\]$/);
+  });
+
+  it("drops cursor top-level thinking deltas and omits turns from result summaries", () => {
+    const render = activityRenderer("cursor-stream-json");
+    // Cursor thinking deltas are top-level typed events: the universal
+    // reasoning drop removes them before the renderer runs.
+    expect(
+      renderActivityEvent(render, { type: "thinking", subtype: "delta", text: SENTINEL }),
+    ).toBeUndefined();
+    expect(renderActivityEvent(render, { type: "thinking", subtype: "completed" })).toBeUndefined();
+    expect(
+      renderActivityEvent(render, {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "cursor review text" }] },
+      }),
+    ).toBe("cursor review text");
+    // tool_call event shape is unverified; the payload-free marker is safe.
+    expect(
+      renderActivityEvent(render, { type: "tool_call", subtype: "started", args: SENTINEL }),
+    ).toBe("[tool_call]");
+    // Cursor result events carry no num_turns; the summary just omits turns.
+    expect(
+      renderActivityEvent(render, { type: "result", subtype: "success", duration_ms: 12 }),
+    ).toBe("[result:success duration_ms=12]");
   });
 
   it("reduces droid user messages to size markers", () => {

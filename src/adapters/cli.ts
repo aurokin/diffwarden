@@ -31,6 +31,7 @@ import {
   copilotReviewPolicyMetadata,
 } from "./copilot-tool-policy.js";
 import { assertCopilotExecutableSupportsReviewPolicy } from "./copilot.js";
+import { cursorCliSupportsStreamJsonOutput } from "./cursor-policy.js";
 import {
   type DroidCliReviewPolicyOptions,
   type DroidCliReviewPolicySupport,
@@ -158,6 +159,9 @@ export function createCliAdapter(engine: CliEngine): ReviewAdapter {
             input,
           );
           await prepareClaudeCliInvocation(invocation, input, preparedPolicyCheck);
+        }
+        if (engine === "cursor") {
+          await prepareCursorCliInvocation(invocation, input);
         }
         if (engine === "gemini") {
           const preparedPolicyCheck = await hasPreparedPolicyCheck(
@@ -848,6 +852,36 @@ function applyClaudeCliOptionalFlags(
   }
 
   invocation.metadata = { ...invocation.metadata, ...metadata };
+}
+
+/**
+ * Cursor mirrors the Claude stream wiring: switch to --output-format
+ * stream-json only when the run requested live debug streaming (--ndjson with
+ * --debug-reviewer-output), gated on the help-text support probe. Fail
+ * closed: an unsupported or inconclusive probe keeps the byte-identical json
+ * invocation and records the degrade. --stream-partial-output is never
+ * passed: it adds text-delta events that would double-print assistant prose.
+ */
+async function prepareCursorCliInvocation(
+  invocation: CliInvocation,
+  input: ReviewAdapterInput,
+): Promise<void> {
+  if (input.debugOutput?.streaming !== true) {
+    return;
+  }
+  const env = cliInvocationEnv(invocation, input);
+  invocation.resolvedExecutable =
+    invocation.resolvedExecutable ?? (await resolveExecutable(invocation.executable, env));
+  if (await cursorCliSupportsStreamJsonOutput(invocation.resolvedExecutable, env)) {
+    const formatIndex = invocation.args.indexOf("--output-format");
+    if (formatIndex !== -1) {
+      invocation.args[formatIndex + 1] = "stream-json";
+      invocation.streamFormat = "cursor-stream-json";
+      invocation.metadata = { ...invocation.metadata, debugStreamMode: "stream-json" };
+    }
+  } else {
+    invocation.metadata = { ...invocation.metadata, debugStreamModeDropped: "cli-unsupported" };
+  }
 }
 
 async function prepareGeminiCliInvocation(
