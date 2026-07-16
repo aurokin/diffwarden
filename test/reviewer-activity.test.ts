@@ -768,7 +768,7 @@ describe("renderActivityEvent dialect rendering", () => {
     ).toBe("native review text");
   });
 
-  it("drops app-server deltas and token usage entirely (no coalescer in v1)", () => {
+  it("leaves app-server deltas to transport coalescing and drops token usage", () => {
     expect(
       renderActivityEvent(codexAppServerNotificationText, {
         method: "item/agentMessage/delta",

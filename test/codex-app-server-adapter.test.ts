@@ -24,6 +24,7 @@ import {
   codexNativeReviewOutput,
   codexNativeReviewStructuredFindings,
 } from "../src/adapters/codex-tool-policy.js";
+import { deltaCoalescerBufferCapChars } from "../src/adapters/reviewer-activity.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 import { reviewResultStrictJsonSchema } from "../src/core/schema.js";
 
@@ -652,14 +653,15 @@ describe("codex app-server debug output", () => {
       debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
     });
 
-    // Exact stdout line sequence: the request note (method + decision only),
-    // the non-message item marker, the completed agent message verbatim, the
-    // payload-free error marker, and the turn marker. Deltas, the reasoning
-    // method, and tokenUsage produce nothing.
+    const streamedPrefix = reviewJson.slice(0, 32);
+    // Two token-level deltas coalesce into one live prefix when the reasoning
+    // event transitions the stream. Completion contributes only the unseen
+    // authoritative suffix, so the review text is never repeated.
     expect(chunks.filter((chunk) => chunk.stream === "stdout").map((chunk) => chunk.text)).toEqual([
       "[request item/commandExecution/requestApproval -> decline]\n",
+      `${streamedPrefix}\n`,
       "[item:commandExecution]\n",
-      `${reviewJson}\n`,
+      `${reviewJson.slice(streamedPrefix.length)}\n`,
       "[error willRetry=true]\n",
       "[turn:completed]\n",
     ]);
@@ -669,9 +671,13 @@ describe("codex app-server debug output", () => {
       .map((chunk) => chunk.text)
       .join("");
     expect(stderrText).toContain("codex fixture stderr");
-    // No payload leaks: request params, delta text, reasoning text,
-    // aggregated_output, and the error message never render.
-    expect(JSON.stringify(chunks)).not.toContain("SENTINEL");
+    // No payload leaks: request params, reasoning text, aggregated_output,
+    // and the error message never render.
+    const captured = JSON.stringify(chunks);
+    expect(captured).not.toContain("PARAM_SENTINEL");
+    expect(captured).not.toContain("REASONING_SENTINEL");
+    expect(captured).not.toContain("AGGREGATED_SENTINEL");
+    expect(captured).not.toContain("ERROR_SENTINEL");
     expect(output.structured).toMatchObject({ overall_explanation: "codex app-server ok" });
     expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
     expect(output.metadata).not.toHaveProperty("debugOutputDropped");
@@ -702,6 +708,30 @@ describe("codex app-server debug output", () => {
     expect(output.metadata).toMatchObject({ debugOutputMode: "event-summary" });
   });
 
+  it("emits at the shared delta buffer cap and does not repeat the completed text", async () => {
+    const harness = createHarness({ deltaCapSequence: true });
+    const adapter = createCodexAppServerAdapter();
+    const chunks: Chunk[] = [];
+    const explanation = "x".repeat(deltaCoalescerBufferCapChars);
+    const capReviewJson = JSON.stringify({
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation: explanation,
+      overall_confidence_score: 0.91,
+    });
+
+    const output = await adapter.run({
+      ...createInput(createReviewer(harness.executable), harness),
+      debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
+    });
+
+    expect(chunks.filter((chunk) => chunk.stream === "stdout").map((chunk) => chunk.text)).toEqual([
+      `${capReviewJson}\n`,
+      "[turn:completed]\n",
+    ]);
+    expect(output.structured).toMatchObject({ overall_explanation: explanation });
+  });
+
   it("keeps foreign-thread notifications out of both reply assembly and debug capture", async () => {
     const harness = createHarness({ foreignThread: true });
     const adapter = createCodexAppServerAdapter();
@@ -712,9 +742,11 @@ describe("codex app-server debug output", () => {
       debugOutput: { onChunk: (stream, text) => chunks.push({ stream, text }) },
     });
 
-    // Own-thread traffic is one delta (dropped) plus tokenUsage (dropped) plus
-    // the turn marker; the foreign completed agent message must not render.
+    // The accepted own-thread delta flushes before the turn marker; both
+    // foreign delta streams and the foreign completed item stay outside the
+    // activity path because the thread guard runs first.
     expect(chunks.filter((chunk) => chunk.stream === "stdout").map((chunk) => chunk.text)).toEqual([
+      `${reviewJson}\n`,
       "[turn:completed]\n",
     ]);
     expect(JSON.stringify(chunks)).not.toContain("FOREIGN");
@@ -977,6 +1009,7 @@ function createHarness(
   options: {
     auth?: boolean;
     completedItemOnly?: boolean;
+    deltaCapSequence?: boolean;
     debugSequence?: boolean;
     foreignThread?: boolean;
     omitThreadId?: boolean;
@@ -1018,6 +1051,7 @@ function createHarness(
       CODEX_HOME: authHome,
       DIFFWARDEN_FAKE_APP_SERVER_INVOCATION: invocationPath,
       ...(options.completedItemOnly ? { DIFFWARDEN_FAKE_APP_SERVER_COMPLETED_ITEM_ONLY: "1" } : {}),
+      ...(options.deltaCapSequence ? { DIFFWARDEN_FAKE_APP_SERVER_DELTA_CAP_SEQUENCE: "1" } : {}),
       ...(options.debugSequence ? { DIFFWARDEN_FAKE_APP_SERVER_DEBUG_SEQUENCE: "1" } : {}),
       ...(options.foreignThread ? { DIFFWARDEN_FAKE_APP_SERVER_FOREIGN_THREAD: "1" } : {}),
       ...(options.omitThreadId ? { DIFFWARDEN_FAKE_APP_SERVER_OMIT_THREAD_ID: "1" } : {}),
@@ -1447,7 +1481,9 @@ rl.on("line", (line) => {
       return;
     }
     send({ id: message.id, result: { turn: { id: "turn-1" } } });
-    if (process.env.DIFFWARDEN_FAKE_APP_SERVER_DEBUG_SEQUENCE) {
+    if (process.env.DIFFWARDEN_FAKE_APP_SERVER_DELTA_CAP_SEQUENCE) {
+      finishDeltaCapSequence();
+    } else if (process.env.DIFFWARDEN_FAKE_APP_SERVER_DEBUG_SEQUENCE) {
       process.stderr.write("codex fixture stderr\\n");
       send({
         id: 999,
@@ -1497,10 +1533,26 @@ function finishDebugSequence() {
     overall_explanation: "codex app-server ok",
     overall_confidence_score: 0.91
   };
-  // Delta: consumed by reply assembly, never rendered into debug output.
+  const streamedPrefix = JSON.stringify(review).slice(0, 32);
+  // Two token-level deltas must render as one coalesced block, never one line
+  // per fragment. The following reasoning event provides the transition.
   send({
     method: "item/agentMessage/delta",
-    params: { threadId: "thread-1", turnId: "turn-1", itemId: "message-1", delta: "DELTA_SENTINEL " }
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "message-1",
+      delta: streamedPrefix.slice(0, 11)
+    }
+  });
+  send({
+    method: "item/agentMessage/delta",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "message-1",
+      delta: streamedPrefix.slice(11)
+    }
   });
   // Reasoning-flavored method: dropped by the universal reasoning drop.
   send({
@@ -1544,6 +1596,38 @@ function finishDebugSequence() {
       threadId: "thread-1",
       turnId: "turn-1",
       tokenUsage: { total: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 2 } }
+    }
+  });
+  writeInvocation();
+  send({
+    method: "turn/completed",
+    params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } }
+  });
+}
+
+function finishDeltaCapSequence() {
+  const review = {
+    findings: [],
+    overall_correctness: "patch is correct",
+    overall_explanation: "x".repeat(${deltaCoalescerBufferCapChars}),
+    overall_confidence_score: 0.91
+  };
+  const text = JSON.stringify(review);
+  send({
+    method: "item/agentMessage/delta",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "message-1",
+      delta: text
+    }
+  });
+  send({
+    method: "item/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "message-1", type: "agentMessage", text }
     }
   });
   writeInvocation();

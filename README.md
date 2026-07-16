@@ -269,9 +269,10 @@ diffwarden review --target base:main --reviewer droid-cli --ndjson --debug-revie
   `--debug-reviewer-output` is set.
 - Codex app-server reviewers capture debug output only in `stdio-isolated` mode:
   notification summaries in the same one-line format feed `debug_output.stdout` (completed
-  agent messages verbatim, other items as `[item:<type>]` markers, server requests as
-  `[request <method> -> <decision>]` notes, deltas/token usage/reasoning excluded), and the
-  isolated child's stderr is teed raw into `debug_output.stderr`. The shared-server modes
+  agent-message deltas coalesced into live text blocks and reconciled with the authoritative
+  completed text without duplication, other items as `[item:<type>]` markers, and server
+  requests as `[request <method> -> <decision>]` notes; token usage and reasoning remain
+  excluded), and the isolated child's stderr is teed raw into `debug_output.stderr`. The shared-server modes
   (`attach`/`auto`/`launch`) are asymmetric: they talk to a daemon over a socket, so there
   is no child stderr to tee, and event capture is withheld entirely — recorded as
   `debugOutputDropped: "shared-server-unverified"` in reviewer metadata — until thread
