@@ -52,9 +52,11 @@ import {
   modelResolutionMetadata,
 } from "./metadata.js";
 import {
+  type DeltaCoalescer,
   type ReviewerActivitySink,
   activitySinkFromDebugOutput,
   boundedMarkerName,
+  createDeltaCoalescer,
 } from "./reviewer-activity.js";
 import type {
   ReviewAdapter,
@@ -264,6 +266,9 @@ class CodexAppServerSession {
   private reply = "";
   private currentAgentMessageId = "";
   private currentAgentMessageText = "";
+  private readonly activityDeltas: DeltaCoalescer | undefined;
+  private activityDeltaItemId = "";
+  private activityDeltaEmittedChars = 0;
   private turnCompletion:
     | { turnId: string; resolve: () => void; reject: (error: Error) => void }
     | undefined;
@@ -285,6 +290,7 @@ class CodexAppServerSession {
       options.mode === "stdio-isolated"
         ? activitySinkFromDebugOutput("codex-app-server", input.debugOutput)
         : undefined;
+    this.activityDeltas = this.activity === undefined ? undefined : createDeltaCoalescer();
   }
 
   async run(): Promise<ReviewAdapterOutput> {
@@ -340,6 +346,7 @@ class CodexAppServerSession {
       }
       return await this.runStructuredReview(connection, threadId);
     } finally {
+      this.flushActivityDeltas();
       this.activity?.end();
       removeAbortListener();
       await this.close();
@@ -547,31 +554,40 @@ class CodexAppServerSession {
       return;
     }
 
-    // Observation only, after the thread filter accepts: the sink renders a
-    // bounded summary line (or drops the event) and swallows every failure —
-    // it never returns early and never alters the handling below.
-    this.activity?.event(message);
-
     const method = typeof message.method === "string" ? message.method : "";
     if (method === "item/agentMessage/delta") {
       const params = isRecord(message.params) ? message.params : {};
       const delta = typeof params.delta === "string" ? params.delta : "";
       const itemId = typeof params.itemId === "string" ? params.itemId : "agent-message";
       if (itemId !== this.currentAgentMessageId) {
+        this.flushActivityDeltas();
         this.currentAgentMessageId = itemId;
         this.currentAgentMessageText = "";
       }
       this.currentAgentMessageText += delta;
       this.reply = this.currentAgentMessageText || this.reply;
+      this.pushActivityDelta(itemId, delta);
       return;
     }
 
     if (method === "item/completed") {
       const item =
         isRecord(message.params) && isRecord(message.params.item) ? message.params.item : {};
+      try {
+        this.captureCompletedItemActivity(message, item);
+      } catch {
+        // Debug never fails the review.
+      }
       this.captureThreadItem(item);
       return;
     }
+
+    // Observation only, after the thread filter accepts: an event transition
+    // first makes pending agent-message text live, then the shared renderer
+    // emits a bounded summary line (or drops the event). Both paths swallow
+    // every failure and never alter the authoritative handling below.
+    this.flushActivityDeltas();
+    this.activity?.event(message);
 
     if (method === "turn/completed") {
       this.onTurn(message.params);
@@ -589,6 +605,95 @@ class CodexAppServerSession {
       }
       const error = reviewerFailed(`codex app-server error: ${formatError(message.params)}`);
       this.turnCompletion?.reject(error);
+    }
+  }
+
+  /**
+   * Coalesce accepted agent-message deltas into live blocks. Reply assembly is
+   * authoritative and happens before this best-effort debug-only path.
+   */
+  private pushActivityDelta(itemId: string, delta: string): void {
+    const coalescer = this.activityDeltas;
+    if (coalescer === undefined || delta === "") {
+      return;
+    }
+    try {
+      if (itemId !== this.activityDeltaItemId) {
+        this.flushActivityDeltas();
+        this.activityDeltaItemId = itemId;
+        this.activityDeltaEmittedChars = 0;
+      }
+      this.emitActivityDeltaBlocks(coalescer.push(itemId, delta));
+    } catch {
+      // Debug never fails the review.
+    }
+  }
+
+  /** Flush on an event transition, stream close, or item-key transition. */
+  private flushActivityDeltas(): void {
+    const coalescer = this.activityDeltas;
+    if (coalescer === undefined) {
+      return;
+    }
+    try {
+      this.emitActivityDeltaBlocks(coalescer.flush());
+    } catch {
+      // Debug never fails the review.
+    }
+  }
+
+  private emitActivityDeltaBlocks(blocks: string[]): void {
+    for (const block of blocks) {
+      if (block !== "") {
+        this.activity?.note(block);
+        this.activityDeltaEmittedChars += block.length;
+      }
+    }
+  }
+
+  /**
+   * Reconcile a completed agent message with its streamed prefix. The
+   * completed text is authoritative: pending deltas are discarded and its
+   * unseen verbatim suffix is emitted, so cap/transition blocks never repeat.
+   * If Codex ever normalizes completed text away from the observed delta
+   * prefix, fall back to the full completed renderer rather than slice prose
+   * at an invalid offset.
+   */
+  private captureCompletedItemActivity(
+    message: JsonRpcMessage,
+    item: Record<string, unknown>,
+  ): void {
+    const activity = this.activity;
+    if (activity === undefined) {
+      return;
+    }
+
+    const itemId = typeof item.id === "string" ? item.id : "agent-message";
+    const completedText =
+      item.type === "agentMessage" && typeof item.text === "string" ? item.text : undefined;
+    const matchesStreamedPrefix =
+      completedText !== undefined &&
+      itemId === this.activityDeltaItemId &&
+      itemId === this.currentAgentMessageId &&
+      completedText.startsWith(this.currentAgentMessageText) &&
+      this.activityDeltaEmittedChars <= completedText.length;
+
+    if (matchesStreamedPrefix) {
+      // Discard, do not emit, the buffered tail: the authoritative completion
+      // suffix below contains it together with any completion-only text.
+      this.activityDeltas?.flush();
+      const suffix = completedText.slice(this.activityDeltaEmittedChars);
+      if (suffix !== "") {
+        activity.note(suffix);
+      }
+    } else {
+      this.flushActivityDeltas();
+      activity.event(message);
+    }
+
+    if (itemId === this.activityDeltaItemId) {
+      this.activityDeltaItemId = "";
+      this.activityDeltaEmittedChars = 0;
     }
   }
 
@@ -625,6 +730,7 @@ class CodexAppServerSession {
   private onServerRequest(message: JsonRpcMessage): void {
     const method = typeof message.method === "string" ? message.method : "";
     const decision = this.answerServerRequest(message.id, method);
+    this.flushActivityDeltas();
     // After the conservative answer: method + decision only, never params.
     this.activity?.note(`[request ${boundedMarkerName(method)} -> ${decision}]`);
   }

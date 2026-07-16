@@ -48,7 +48,7 @@ export type ActivityRenderer = (event: Record<string, unknown>) => string | unde
 export type ReviewerActivitySink = {
   /** One parsed engine event. Never throws; failures drop the event. */
   event(event: unknown): void;
-  /** Adapter-synthesized marker line (e.g. "[request X -> declined]"). */
+  /** Adapter-synthesized line (e.g. a marker or coalesced prose block). */
   note(text: string): void;
   /** Flush buffered state. Idempotent; call in the adapter's finally. */
   end(): void;
@@ -136,7 +136,8 @@ export function createReviewerActivitySink(
     end() {
       try {
         // No buffered state: dialects that coalesce deltas wire
-        // createDeltaCoalescer at the stream-parser layer (cli-stream.ts).
+        // createDeltaCoalescer at their transport layer (cli-stream.ts or
+        // codex-app-server.ts).
       } catch {
         // Debug never fails the review.
       }
@@ -434,7 +435,7 @@ export function grokStreamingJsonEventText(event: Record<string, unknown>): stri
 /**
  * Generic delta coalescer for token-level streaming dialects (the design
  * doc's phase-2 coalescer; grok's streaming-json `text` deltas are the first
- * consumer, app-server agentMessage deltas are the planned second). Deltas
+ * consumer and app-server agentMessage deltas are the second). Deltas
  * append into a per-item buffer keyed by the caller's item key, and each
  * buffered block is emitted exactly once: on an item-key transition, on an
  * explicit flush (terminal event / stream close), or early when the buffer
@@ -541,10 +542,11 @@ export function codexJsonEventText(event: Record<string, unknown>): string | und
  * One safe summary line per Codex app-server JSON-RPC notification, keyed on
  * `method` (renderActivityEvent's universal reasoning drop inspects `method`
  * too, so reasoning-flavored methods never reach this renderer — the app-server
- * API is experimental and method drift is expected). v1 policy:
+ * API is experimental and method drift is expected). Policy:
  *
- * - `item/agentMessage/delta` drops entirely: reply assembly consumes deltas,
- *   and prose renders once, at `item/completed` (no coalescer in v1).
+ * - `item/agentMessage/delta` drops in this one-event renderer: the app-server
+ *   transport coalesces those fragments through createDeltaCoalescer before
+ *   using the completed item as the authoritative terminal text.
  * - Completed `agentMessage` items surface `item.text` verbatim, and completed
  *   `exitedReviewMode` items surface their `review` text verbatim (native
  *   review mode; the structured-JSON duplication matches the codex-json CLI
