@@ -1,3 +1,4 @@
+import type { ModelSelection } from "@cursor/sdk";
 import { describe, expect, it } from "vitest";
 import {
   cursorReviewAutoReview,
@@ -159,7 +160,7 @@ describe("cursorAdapter", () => {
                     return {
                       status: "finished",
                       result: "",
-                      model: "composer-2.5",
+                      model: { id: "composer-2.5" },
                       durationMs: 12,
                     };
                   },
@@ -312,7 +313,7 @@ describe("cursorAdapter", () => {
                     return {
                       status: "finished",
                       result: "",
-                      model: "composer-2.5",
+                      model: { id: "composer-2.5" },
                       durationMs: 12,
                     };
                   },
@@ -354,6 +355,63 @@ describe("cursorAdapter", () => {
       effortResolutionSource: "unsupported",
       effort: "ignored",
     });
+  });
+
+  it("extracts resolved model metadata from the SDK ModelSelection result", async () => {
+    const adapter = adapterWithResult({
+      status: "finished",
+      result: "cursor ok",
+      model: {
+        id: "composer-2.5",
+        params: [{ id: "thinking", value: "high" }],
+      },
+      durationMs: 12,
+    });
+
+    const output = await adapter.run(
+      input({
+        reviewer: {
+          id: "cursor",
+          sdk: "cursor",
+          model: "composer-latest",
+          readonly: true,
+        },
+        env: { CURSOR_API_KEY: "key" },
+      }),
+    );
+
+    expect(output.metadata).toMatchObject({
+      model: "composer-2.5",
+      requestedModel: "composer-latest",
+      resolvedModel: "composer-2.5",
+      modelResolutionSource: "provider-result",
+    });
+  });
+
+  it("falls back to the adapter default when the SDK result omits its model", async () => {
+    const adapter = adapterWithResult({
+      status: "finished",
+      result: "cursor ok",
+      durationMs: 12,
+    });
+
+    const output = await adapter.run(
+      input({
+        reviewer: {
+          id: "cursor",
+          sdk: "cursor",
+          readonly: true,
+        },
+        env: { CURSOR_API_KEY: "key" },
+      }),
+    );
+
+    expect(output.metadata).toMatchObject({
+      model: "composer-2.5",
+      resolvedModel: "composer-2.5",
+      modelResolutionSource: "adapter-default",
+    });
+    expect(output.metadata).not.toHaveProperty("requestedModel");
   });
 
   describe("SDK debug output (onStep step summaries)", () => {
@@ -416,7 +474,7 @@ describe("cursorAdapter", () => {
                       return {
                         status: "finished",
                         result: "cursor ok",
-                        model: "composer-2.5",
+                        model: { id: "composer-2.5" },
                         durationMs: 12,
                         ...resultOverrides,
                       };
@@ -586,6 +644,8 @@ describe("cursorAdapter", () => {
 
         expect(preflight?.metadata?.readonlyCapability).toBe("prompt-only");
         expect(output.metadata?.captureMode).toBe("text");
+        expect(output.metadata?.resolvedModel).toEqual(expect.any(String));
+        expect(output.metadata?.modelResolutionSource).toBe("provider-result");
         expectLiveAdapterOutput(output);
         expectFixtureReadOnly(fixture.repo);
       } finally {
@@ -602,7 +662,7 @@ type MockCursorRun = {
   wait(): Promise<{
     status: string;
     result: string;
-    model?: string;
+    model?: ModelSelection;
     durationMs?: number;
   }>;
 };
@@ -651,6 +711,30 @@ function mockCursorSdk(options: {
       },
     },
   };
+}
+
+function adapterWithResult(result: Awaited<ReturnType<MockCursorRun["wait"]>>) {
+  return createCursorAdapter({
+    async loadSdk() {
+      return mockCursorSdk({
+        async createAgent() {
+          return {
+            agentId: "agent-1",
+            async send() {
+              return {
+                id: "run-1",
+                async cancel() {},
+                async wait() {
+                  return result;
+                },
+              };
+            },
+            async [Symbol.asyncDispose]() {},
+          };
+        },
+      });
+    },
+  });
 }
 
 function input(overrides: Partial<ReviewAdapterInput> = {}): ReviewAdapterInput {

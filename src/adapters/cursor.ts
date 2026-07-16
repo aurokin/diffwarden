@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentOptions } from "@cursor/sdk";
+import type { AgentOptions, ModelSelection } from "@cursor/sdk";
 import {
   DiffwardenError,
   missingAuth,
@@ -201,6 +201,8 @@ export function createCursorAdapter(
           throw reviewerFailed(`Cursor reviewer finished with status: ${result.status}`);
         }
 
+        const resolvedModel = result.model?.id ?? configuredModel;
+
         return {
           text: result.result ?? "",
           metadata: sdkOutputMetadata("cursor", {
@@ -215,10 +217,10 @@ export function createCursorAdapter(
             cursorSettingSources: cursorReviewSettingSources,
             cursorMcpServers: Object.keys(cursorReviewMcpServers),
             cursorStore: "jsonl-ephemeral",
-            model: result.model ?? configuredModel,
+            model: resolvedModel,
             ...modelResolutionMetadata({
               requested: input.reviewer.model,
-              resolved: result.model ?? configuredModel,
+              resolved: resolvedModel,
               source:
                 result.model === undefined
                   ? input.reviewer.model === undefined
@@ -306,7 +308,7 @@ type CursorRun = {
   wait(): Promise<{
     status: string;
     result?: string;
-    model?: string;
+    model?: ModelSelection;
     durationMs?: number;
   }>;
   cancel?(): Promise<void> | void;
