@@ -172,6 +172,57 @@ describe("createLiveReviewProgress", () => {
     expect(output()).toContain("- claude       waiting");
   });
 
+  it("commits exactly one row when preflight fails (reviewer_failed follows it)", () => {
+    const { output, stream } = fakeStream();
+    const progress = makeProgress(stream, () => 0);
+    progress.handleEvent({
+      schema_version: 2,
+      type: "run_started",
+      cwd: "/repo",
+      target,
+      reviewers: [{ id: "cursor", engine: "cursor" }],
+    });
+    // The runner emits BOTH events for a failed preflight; only reviewer_failed may commit.
+    progress.handleEvent({
+      schema_version: 2,
+      type: "preflight_finished",
+      reviewer_id: "cursor",
+      ok: false,
+      timing_ms: 300,
+    });
+    progress.handleEvent({
+      schema_version: 2,
+      type: "reviewer_failed",
+      reviewer_id: "cursor",
+      error: failure,
+      timing_ms: 300,
+    });
+    progress.finish();
+    const failedRows = output()
+      .split("\n")
+      .filter((line) => line.includes("cursor") && line.includes("failed"));
+    expect(failedRows).toHaveLength(1);
+  });
+
+  it("abandons the volatile block on resize instead of erasing a reflowed region", () => {
+    const { output, stream } = fakeStream();
+    const progress = makeProgress(stream, () => 0);
+    progress.handleEvent({
+      schema_version: 2,
+      type: "run_started",
+      cwd: "/repo",
+      target,
+      reviewers: [{ id: "codex", engine: "codex" }],
+    });
+    const beforeResize = output();
+    expect(beforeResize).toContain("codex");
+    process.emit("SIGWINCH");
+    progress.finish();
+    // finish() after the resize must NOT cursor-up over the abandoned block.
+    const afterResize = output().slice(beforeResize.length);
+    expect(afterResize).not.toContain("[1A");
+  });
+
   it("stays quiet after finish and never throws on late events", () => {
     const { output, stream } = fakeStream();
     const progress = makeProgress(stream, () => 0);

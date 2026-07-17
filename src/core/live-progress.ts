@@ -215,12 +215,9 @@ export function createLiveReviewProgress(options: LiveProgressOptions): LiveRevi
         break;
       }
       case "preflight_finished": {
-        if (!event.ok) {
-          commitReviewerRow(rowKey(event.lane_id, event.reviewer_id), "failed", [
-            "preflight failed",
-            formatElapsed(event.timing_ms),
-          ]);
-        }
+        // A failed preflight does NOT commit here: the runner always follows with a
+        // reviewer_failed for the same reviewer (runner.ts preflight gate), and that event
+        // carries the error message — committing on both would print the reviewer twice.
         break;
       }
       case "reviewer_started": {
@@ -278,8 +275,12 @@ export function createLiveReviewProgress(options: LiveProgressOptions): LiveRevi
   timer.unref?.();
 
   const onResize = (): void => {
-    // Resize only marks dirty: the next tick redraws at the new width. Writing here would
-    // break the single-writer invariant and can interleave with an in-flight draw.
+    // A narrowing resize can reflow already-painted rows onto extra physical lines, so the
+    // logical `volatileLines` count no longer matches what cursor-up must cross — erasing
+    // would clobber the wrong region. Abandon the old block instead (it scrolls into history
+    // as a stale snapshot) and let the next tick paint a fresh one at the new width. No
+    // terminal write happens here: writes stay single-writer, inside the tick.
+    volatileLines = 0;
     dirty = true;
   };
   process.on("SIGWINCH", onResize);

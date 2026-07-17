@@ -193,6 +193,11 @@ describe("buildModelSelectOptions", () => {
     expect(options[0]?.hint).toBe("let pi choose");
   });
 
+  it("tags a bare-value default entry so it cannot mirror the engine-default row", () => {
+    const options = buildModelSelectOptions([{ value: "default" }], "pi");
+    expect(options[1]?.label).toBe("default ⟨default⟩");
+  });
+
   it("keeps an out-of-catalog current model selectable instead of dropping it", () => {
     const options = buildModelSelectOptions(sampleModels(), "claude", "claude-opus-4-1-20250805");
     expect(options).toContainEqual({

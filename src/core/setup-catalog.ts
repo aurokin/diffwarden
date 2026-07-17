@@ -191,11 +191,14 @@ export const CUSTOM_MODEL_CHOICE = "__custom__" as const;
  */
 function catalogRowLabel(model: ModelCatalogEntry): string {
   const label = model.displayName ?? model.value;
-  if (label === model.value) {
-    return label;
-  }
   const value = model.value.toLowerCase();
-  if (value !== "default" && slugify(label) === value) {
+  // The "default" collision is checked before the label===value shortcut: a bare
+  // { value: "default" } entry must still be tagged, or it sits next to the engine-default
+  // row reading identically while committing a different thing.
+  if (value === "default") {
+    return `${label} ⟨${model.value}⟩`;
+  }
+  if (label === model.value || slugify(label) === value) {
     return label;
   }
   return `${label} ⟨${model.value}⟩`;
