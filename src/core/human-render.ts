@@ -179,14 +179,22 @@ function consensusClause(artifact: ReviewRunArtifact): string | undefined {
     }
     // A lane that failed to run did not flag anything — it is reported as failed, exactly
     // like reviewer failures in the single-run path.
-    const flagged = artifact.lanes.filter(
-      (lane) =>
-        lane.status === "success" &&
-        lane.artifact.result.overall_correctness === "patch is incorrect",
+    const succeeded = artifact.lanes.filter((lane) => lane.status === "success");
+    const flagged = succeeded.filter(
+      (lane) => lane.artifact.result.overall_correctness === "patch is incorrect",
     ).length;
-    const failed = artifact.lanes.filter((lane) => lane.status === "failed").length;
+    const unsure = succeeded.filter(
+      (lane) =>
+        lane.artifact.result.overall_correctness !== "patch is incorrect" &&
+        lane.artifact.result.overall_correctness !== "patch is correct",
+    ).length;
+    const failed = total - succeeded.length;
     if (flagged > 0) {
       return `${flagged} of ${total} lanes flagged`;
+    }
+    // "agree" is reserved for unanimous correct verdicts — an unsure lane is not agreement.
+    if (unsure > 0) {
+      return `${unsure} of ${total} lanes unsure`;
     }
     return failed > 0
       ? `${total - failed} of ${total} lanes agree, ${failed} failed`
@@ -206,9 +214,18 @@ function consensusClause(artifact: ReviewRunArtifact): string | undefined {
   const flagged = settled.filter(
     (reviewer) => reviewer.result?.overall_correctness === "patch is incorrect",
   ).length;
+  const unsure = settled.filter(
+    (reviewer) =>
+      reviewer.result?.overall_correctness !== "patch is incorrect" &&
+      reviewer.result?.overall_correctness !== "patch is correct",
+  ).length;
   const failed = total - settled.length;
   if (flagged > 0) {
     return `${flagged} of ${total} reviewers flagged`;
+  }
+  // "agree" is reserved for unanimous correct verdicts — an unsure reviewer is not agreement.
+  if (unsure > 0) {
+    return `${unsure} of ${total} reviewers unsure`;
   }
   return failed > 0
     ? `${settled.length} of ${total} reviewers agree, ${failed} failed`

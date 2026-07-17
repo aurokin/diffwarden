@@ -148,6 +148,21 @@ describe("human review rendering", () => {
       ],
     });
     expect(withFailure).toContain("2 of 3 reviewers agree, 1 failed");
+
+    // Mixed correct/unknown verdicts are never "agreement".
+    const withUnsure = renderHumanReviewSummary({
+      ...artifact,
+      reviewers: [
+        { ...reviewer, id: "fake" },
+        {
+          ...reviewer,
+          id: "codex",
+          result: { ...artifact.result, overall_correctness: "unknown" },
+        },
+      ],
+    });
+    expect(withUnsure).toContain("1 of 2 reviewers unsure");
+    expect(withUnsure).not.toContain("reviewers agree");
   });
 
   it("renders a complete saved artifact view", () => {
