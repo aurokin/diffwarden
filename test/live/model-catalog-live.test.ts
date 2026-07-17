@@ -112,11 +112,22 @@ describe("live model catalogs", () => {
     it.skipIf(isIntegrationDisabled(catalog.engine) || catalog.skip === true)(
       `lists a non-empty live ${catalog.engine} catalog (${transport} transport)`,
       async () => {
-        const models = await catalog.list({
-          cwd: catalogCwd(),
-          reviewer: catalog.reviewer,
-          env: process.env,
-        });
+        // Abort before the vitest timeout so a hung engine is actively torn down (the
+        // adapters' abort paths kill subprocesses and staged dirs) instead of surviving
+        // the rejected test and stalling the suite.
+        const controller = new AbortController();
+        const abortTimer = setTimeout(() => controller.abort(), 45_000);
+        let models: ModelCatalogEntry[];
+        try {
+          models = await catalog.list({
+            cwd: catalogCwd(),
+            reviewer: catalog.reviewer,
+            env: process.env,
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(abortTimer);
+        }
 
         expect(models.length).toBeGreaterThan(0);
         for (const model of models) {
