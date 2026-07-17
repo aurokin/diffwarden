@@ -678,6 +678,35 @@ describe("cursorAdapter", () => {
     ).rejects.toThrow("cursor is not authenticated — set CURSOR_API_KEY");
   });
 
+  it("honors the abort signal while listing SDK models", async () => {
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return mockCursorSdk({
+          listModels: () => new Promise(() => {}),
+        });
+      },
+    });
+
+    const controller = new AbortController();
+    const listing = adapter.listModels?.({
+      reviewer: { id: "cursor", sdk: "cursor", readonly: true },
+      env: { CURSOR_API_KEY: "test-key" },
+      signal: controller.signal,
+    });
+    controller.abort();
+    // Either the race's message or the signal's own AbortError reason surfaces, depending on
+    // where the abort lands; both reject promptly instead of waiting on the hung SDK call.
+    await expect(listing).rejects.toThrow(/aborted/i);
+
+    await expect(
+      adapter.listModels?.({
+        reviewer: { id: "cursor", sdk: "cursor", readonly: true },
+        env: { CURSOR_API_KEY: "test-key" },
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(/aborted/i);
+  });
+
   it("parses cursor-agent models output into catalog entries", () => {
     const stdout = [
       "Available models:",

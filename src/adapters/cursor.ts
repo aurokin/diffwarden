@@ -286,7 +286,14 @@ export function createCursorAdapter(
       }
       const sdk = await dependencies.loadSdk();
       try {
-        const models = await sdk.Cursor.models.list({ apiKey });
+        throwIfAborted(input.signal, "Cursor model catalog fetch aborted");
+        // models.list takes no signal, so racing the abort is the only cancellation lever;
+        // there is no subprocess to tear down, so abandoning the in-flight call is safe.
+        const models = await raceCursorAbort(
+          sdk.Cursor.models.list({ apiKey }),
+          input.signal,
+          "Cursor model catalog fetch aborted",
+        );
         return models.map(cursorCatalogEntry);
       } catch (error) {
         if (isCursorAuthenticationError(error)) {
@@ -306,6 +313,34 @@ function cursorCatalogEntry(model: CursorModel): ModelCatalogEntry {
     ...(model.displayName !== undefined ? { displayName: model.displayName } : {}),
     ...(model.description !== undefined ? { description: model.description } : {}),
   };
+}
+
+function raceCursorAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  message: string,
+): Promise<T> {
+  if (signal === undefined) {
+    return promise;
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(reviewerFailed(message));
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function listCursorCliModels(input: ListModelsInput): Promise<ModelCatalogEntry[]> {
