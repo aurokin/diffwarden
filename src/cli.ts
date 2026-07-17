@@ -54,6 +54,7 @@ import {
   shouldUseHumanColor,
 } from "./core/human-render.js";
 import { isInteractiveAvailable, shouldRunInteractiveSetup } from "./core/interactive.js";
+import { createLiveReviewProgress } from "./core/live-progress.js";
 import { type MacosDoctorReport, runMacosDoctor } from "./core/macos.js";
 import { renderJson } from "./core/render.js";
 import {
@@ -83,6 +84,13 @@ import {
   runClackReviewerSetup,
 } from "./core/setup-clack.js";
 import { parseTargetSpec } from "./core/target.js";
+import {
+  asciiGlyphs,
+  clampSummaryWidth,
+  supportsLiveMotion,
+  supportsUnicodeGlyphs,
+  unicodeGlyphs,
+} from "./core/terminal-caps.js";
 import { version } from "./version.js";
 
 const program = new Command();
@@ -256,6 +264,8 @@ reviewCommand
       process.stdout.write(
         renderHumanReviewArtifact(artifact, {
           color: shouldUseHumanColor({ env: process.env, stream: process.stdout }),
+          unicode: supportsUnicodeGlyphs(process.env),
+          width: clampSummaryWidth(process.stdout.columns),
         }),
       );
     },
@@ -749,9 +759,25 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
   const human = options.mode === "human";
   const agent = options.mode === "agent";
   const showProgress = options.mode === "json" && process.stderr.isTTY === true;
-  const humanColor = human
-    ? shouldUseHumanColor({ env: process.env, stream: process.stdout })
-    : false;
+  // Decision S1: human live progress renders to stderr; the final summary owns stdout — so
+  // `diffwarden review > out.md` captures a clean summary while the terminal stays animated.
+  // S1a: color is decided per stream; a redirected stdout must not strip color from the live
+  // block (nor vice versa).
+  const unicode = supportsUnicodeGlyphs(process.env);
+  const summaryRenderOptions = {
+    color: human ? shouldUseHumanColor({ env: process.env, stream: process.stdout }) : false,
+    unicode,
+    width: clampSummaryWidth(process.stdout.columns),
+  };
+  const progressColor = shouldUseHumanColor({ env: process.env, stream: process.stderr });
+  const liveProgress =
+    human && supportsLiveMotion(process.stderr, process.env)
+      ? createLiveReviewProgress({
+          stream: process.stderr,
+          color: progressColor,
+          glyphs: unicode ? unicodeGlyphs : asciiGlyphs,
+        })
+      : undefined;
   const runOptions = {
     cwd: options.cwd,
     resolved,
@@ -777,25 +803,38 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
 
   let artifact: ReviewRunArtifact | undefined;
   let terminalError: ReviewerError | undefined;
-  let next = await events.next();
-  while (next.done !== true) {
-    const reviewEvent = next.value;
-    if (ndjson) {
-      process.stdout.write(`${JSON.stringify(reviewEvent)}\n`);
-    } else if (human) {
-      writeHumanBlock(renderHumanReviewEvent(reviewEvent, { color: humanColor }));
-    } else if (showProgress) {
-      const line = formatReviewProgressLine(reviewEvent);
-      if (line !== undefined) {
-        process.stderr.write(`${line}\n`);
+  // The live block owns cursor motion on stderr until finish(); finish runs in `finally` so
+  // every exit path (terminal error, thrown adapter failure, Ctrl-C-adjacent rejections)
+  // tears the volatile region down before anything else writes to the terminal.
+  try {
+    let next = await events.next();
+    while (next.done !== true) {
+      const reviewEvent = next.value;
+      if (ndjson) {
+        process.stdout.write(`${JSON.stringify(reviewEvent)}\n`);
+      } else if (human) {
+        if (liveProgress !== undefined) {
+          liveProgress.handleEvent(reviewEvent);
+        } else {
+          // Append-only fallback tier (5.2): non-TTY / dumb / narrow stderr gets plain
+          // progress lines, still on stderr per S1.
+          writeHumanBlock(renderHumanReviewEvent(reviewEvent, { color: progressColor }));
+        }
+      } else if (showProgress) {
+        const line = formatReviewProgressLine(reviewEvent);
+        if (line !== undefined) {
+          process.stderr.write(`${line}\n`);
+        }
       }
+      if (reviewEvent.type === "final_result") {
+        artifact = reviewEvent.artifact;
+      } else if (reviewEvent.type === "error") {
+        terminalError = reviewEvent.error;
+      }
+      next = await events.next();
     }
-    if (reviewEvent.type === "final_result") {
-      artifact = reviewEvent.artifact;
-    } else if (reviewEvent.type === "error") {
-      terminalError = reviewEvent.error;
-    }
-    next = await events.next();
+  } finally {
+    liveProgress?.finish();
   }
 
   if (terminalError !== undefined) {
@@ -818,7 +857,7 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
   }
 
   if (human) {
-    process.stdout.write(renderHumanReviewSummary(artifact, { color: humanColor }));
+    process.stdout.write(renderHumanReviewSummary(artifact, summaryRenderOptions));
   } else if (agent) {
     process.stdout.write(renderAgentReviewSummary(artifact));
   } else if (!ndjson) {
@@ -867,7 +906,8 @@ function writeHumanBlock(value: string | undefined): void {
   if (value === undefined) {
     return;
   }
-  process.stdout.write(value.endsWith("\n") ? value : `${value}\n`);
+  // S1: progress is stderr's; stdout carries only the final summary in human mode.
+  process.stderr.write(value.endsWith("\n") ? value : `${value}\n`);
 }
 
 function formatReviewProgressLine(reviewEvent: ReviewEvent): string | undefined {
