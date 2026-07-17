@@ -195,6 +195,77 @@ export function buildModelSelectOptions(
 }
 
 /**
+ * Rows for the model autocomplete at a given query — the single source of truth the dynamic
+ * options getter returns on every keystroke (when the previously focused row falls out of the
+ * filtered set, clack refocuses to index 0 and Enter commits it, so ORDER here is submit
+ * behavior). In order:
+ *
+ * 1. What the query names, first: on a non-empty query, index 0 is the row whose value EXACTLY
+ *    matches it (case-insensitive — a case variant of a catalog id should commit the catalog
+ *    row, not fork a new slug), hoisted above earlier substring survivors; when NO row matches
+ *    exactly, a creatable `use "<typed slug>"` row whose value IS the typed slug. First position
+ *    is what makes "one Enter commits what you typed" true, even when the typed id is a
+ *    substring of other catalog ids (`gpt-5` amid `gpt-5-fast`) or vice versa.
+ * 2. The "default" row, matched ONLY against its literal label: its hint embeds the
+ *    engine-default model id, and hint-matching would resurface it — focused first — on exactly
+ *    the model-name queries users type, turning Enter into an accidental clear.
+ * 3. Catalog + current rows, substring-filtered case-insensitively over value, label, and hint.
+ * 4. "custom…" always retained as the free-text escape hatch.
+ *
+ * Pure so tests can cover the filtering/creatable semantics without a TTY.
+ */
+export function buildModelAutocompleteOptions(
+  models: ModelCatalogEntry[],
+  engine: ReviewerSdk,
+  currentModel: string | undefined,
+  query: string,
+  reservedValues: readonly string[] = [],
+): { value: string; label: string; hint?: string }[] {
+  const base = buildModelSelectOptions(models, engine, currentModel);
+  const typed = query.trim();
+  const needle = typed.toLowerCase();
+  const rows: { value: string; label: string; hint?: string }[] = [];
+
+  const isSelectable = (row: { value: string }) =>
+    row.value !== "" && row.value !== CUSTOM_MODEL_CHOICE;
+  const exactMatch = base.some((row) => isSelectable(row) && row.value.toLowerCase() === needle);
+  // A creatable row whose value collides with a control sentinel (custom…, the caller's quit
+  // row) would trigger that action instead of committing the id — such ids stay enterable
+  // through the custom… free-text path.
+  const reserved = typed === CUSTOM_MODEL_CHOICE || reservedValues.includes(typed);
+  if (typed !== "" && !exactMatch && !reserved) {
+    rows.push({ value: typed, label: `use "${typed}"`, hint: "off-catalog model id" });
+  }
+
+  for (const row of base) {
+    if (row.value === CUSTOM_MODEL_CHOICE) {
+      rows.push(row);
+    } else if (row.value === "") {
+      if (needle === "" || row.label.toLowerCase().includes(needle)) {
+        rows.push(row);
+      }
+    } else if (
+      needle === "" ||
+      `${row.value}\n${row.label}\n${row.hint ?? ""}`.toLowerCase().includes(needle)
+    ) {
+      rows.push(row);
+    }
+  }
+
+  // Hoist the exact match to index 0: catalog order may list a substring survivor
+  // (`claude-sonnet-4` before `sonnet`) ahead of the row the user typed verbatim.
+  if (exactMatch) {
+    const exactIndex = rows.findIndex(
+      (row) => isSelectable(row) && row.value.toLowerCase() === needle,
+    );
+    if (exactIndex > 0) {
+      rows.unshift(...rows.splice(exactIndex, 1));
+    }
+  }
+  return rows;
+}
+
+/**
  * Effort choices narrowed by the catalog: pure intersection with the effective model's
  * supportedEffortLevels, in menu order. Adapters are authoritative — each catalog entry lists
  * exactly the diffwarden levels deliverable to that model over the effective transport (including

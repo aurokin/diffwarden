@@ -1,4 +1,5 @@
 import {
+  autocomplete,
   cancel,
   confirm,
   intro,
@@ -24,7 +25,7 @@ import {
   CUSTOM_MODEL_CHOICE,
   type ModelCatalogResult,
   type ModelCatalogSession,
-  buildModelSelectOptions,
+  buildModelAutocompleteOptions,
   catalogEffortChoices,
   createModelCatalogSession,
 } from "./setup-catalog.js";
@@ -625,19 +626,45 @@ async function fetchCatalogWithSpinner(
 
 /**
  * Model leaf editor. Engines whose transport declares supportsModelCatalog get a live catalog
- * select ("default" clears the override, "custom…" falls through to free text); a failed fetch
- * (no auth, offline, timeout) degrades to the free-text prompt with a one-line notice. Everything
- * else keeps the plain free-text editor, where blank clears the override.
+ * autocomplete: typing filters the rows, an off-catalog slug commits in one Enter via the
+ * creatable row, only the explicit "default" row clears the override, and "custom…" falls
+ * through to an EMPTY free-text prompt. A failed fetch (no auth, offline, timeout) degrades to
+ * the free-text prompt — prefilled with the current model — after a one-line notice. Engines
+ * without a catalog keep the plain free-text editor, where blank clears the override.
  */
 async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promise<FieldOutcome> {
+  // The custom… escape hatch opens the free-text prompt empty: the user just declined every
+  // catalog row (including the current model's), so prefilling the old value would be stale.
+  let prefillFreeText = true;
   if (catalog.supports(entry.engine, entry.transport)) {
     const result = await fetchCatalogWithSpinner(entry, catalog);
     if (result.status === "ok") {
-      // The current model is always a selectable row (catalog or synthetic), so the
-      // highlighted default on Enter preserves the configured value instead of clearing it.
-      const value = await select({
-        message: `model for ${entry.id} (Esc to go back)`,
-        options: [...buildModelSelectOptions(result.models, entry.engine, entry.model), quitOption],
+      const { models } = result;
+      const currentModel = entry.model;
+      const value = await autocomplete<string>({
+        message: `model for ${entry.id} (type to filter · Esc to go back)`,
+        // Dynamic getter: the sole authority over rows and their order at each keystroke.
+        // Focus semantics (clack 1.6 AutocompletePrompt): while typing, focus STAYS on the
+        // focused row as long as it survives the filter, and jumps to index 0 only when it
+        // drops out. So when the configured model itself matches the query (typing "gpt-5"
+        // while gpt-5-fast is configured), Enter keeps the visibly-highlighted current row —
+        // standard autocomplete behavior, intentional; the typed slug sits one row above.
+        // Fresh entries focus the "default" row, which no model-name query matches, so there
+        // typing an off-catalog slug + Enter always commits the slug via the creatable row.
+        options() {
+          return [
+            ...buildModelAutocompleteOptions(models, entry.engine, currentModel, this.userInput, [
+              QUIT,
+            ]),
+            quitOption,
+          ];
+        },
+        // Load-bearing no-op: omitting `filter` does NOT disable filtering — clack falls back
+        // to its built-in matcher ON TOP of the getter's output, re-filtering away the pinned
+        // rows (creatable/default/custom/quit) the getter deliberately returned.
+        filter: () => true,
+        // The current model is always a selectable row (catalog or synthetic), so Enter on an
+        // empty query preserves the configured value instead of clearing it.
         initialValue: entry.model ?? "",
         ...io,
       });
@@ -651,6 +678,7 @@ async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promi
         entry.model = value === "" ? undefined : value;
         return "continue";
       }
+      prefillFreeText = false;
       // "custom…" falls through to the free-text prompt below.
     } else {
       log.warn(`model catalog unavailable — ${result.reason}`, { output: process.stderr });
@@ -660,7 +688,7 @@ async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promi
   const value = await text({
     message: `model for ${entry.id} (blank = default · Esc to go back)`,
     placeholder: defaultReviewerModel(entry.engine) ?? "default",
-    ...(entry.model !== undefined ? { initialValue: entry.model } : {}),
+    ...(prefillFreeText && entry.model !== undefined ? { initialValue: entry.model } : {}),
     ...io,
   });
   if (isCancel(value)) {
