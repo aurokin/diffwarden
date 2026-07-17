@@ -644,6 +644,13 @@ async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promi
       const value = await autocomplete<string>({
         message: `model for ${entry.id} (type to filter · Esc to go back)`,
         // Dynamic getter: the sole authority over rows and their order at each keystroke.
+        // Focus semantics (clack 1.6 AutocompletePrompt): while typing, focus STAYS on the
+        // focused row as long as it survives the filter, and jumps to index 0 only when it
+        // drops out. So when the configured model itself matches the query (typing "gpt-5"
+        // while gpt-5-fast is configured), Enter keeps the visibly-highlighted current row —
+        // standard autocomplete behavior, intentional; the typed slug sits one row above.
+        // Fresh entries focus the "default" row, which no model-name query matches, so there
+        // typing an off-catalog slug + Enter always commits the slug via the creatable row.
         options() {
           return [
             ...buildModelAutocompleteOptions(models, entry.engine, currentModel, this.userInput),

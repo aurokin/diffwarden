@@ -226,6 +226,21 @@ describe("buildModelAutocompleteOptions", () => {
     expect(rows.map((row) => row.value)).toContain("gpt-5-fast");
   });
 
+  it("hoists an exact value match above earlier substring survivors", () => {
+    // Catalog order lists a substring survivor before the exactly-typed id: Enter must
+    // commit "sonnet", not "claude-sonnet-4".
+    const shadowing: ModelCatalogEntry[] = [
+      { value: "claude-sonnet-4", displayName: "Claude Sonnet 4" },
+      { value: "sonnet", displayName: "Sonnet" },
+    ];
+    const rows = buildModelAutocompleteOptions(shadowing, "claude", undefined, "sonnet");
+    expect(rows.map((row) => row.value)).toEqual([
+      "sonnet",
+      "claude-sonnet-4",
+      CUSTOM_MODEL_CHOICE,
+    ]);
+  });
+
   it("suppresses the creatable row on an exact value match, including case variants", () => {
     const exact = buildModelAutocompleteOptions(gptModels, "codex", undefined, "gpt-5-fast");
     expect(exact[0]?.value).toBe("gpt-5-fast");
