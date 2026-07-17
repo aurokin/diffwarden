@@ -9,6 +9,9 @@ import {
   reviewerEnvironmentFailed,
   reviewerFailed,
 } from "../core/errors.js";
+import { defaultReviewerTransport } from "./capabilities.js";
+import { cliExecutable } from "./cli-helpers.js";
+import { execCliFile, resolveExecutable } from "./cli-process.js";
 import {
   cursorReviewAutoReview,
   cursorReviewMcpServers,
@@ -24,6 +27,8 @@ import {
 } from "./metadata.js";
 import { activitySinkFromDebugOutput, boundedMarkerName } from "./reviewer-activity.js";
 import type {
+  ListModelsInput,
+  ModelCatalogEntry,
   ReviewAdapter,
   ReviewAdapterInput,
   ReviewAdapterOutput,
@@ -264,7 +269,117 @@ export function createCursorAdapter(
         await rm(storeDirectory, { force: true, recursive: true });
       }
     },
+    async listModels(input: ListModelsInput): Promise<ModelCatalogEntry[]> {
+      // Branch on the EFFECTIVE transport (same rule as the catalog session's cache key):
+      // the transports genuinely diverge on auth — the SDK requires CURSOR_API_KEY while the
+      // CLI carries its own delegated login — so listing must ride the reviewer's transport.
+      const transport = input.reviewer.transport ?? defaultReviewerTransport("cursor") ?? "sdk";
+      if (transport === "cli") {
+        return await listCursorCliModels(input);
+      }
+
+      let apiKey: string;
+      try {
+        apiKey = assertCursorAuth(input.env);
+      } catch {
+        throw missingAuth("cursor is not authenticated — set CURSOR_API_KEY");
+      }
+      const sdk = await dependencies.loadSdk();
+      try {
+        throwIfAborted(input.signal, "Cursor model catalog fetch aborted");
+        // models.list takes no signal, so racing the abort is the only cancellation lever;
+        // there is no subprocess to tear down, so abandoning the in-flight call is safe.
+        const models = await raceCursorAbort(
+          sdk.Cursor.models.list({ apiKey }),
+          input.signal,
+          "Cursor model catalog fetch aborted",
+        );
+        return models.map(cursorCatalogEntry);
+      } catch (error) {
+        if (isCursorAuthenticationError(error)) {
+          throw missingAuth("cursor is not authenticated — set CURSOR_API_KEY");
+        }
+        throw error;
+      }
+    },
   };
+}
+
+// No supportedEffortLevels and no default marking: cursor has no effort surface (effort
+// variants live in the model id itself) and neither listing surface exposes a default.
+function cursorCatalogEntry(model: CursorModel): ModelCatalogEntry {
+  return {
+    value: model.id,
+    ...(model.displayName !== undefined ? { displayName: model.displayName } : {}),
+    ...(model.description !== undefined ? { description: model.description } : {}),
+  };
+}
+
+function raceCursorAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  message: string,
+): Promise<T> {
+  if (signal === undefined) {
+    return promise;
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(reviewerFailed(message));
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function listCursorCliModels(input: ListModelsInput): Promise<ModelCatalogEntry[]> {
+  // Resolve like every other CLI probe: execCliFile spawns without a shell, so a bare name
+  // would miss Windows .cmd/.bat shims that PATHEXT resolution finds.
+  const executable = await resolveExecutable(
+    cliExecutable(input.reviewer, "cursor-agent"),
+    input.env,
+  );
+  try {
+    const { stdout } = await execCliFile(executable, ["models"], {
+      ...(input.env !== undefined ? { env: input.env } : {}),
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      closeStdin: true,
+    });
+    return parseCursorCliModels(stdout);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (/not (logged|signed) in|unauthorized|unauthenticated|log ?in|authenticat/i.test(detail)) {
+      throw missingAuth('cursor is not authenticated — run "cursor-agent login"');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Parse `cursor-agent models` output: one `<id> - <Display Name>` line per model. Lines that
+ * do not match (banners, blank lines) are skipped, so an empty result means no models — the
+ * catalog session degrades that to "unavailable" rather than showing an empty picker.
+ */
+export function parseCursorCliModels(stdout: string): ModelCatalogEntry[] {
+  const entries: ModelCatalogEntry[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^\s*(\S+)\s+-\s+(.+?)\s*$/.exec(line);
+    if (match?.[1] !== undefined && match[2] !== undefined) {
+      entries.push({ value: match[1], displayName: match[2] });
+    }
+  }
+  return entries;
 }
 
 export const cursorAdapter = createCursorAdapter();
@@ -286,6 +401,8 @@ type CursorLocalStore = NonNullable<NonNullable<AgentOptions["local"]>["store"]>
 type CursorModel = {
   id: string;
   aliases?: string[];
+  displayName?: string;
+  description?: string;
 };
 
 type CursorAgent = {

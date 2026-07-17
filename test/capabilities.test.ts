@@ -101,12 +101,17 @@ describe("reviewerCapabilities", () => {
     }
   });
 
-  it("declares a live model catalog only for the claude sdk transport", () => {
+  it("declares a live model catalog only for transports with a listing surface", () => {
     expect(reviewerSupportsModelCatalog("claude", undefined)).toBe(true);
     expect(reviewerSupportsModelCatalog("claude", "sdk")).toBe(true);
     expect(reviewerSupportsModelCatalog("claude", "cli")).toBe(false);
+    expect(reviewerSupportsModelCatalog("cursor", "sdk")).toBe(true);
+    expect(reviewerSupportsModelCatalog("cursor", "cli")).toBe(true);
+    expect(reviewerSupportsModelCatalog("codex", "cli")).toBe(true);
+    expect(reviewerSupportsModelCatalog("codex", "app-server")).toBe(true);
+    const catalogSdks = new Set(["claude", "cursor", "codex"]);
     for (const sdk of expectedReviewerSdks) {
-      if (sdk === "claude") {
+      if (catalogSdks.has(sdk)) {
         continue;
       }
       expect(reviewerSupportsModelCatalog(sdk, undefined)).toBe(false);

@@ -6,6 +6,8 @@ import {
   reviewerSupportsModelCatalog,
 } from "../adapters/capabilities.js";
 import { claudeAdapter } from "../adapters/claude.js";
+import { codexAppServerListModels } from "../adapters/codex-app-server.js";
+import { cursorAdapter } from "../adapters/cursor.js";
 import type { ListModelsInput, ModelCatalogEntry } from "../adapters/types.js";
 
 /**
@@ -42,6 +44,8 @@ const catalogListers: Partial<
   Record<ReviewerSdk, (input: ListModelsInput) => Promise<ModelCatalogEntry[]>>
 > = {
   ...(claudeAdapter.listModels !== undefined ? { claude: claudeAdapter.listModels } : {}),
+  ...(cursorAdapter.listModels !== undefined ? { cursor: cursorAdapter.listModels } : {}),
+  codex: codexAppServerListModels,
 };
 
 const catalogFetch: ModelCatalogFetch = (engine, input) => {

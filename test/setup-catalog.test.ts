@@ -39,13 +39,17 @@ function sampleModels(): ModelCatalogEntry[] {
 }
 
 describe("createModelCatalogSession", () => {
-  it("declares catalog support only for the claude sdk transport", () => {
+  it("declares catalog support per engine transport", () => {
     const session = createModelCatalogSession({ fetch: async () => [] });
     expect(session.supports("claude", undefined)).toBe(true);
     expect(session.supports("claude", "sdk")).toBe(true);
     expect(session.supports("claude", "cli")).toBe(false);
+    expect(session.supports("cursor", undefined)).toBe(true);
+    expect(session.supports("cursor", "cli")).toBe(true);
+    expect(session.supports("codex", undefined)).toBe(true);
+    expect(session.supports("codex", "app-server")).toBe(true);
     expect(session.supports("pi", undefined)).toBe(false);
-    expect(session.supports("codex", undefined)).toBe(false);
+    expect(session.supports("grok", undefined)).toBe(false);
   });
 
   it("fetches once per engine+transport and caches the result", async () => {

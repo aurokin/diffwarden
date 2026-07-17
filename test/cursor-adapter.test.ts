@@ -7,7 +7,11 @@ import {
   cursorReviewSandboxOptions,
   cursorReviewSettingSources,
 } from "../src/adapters/cursor-policy.js";
-import { createCursorAdapter, cursorAdapter } from "../src/adapters/cursor.js";
+import {
+  createCursorAdapter,
+  cursorAdapter,
+  parseCursorCliModels,
+} from "../src/adapters/cursor.js";
 import type { ReviewAdapterInput } from "../src/adapters/types.js";
 import { isIntegrationDisabled } from "./integration.js";
 import {
@@ -621,6 +625,103 @@ describe("cursorAdapter", () => {
     });
   });
 
+  it("lists the model catalog through the SDK on the sdk transport", async () => {
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return mockCursorSdk({
+          models: [
+            { id: "composer-2.5", displayName: "Composer 2.5", description: "flagship" },
+            { id: "sonnet-4.5" },
+          ],
+        });
+      },
+    });
+
+    const models = await adapter.listModels?.({
+      reviewer: { id: "cursor", sdk: "cursor", readonly: true },
+      env: { CURSOR_API_KEY: "test-key" },
+    });
+
+    // No supportedEffortLevels and no default marking: effort lives in the model id and
+    // neither listing surface exposes a default.
+    expect(models).toEqual([
+      { value: "composer-2.5", displayName: "Composer 2.5", description: "flagship" },
+      { value: "sonnet-4.5" },
+    ]);
+  });
+
+  it("classifies missing and rejected API keys into one actionable listModels sentence", async () => {
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return mockCursorSdk({
+          async listModels() {
+            const error = new Error("invalid API key");
+            error.name = "AuthenticationError";
+            throw error;
+          },
+        });
+      },
+    });
+
+    await expect(
+      adapter.listModels?.({
+        reviewer: { id: "cursor", sdk: "cursor", readonly: true },
+        env: {},
+      }),
+    ).rejects.toThrow("cursor is not authenticated — set CURSOR_API_KEY");
+
+    await expect(
+      adapter.listModels?.({
+        reviewer: { id: "cursor", sdk: "cursor", readonly: true },
+        env: { CURSOR_API_KEY: "bad-key" },
+      }),
+    ).rejects.toThrow("cursor is not authenticated — set CURSOR_API_KEY");
+  });
+
+  it("honors the abort signal while listing SDK models", async () => {
+    const adapter = createCursorAdapter({
+      async loadSdk() {
+        return mockCursorSdk({
+          listModels: () => new Promise(() => {}),
+        });
+      },
+    });
+
+    const controller = new AbortController();
+    const listing = adapter.listModels?.({
+      reviewer: { id: "cursor", sdk: "cursor", readonly: true },
+      env: { CURSOR_API_KEY: "test-key" },
+      signal: controller.signal,
+    });
+    controller.abort();
+    // Either the race's message or the signal's own AbortError reason surfaces, depending on
+    // where the abort lands; both reject promptly instead of waiting on the hung SDK call.
+    await expect(listing).rejects.toThrow(/aborted/i);
+
+    await expect(
+      adapter.listModels?.({
+        reviewer: { id: "cursor", sdk: "cursor", readonly: true },
+        env: { CURSOR_API_KEY: "test-key" },
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(/aborted/i);
+  });
+
+  it("parses cursor-agent models output into catalog entries", () => {
+    const stdout = [
+      "Available models:",
+      "",
+      "composer-2.5 - Composer 2.5",
+      "gpt-5.6-sol - GPT-5.6 Sol",
+      "not a model line",
+    ].join("\n");
+    expect(parseCursorCliModels(stdout)).toEqual([
+      { value: "composer-2.5", displayName: "Composer 2.5" },
+      { value: "gpt-5.6-sol", displayName: "GPT-5.6 Sol" },
+    ]);
+    expect(parseCursorCliModels("cursor-agent: not signed in")).toEqual([]);
+  });
+
   it.skipIf(isIntegrationDisabled("cursor") || !process.env.CURSOR_API_KEY)(
     "runs a live Cursor local review smoke test",
     async () => {
@@ -678,7 +779,7 @@ type MockCursorAgent = {
 };
 
 function mockCursorSdk(options: {
-  models?: Array<{ id: string; aliases?: string[] }>;
+  models?: Array<{ id: string; aliases?: string[]; displayName?: string; description?: string }>;
   listModels?: () => Promise<Array<{ id: string; aliases?: string[] }>>;
   createAgent?: (options: unknown) => Promise<MockCursorAgent>;
   createStore?: (rootDir: string) => void;

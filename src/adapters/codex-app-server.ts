@@ -17,10 +17,16 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { buildTextAdapterOutput, normalizeJsonLikeAdapterOutput } from "../core/adapter-output.js";
-import { missingAuth, missingRequirement, reviewerFailed } from "../core/errors.js";
+import {
+  DiffwardenError,
+  missingAuth,
+  missingRequirement,
+  reviewerFailed,
+} from "../core/errors.js";
 import { reviewResultStrictJsonSchema } from "../core/schema.js";
 import type { ReviewTargetResolved } from "../core/schema.js";
 import { version } from "../version.js";
+import { defaultReviewerTransport } from "./capabilities.js";
 import {
   type CliExecutableSelection,
   cliExecutableMetadata,
@@ -59,6 +65,8 @@ import {
   createDeltaCoalescer,
 } from "./reviewer-activity.js";
 import type {
+  ListModelsInput,
+  ModelCatalogEntry,
   ReviewAdapter,
   ReviewAdapterInput,
   ReviewAdapterOutput,
@@ -148,6 +156,199 @@ export function createCodexAppServerAdapter(): ReviewAdapter {
       return await session.run();
     },
   };
+}
+
+/**
+ * List the Codex model catalog over app-server (`initialize` with experimentalApi →
+ * `model/list`) — the CLI transport has no listing surface, so BOTH codex transports list
+ * here, using the same binary and auth.json the CLI uses.
+ *
+ * The connection is FORCED into stdio-isolated mode: setup drafts carry no appServerOptions,
+ * so the derived mode would be "auto" — which spawns a detached, unref()'d shared daemon
+ * under the user's real CODEX_HOME whose close() only drops the socket; a catalog fetch would
+ * leak that daemon and mutate shared state. Isolated close() kills the child group and removes
+ * the temporary CODEX_HOME, so aborting the fetch (timeout, Esc) actively tears down.
+ *
+ * Isolation does not lose custom catalogs: the temp home's config (isolatedCodexConfig)
+ * carries the source home's `model_providers` tables and auth.json — the same inheritance
+ * every stdio-isolated review run uses — so a custom provider's models list identically here.
+ */
+export async function codexAppServerListModels(
+  input: ListModelsInput,
+): Promise<ModelCatalogEntry[]> {
+  const executableSelection = codexAppServerExecutableSelection(input.reviewer);
+  const executable = await resolveExecutable(executableSelection.executable, input.env);
+  const options: CodexAppServerOptions = {
+    ...codexAppServerOptions(input.reviewer, input.env),
+    mode: "stdio-isolated",
+    sharedCodexHome: false,
+  };
+
+  const pending = new Map<string | number, PendingRequest>();
+  let nextId = 1;
+  const failAll = (error: Error) => {
+    for (const request of pending.values()) {
+      request.reject(error);
+    }
+    pending.clear();
+  };
+
+  // An already-aborted fetch must not spawn a server at all. A signal that fires DURING
+  // startup still waits for the spawn to settle (the connection opener takes no signal —
+  // the same window the review path has); the post-open listener then tears it down.
+  throwIfAborted(input.signal, "codex model catalog fetch aborted");
+
+  let connection: AppServerConnection;
+  try {
+    connection = await openCodexAppServerConnection({
+      executable,
+      env: input.env,
+      options,
+      onMessage: (message) => {
+        if (!isJsonRpcResponse(message)) {
+          return;
+        }
+        const request = pending.get(message.id);
+        if (request === undefined) {
+          return;
+        }
+        pending.delete(message.id);
+        if ("error" in message && message.error !== undefined) {
+          request.reject(
+            reviewerFailed(`codex app-server request failed: ${formatError(message.error)}`),
+          );
+          return;
+        }
+        request.resolve(message.result);
+      },
+      onFailure: failAll,
+    });
+  } catch (error) {
+    throw classifyCodexListModelsAuthError(error);
+  }
+
+  const call = (method: string, params: unknown): Promise<unknown> => {
+    const id = nextId++;
+    const promise = new Promise<unknown>((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+    });
+    connection.write({ id, method, params });
+    return promise;
+  };
+
+  const removeAbortListener = bindAbortSignal(input.signal, () => {
+    failAll(reviewerFailed("codex model catalog fetch aborted"));
+    void connection.close();
+  });
+  try {
+    throwIfAborted(input.signal, "codex model catalog fetch aborted");
+    await call("initialize", {
+      clientInfo: { name: "diffwarden", title: "Diffwarden", version },
+      capabilities: { experimentalApi: true },
+    });
+    connection.write({ method: "initialized" });
+    // model/list paginates: follow nextCursor so large catalogs are not silently truncated.
+    // The page cap is a defensive bound against a server that never terminates the cursor.
+    const data: unknown[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 32; page++) {
+      const result = await call("model/list", cursor === undefined ? {} : { cursor });
+      if (isRecord(result) && Array.isArray(result.data)) {
+        data.push(...result.data);
+      }
+      const next =
+        isRecord(result) && typeof result.nextCursor === "string" && result.nextCursor !== ""
+          ? result.nextCursor
+          : undefined;
+      if (next === undefined || next === cursor) {
+        break;
+      }
+      cursor = next;
+    }
+    return codexModelCatalogEntries({ data }, codexEffectiveTransport(input.reviewer));
+  } finally {
+    removeAbortListener();
+    await connection.close();
+  }
+}
+
+function classifyCodexListModelsAuthError(error: unknown): unknown {
+  if (error instanceof DiffwardenError && error.code === "missing_auth") {
+    return missingAuth('codex is not authenticated — run "codex login"');
+  }
+  return error;
+}
+
+function codexEffectiveTransport(reviewer: ReviewReviewerConfig): "cli" | "app-server" {
+  const transport = reviewer.transport ?? defaultReviewerTransport("codex") ?? "cli";
+  return transport === "app-server" ? "app-server" : "cli";
+}
+
+/**
+ * Map a `model/list` result into catalog entries. `model` is the id Codex accepts as the
+ * turn/thread model override (fixture-confirmed identical to `id`; the fixture test asserts
+ * both, so a future divergence fails loudly). Effort levels come from the object-shaped
+ * `supportedReasoningEfforts` — extract `reasoningEffort` (a naive string filter would narrow
+ * every model to nothing) — then keep exactly what diffwarden can deliver:
+ *
+ * - keep native `xhigh` as-is: "xhigh" is a first-class diffwarden effort value (see the
+ *   config effort enum) delivered verbatim to codex — it needs no translation to "max";
+ * - drop `ultra` (no diffwarden equivalent) and `max` (diffwarden "max" is the redundant
+ *   alias here — both delivery paths collapse it to native xhigh, so offering both would
+ *   duplicate the same setting);
+ * - drop native `none` and `minimal` from the passthrough — diffwarden translates its own
+ *   vocabulary on delivery (off → none, minimal → low), so exposing the raw values would
+ *   commit params the translation layer never produces;
+ * - include "off" iff the effective transport is app-server AND the model advertises native
+ *   `none` (that is what off delivers there; the CLI path omits the flag entirely, which runs
+ *   the model DEFAULT effort — not off);
+ * - include "minimal" whenever "low" is advertised (delivery maps minimal → native low,
+ *   mirroring the claude catalog rule).
+ *
+ * Entries that advertise no reasoning efforts stay un-narrowed on BOTH transports (no
+ * supportedEffortLevels at all) — narrowing there would collapse the effort menu for a model
+ * whose effort surface is simply unknown.
+ */
+export function codexModelCatalogEntries(
+  result: unknown,
+  effectiveTransport: "cli" | "app-server",
+): ModelCatalogEntry[] {
+  if (!isRecord(result) || !Array.isArray(result.data)) {
+    return [];
+  }
+  const entries: ModelCatalogEntry[] = [];
+  for (const item of result.data) {
+    if (!isRecord(item) || typeof item.model !== "string" || item.model === "") {
+      continue;
+    }
+    const native = Array.isArray(item.supportedReasoningEfforts)
+      ? item.supportedReasoningEfforts
+          .map((option) => (isRecord(option) ? option.reasoningEffort : undefined))
+          .filter((level): level is string => typeof level === "string")
+      : [];
+    const efforts = native.filter(
+      (level) => level !== "ultra" && level !== "max" && level !== "none" && level !== "minimal",
+    );
+    // Independent of efforts: a none-only model narrows to ["off"] on app-server — its sole
+    // deliverable setting — rather than being treated as unrestricted.
+    const offEligible = effectiveTransport === "app-server" && native.includes("none");
+    const levels =
+      efforts.length > 0 || offEligible
+        ? [
+            ...(offEligible ? ["off"] : []),
+            ...(efforts.includes("low") ? ["minimal"] : []),
+            ...efforts,
+          ]
+        : [];
+    entries.push({
+      value: item.model,
+      ...(typeof item.displayName === "string" ? { displayName: item.displayName } : {}),
+      ...(typeof item.description === "string" ? { description: item.description } : {}),
+      ...(levels.length > 0 ? { supportedEffortLevels: levels } : {}),
+      ...(item.isDefault === true ? { default: true } : {}),
+    });
+  }
+  return entries;
 }
 
 async function prepareCodexAppServerAdapter(

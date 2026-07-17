@@ -13,7 +13,11 @@ import { type Server, type Socket, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCodexAppServerAdapter } from "../src/adapters/codex-app-server.js";
+import {
+  codexAppServerListModels,
+  codexModelCatalogEntries,
+  createCodexAppServerAdapter,
+} from "../src/adapters/codex-app-server.js";
 import {
   codexAppServerDeveloperInstructions,
   codexAppServerExecEnabled,
@@ -633,6 +637,201 @@ describe("createCodexAppServerAdapter", () => {
   });
 });
 
+describe("codexAppServerListModels", () => {
+  it("lists models over a forced stdio-isolated connection and tears it down", async () => {
+    const harness = createHarness();
+    // No appServerOptions on the draft reviewer: the derived mode would be "auto" (shared
+    // daemon); the fetch must force stdio-isolated instead.
+    const reviewer: ReviewReviewerConfig = {
+      id: "codex",
+      sdk: "codex",
+      readonly: true,
+      cliOptions: { executable: harness.executable },
+    };
+
+    const models = await codexAppServerListModels({ reviewer, env: harness.env });
+
+    // Both pages arrive in order. Default (cli) transport: no "off" (the CLI omits the flag,
+    // which runs the model default effort — not off), no max/ultra (both delivery paths
+    // collapse max→xhigh).
+    expect(models).toEqual([
+      {
+        value: "gpt-5.6-sol",
+        displayName: "GPT-5.6-Sol",
+        description: "Latest frontier agentic coding model.",
+        supportedEffortLevels: ["minimal", "low", "medium", "high", "xhigh"],
+        default: true,
+      },
+      {
+        value: "gpt-5.6-luna",
+        displayName: "GPT-5.6-Luna",
+        supportedEffortLevels: ["minimal", "low", "medium"],
+      },
+    ]);
+
+    const invocation = harness.readInvocation();
+    // initialize → initialized → model/list (following nextCursor), never a thread or turn.
+    expect(invocation.messages?.map((message) => message.method)).toEqual([
+      "initialize",
+      "initialized",
+      "model/list",
+      "model/list",
+    ]);
+    // The second page was requested with the cursor the first page returned.
+    expect(invocation.modelList).toEqual({ cursor: "page-2" });
+    // The connection ran isolated: a temp CODEX_HOME, not the user's shared one.
+    expect(invocation.env.CODEX_HOME).not.toBe(harness.authHome);
+    expect(invocation.env.CODEX_HOME).toContain("diffwarden-codex-home-");
+    // The temp CODEX_HOME is removed by close() — teardown ran.
+    expect(existsSync(invocation.env.CODEX_HOME)).toBe(false);
+  });
+
+  it("classifies missing codex auth into one actionable sentence", async () => {
+    const harness = createHarness({ auth: false });
+    await expect(
+      codexAppServerListModels({
+        reviewer: {
+          id: "codex",
+          sdk: "codex",
+          readonly: true,
+          cliOptions: { executable: harness.executable },
+        },
+        env: harness.env,
+      }),
+    ).rejects.toThrow('codex is not authenticated — run "codex login"');
+  });
+
+  it("aborts before the handshake without leaving a connection behind", async () => {
+    const harness = createHarness();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      codexAppServerListModels({
+        reviewer: {
+          id: "codex",
+          sdk: "codex",
+          readonly: true,
+          cliOptions: { executable: harness.executable },
+        },
+        env: harness.env,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("codex model catalog fetch aborted");
+  });
+});
+
+describe("codexModelCatalogEntries", () => {
+  const result = {
+    data: [
+      {
+        id: "gpt-5.6-sol",
+        model: "gpt-5.6-sol",
+        displayName: "GPT-5.6-Sol",
+        isDefault: true,
+        supportedReasoningEfforts: [
+          { reasoningEffort: "low", description: "Fast" },
+          { reasoningEffort: "high", description: "Deep" },
+          { reasoningEffort: "max", description: "Maximum" },
+          { reasoningEffort: "ultra", description: "Delegating" },
+        ],
+      },
+      { id: "gpt-5.2", model: "gpt-5.2", displayName: "GPT-5.2" },
+    ],
+  };
+
+  it("extracts effort levels from the object-shaped supportedReasoningEfforts", () => {
+    // A naive string filter over the objects would narrow every model to nothing. "minimal"
+    // rides along whenever "low" is advertised (both delivery paths map minimal → low).
+    const entries = codexModelCatalogEntries(result, "cli");
+    expect(entries[0]?.supportedEffortLevels).toEqual(["minimal", "low", "high"]);
+    // No advertised efforts → no narrowing metadata at all.
+    expect(entries[1]).toEqual({ value: "gpt-5.2", displayName: "GPT-5.2" });
+  });
+
+  it('offers "off" only on app-server AND only when the model advertises native none', () => {
+    // The fixture models advertise no native "none", so no transport offers off: delivering
+    // off maps to effort "none", which these models did not declare support for.
+    expect(codexModelCatalogEntries(result, "app-server")[0]?.supportedEffortLevels).toEqual([
+      "minimal",
+      "low",
+      "high",
+    ]);
+    expect(codexModelCatalogEntries(result, "cli")[0]?.supportedEffortLevels).not.toContain("off");
+
+    const noneResult = {
+      data: [
+        {
+          id: "quiet-model",
+          model: "quiet-model",
+          supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "low" }],
+        },
+      ],
+    };
+    // Native "none" is never exposed raw — diffwarden spells it "off", and only where it is
+    // deliverable: app-server maps off → none, while the CLI omits the flag (model default).
+    expect(codexModelCatalogEntries(noneResult, "app-server")[0]?.supportedEffortLevels).toEqual([
+      "off",
+      "minimal",
+      "low",
+    ]);
+    expect(codexModelCatalogEntries(noneResult, "cli")[0]?.supportedEffortLevels).toEqual([
+      "minimal",
+      "low",
+    ]);
+
+    // A none-ONLY model narrows to its sole deliverable setting on app-server, and stays
+    // un-narrowed on cli where off cannot be delivered.
+    const noneOnly = {
+      data: [
+        {
+          id: "no-reasoning",
+          model: "no-reasoning",
+          supportedReasoningEfforts: [{ reasoningEffort: "none" }],
+        },
+      ],
+    };
+    expect(codexModelCatalogEntries(noneOnly, "app-server")[0]?.supportedEffortLevels).toEqual([
+      "off",
+    ]);
+    expect(codexModelCatalogEntries(noneOnly, "cli")[0]).toEqual({ value: "no-reasoning" });
+  });
+
+  it('never passes native "minimal" through alongside the synthesized alias', () => {
+    const minimalResult = {
+      data: [
+        {
+          id: "dual",
+          model: "dual",
+          supportedReasoningEfforts: [{ reasoningEffort: "minimal" }, { reasoningEffort: "low" }],
+        },
+        {
+          id: "minimal-only",
+          model: "minimal-only",
+          supportedReasoningEfforts: [{ reasoningEffort: "minimal" }],
+        },
+      ],
+    };
+    const entries = codexModelCatalogEntries(minimalResult, "cli");
+    // No duplicate row when a model advertises both minimal and low.
+    expect(entries[0]?.supportedEffortLevels).toEqual(["minimal", "low"]);
+    // Diffwarden delivers minimal as native low, which this model did not advertise —
+    // offering it would commit an unsupported value, so the entry stays un-narrowed.
+    expect(entries[1]).toEqual({ value: "minimal-only" });
+  });
+
+  it("uses `model` as the committed value and expects it to equal `id`", () => {
+    // Live model/list fixture (2026-07-15): every entry has model === id. The adapter
+    // commits `model` (the id turn/start accepts); this guards against silent divergence.
+    for (const item of result.data) {
+      expect(item.model).toBe(item.id);
+    }
+    expect(codexModelCatalogEntries(result, "cli").map((entry) => entry.value)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.2",
+    ]);
+  });
+});
+
 describe("codex app-server debug output", () => {
   const reviewJson = JSON.stringify({
     findings: [],
@@ -877,6 +1076,8 @@ type FakeInvocation = {
   env: {
     CODEX_HOME: string;
   };
+  modelList?: unknown;
+  messages?: Array<{ method?: string }>;
   threadStart: {
     cwd: string;
     approvalPolicy: string;
@@ -1432,6 +1633,56 @@ rl.on("line", (line) => {
   }
   if (message.method === "initialize") {
     send({ id: message.id, result: { serverInfo: { name: "fake-codex" } } });
+    return;
+  }
+  if (message.method === "model/list") {
+    invocation.modelList = message.params;
+    writeInvocation();
+    // Two pages: the fetch must follow nextCursor or the picker silently truncates.
+    if (message.params && message.params.cursor === "page-2") {
+      send({
+        id: message.id,
+        result: {
+          data: [
+            {
+              id: "gpt-5.6-luna",
+              model: "gpt-5.6-luna",
+              displayName: "GPT-5.6-Luna",
+              isDefault: false,
+              supportedReasoningEfforts: [
+                { reasoningEffort: "low", description: "Fast" },
+                { reasoningEffort: "medium", description: "Balanced" }
+              ]
+            }
+          ],
+          nextCursor: null
+        }
+      });
+      return;
+    }
+    send({
+      id: message.id,
+      result: {
+        data: [
+          {
+            id: "gpt-5.6-sol",
+            model: "gpt-5.6-sol",
+            displayName: "GPT-5.6-Sol",
+            description: "Latest frontier agentic coding model.",
+            isDefault: true,
+            supportedReasoningEfforts: [
+              { reasoningEffort: "low", description: "Fast" },
+              { reasoningEffort: "medium", description: "Balanced" },
+              { reasoningEffort: "high", description: "Deep" },
+              { reasoningEffort: "xhigh", description: "Extra" },
+              { reasoningEffort: "max", description: "Maximum" },
+              { reasoningEffort: "ultra", description: "Delegating" }
+            ]
+          }
+        ],
+        nextCursor: "page-2"
+      }
+    });
     return;
   }
   if (message.method === "thread/start") {
