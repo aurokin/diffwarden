@@ -1,4 +1,5 @@
-import { homedir } from "node:os";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { piReviewOutputToolName, piSdkReviewTools } from "../src/adapters/pi-tool-policy.js";
@@ -1264,6 +1265,101 @@ describe("piAdapter", () => {
   );
 });
 
+describe("piAdapter listModels", () => {
+  async function withSharedAuthDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "diffwarden-pi-agent-"));
+    writeFileSync(path.join(agentDir, "auth.json"), "{}\n");
+    try {
+      return await run(agentDir);
+    } finally {
+      rmSync(agentDir, { force: true, recursive: true });
+    }
+  }
+
+  it("lists with the CLI's shared auth when auth.json exists and maps levels verbatim", async () => {
+    await withSharedAuthDir(async (agentDir) => {
+      const { adapter, calls } = createMockPiAdapter(
+        [
+          {
+            provider: "anthropic",
+            id: "claude-opus-4-8",
+            reasoning: true,
+            thinkingLevelMap: { minimal: null, xhigh: "max" },
+          },
+          { provider: "openai", id: "gpt-5.2", reasoning: false },
+        ],
+        { agentDir },
+      );
+
+      const models = await adapter.listModels?.({
+        reviewer: { id: "pi", sdk: "pi", readonly: true },
+        env: {},
+      });
+
+      expect(models).toEqual([
+        {
+          value: "anthropic/claude-opus-4-8",
+          supportedEffortLevels: ["off", "low", "medium", "high", "xhigh"],
+        },
+        // Non-reasoning models narrow to off-only, exactly like the review-path resolution.
+        { value: "openai/gpt-5.2", supportedEffortLevels: ["off"] },
+      ]);
+      // Shared CLI auth (AuthStorage.create), not the SDK-default isolated in-memory
+      // storage, which would list an empty catalog for every pi-CLI-authenticated user.
+      expect(calls.authStorageMode).toBe("create");
+    });
+  });
+
+  it("stays isolated when no shared auth.json exists, so listing never creates one", async () => {
+    // agentDir exposed but WITHOUT auth.json inside.
+    const agentDir = mkdtempSync(path.join(tmpdir(), "diffwarden-pi-agent-"));
+    try {
+      const { adapter, calls } = createMockPiAdapter(
+        [{ provider: "openai", id: "gpt-5.2", reasoning: false }],
+        { agentDir },
+      );
+      // Env-API-key models still list through the isolated path.
+      const models = await adapter.listModels?.({
+        reviewer: { id: "pi", sdk: "pi", readonly: true },
+        env: {},
+      });
+      expect(models).toHaveLength(1);
+      expect(calls.authStorageMode).toBe("inMemory");
+    } finally {
+      rmSync(agentDir, { force: true, recursive: true });
+    }
+  });
+
+  it("treats an empty catalog as the signed-out state with one actionable sentence", async () => {
+    const { adapter } = createMockPiAdapter([]);
+    await expect(
+      adapter.listModels?.({
+        reviewer: { id: "pi", sdk: "pi", readonly: true },
+        env: {},
+      }),
+    ).rejects.toThrow("pi is not authenticated — launch pi and run /login");
+  });
+
+  it("respects an explicit authSource instead of probing shared auth", async () => {
+    await withSharedAuthDir(async (agentDir) => {
+      const { adapter, calls } = createMockPiAdapter(
+        [{ provider: "anthropic", id: "claude-opus-4-8", reasoning: true }],
+        { agentDir },
+      );
+      await adapter.listModels?.({
+        reviewer: {
+          id: "pi",
+          sdk: "pi",
+          readonly: true,
+          sdkOptions: { authSource: "isolated" },
+        },
+        env: {},
+      });
+      expect(calls.authStorageMode).toBe("inMemory");
+    });
+  });
+});
+
 describe("piAdapter SDK debug output", () => {
   const SENTINEL = "LEAK_ME";
 
@@ -1598,6 +1694,8 @@ function createMockPiAdapter(
     settings?: MockPiSettings;
     /** Simulate an older Pi SDK whose sessions expose no subscribe method. */
     sessionWithoutSubscribe?: boolean;
+    /** Expose sdk.getAgentDir() pointing here (listModels probes it for auth.json). */
+    agentDir?: string;
   } = {},
 ) {
   const settingsManager = createMockPiSettingsManager(options.settings);
@@ -1655,9 +1753,11 @@ function createMockPiAdapter(
     },
   };
 
+  const agentDir = options.agentDir;
   const adapter = createPiAdapter({
     async loadSdk() {
       return {
+        ...(agentDir !== undefined ? { getAgentDir: () => agentDir } : {}),
         AuthStorage: {
           create(authPath?: string) {
             calls.authStorageMode = "create";

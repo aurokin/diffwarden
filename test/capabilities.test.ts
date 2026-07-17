@@ -109,7 +109,10 @@ describe("reviewerCapabilities", () => {
     expect(reviewerSupportsModelCatalog("cursor", "cli")).toBe(true);
     expect(reviewerSupportsModelCatalog("codex", "cli")).toBe(true);
     expect(reviewerSupportsModelCatalog("codex", "app-server")).toBe(true);
-    const catalogSdks = new Set(["claude", "cursor", "codex"]);
+    expect(reviewerSupportsModelCatalog("pi", "sdk")).toBe(true);
+    expect(reviewerSupportsModelCatalog("pi", "cli")).toBe(true);
+    expect(reviewerSupportsModelCatalog("opencode", "cli")).toBe(true);
+    const catalogSdks = new Set(["claude", "cursor", "codex", "pi", "opencode"]);
     for (const sdk of expectedReviewerSdks) {
       if (catalogSdks.has(sdk)) {
         continue;

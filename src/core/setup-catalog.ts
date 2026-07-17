@@ -8,6 +8,8 @@ import {
 import { claudeAdapter } from "../adapters/claude.js";
 import { codexAppServerListModels } from "../adapters/codex-app-server.js";
 import { cursorAdapter } from "../adapters/cursor.js";
+import { opencodeListModels } from "../adapters/opencode.js";
+import { piAdapter } from "../adapters/pi.js";
 import type { ListModelsInput, ModelCatalogEntry } from "../adapters/types.js";
 
 /**
@@ -45,7 +47,9 @@ const catalogListers: Partial<
 > = {
   ...(claudeAdapter.listModels !== undefined ? { claude: claudeAdapter.listModels } : {}),
   ...(cursorAdapter.listModels !== undefined ? { cursor: cursorAdapter.listModels } : {}),
+  ...(piAdapter.listModels !== undefined ? { pi: piAdapter.listModels } : {}),
   codex: codexAppServerListModels,
+  opencode: opencodeListModels,
 };
 
 const catalogFetch: ModelCatalogFetch = (engine, input) => {
