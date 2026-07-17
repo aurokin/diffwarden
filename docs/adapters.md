@@ -213,11 +213,12 @@ Catalog invariants:
   outlives a catalog fetch.
 
 Opt-in live catalog tests assert each engine's fetch returns a non-empty catalog on an
-authenticated machine (catalog listing spends no model budget):
+authenticated machine. Catalog listing itself spends no model budget, but the command keeps
+the live-suite spend opt-in so consent always comes from the caller's environment:
 
 ```bash
-pnpm test:live:catalog
-INTEGRATION_DISABLE=cursor,pi pnpm test:live:catalog
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 pnpm test:live:catalog
+DIFFWARDEN_ALLOW_MODEL_SPEND=1 INTEGRATION_DISABLE=cursor,pi pnpm test:live:catalog
 ```
 
 ## Codex CLI
