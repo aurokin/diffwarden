@@ -111,6 +111,8 @@ const reviewerCapabilityDefinitions = {
         sdkPackage: "@cursor/sdk",
         supportsModel: true,
         supportsEffort: false,
+        // Via Cursor.models.list with CURSOR_API_KEY.
+        supportsModelCatalog: true,
         captureMode: "text",
         readonlyCapability: "prompt-only",
       },
@@ -120,6 +122,8 @@ const reviewerCapabilityDefinitions = {
         defaultExecutable: "cursor-agent",
         supportsModel: true,
         supportsEffort: false,
+        // Via `cursor-agent models` under the CLI's own delegated login.
+        supportsModelCatalog: true,
         captureMode: "text",
         readonlyCapability: "prompt-only",
       },
@@ -146,7 +150,7 @@ const reviewerCapabilityDefinitions = {
         supportsFallbackModel: true,
         supportsMaxTurns: true,
         supportsMaxBudgetUsd: true,
-        // Via query.supportedModels(); the Cursor SDK is the next candidate.
+        // Via query.supportedModels().
         supportsModelCatalog: true,
         captureMode: "native-structured",
         readonlyCapability: "tool-restricted",
@@ -262,6 +266,9 @@ const reviewerCapabilityDefinitions = {
         defaultExecutable: "codex",
         supportsModel: true,
         supportsEffort: true,
+        // Both codex transports list via a stdio-isolated app-server `model/list`, using the
+        // same binary and auth.json the CLI transport uses.
+        supportsModelCatalog: true,
         captureMode: "native-structured",
         readonlyCapability: "enforced",
       },
@@ -271,6 +278,7 @@ const reviewerCapabilityDefinitions = {
         defaultExecutable: "codex",
         supportsModel: true,
         supportsEffort: true,
+        supportsModelCatalog: true,
         captureMode: "native-structured",
         readonlyCapability: "enforced",
       },
