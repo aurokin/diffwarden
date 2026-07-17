@@ -304,6 +304,31 @@ describe("droidAdapter", () => {
     expect(output.metadata).toMatchObject({ resolvedEffort: "none" });
   });
 
+  it("closes the session when the off settings update fails", async () => {
+    const calls: unknown[] = [];
+    const adapter = createDroidAdapter({
+      loadSdk: async () =>
+        mockDroidSdk(
+          calls,
+          {},
+          undefined,
+          [],
+          [{ id: "claude-test", modelId: "claude-test", supportedReasoningEfforts: ["off"] }],
+          () => {
+            throw new Error("settings update rejected");
+          },
+        ),
+      checkExecutable: async (executable) => executable,
+    });
+    const reviewer = createReviewer({ model: "claude-test", effort: "off" });
+
+    await expect(adapter.run(createInput(reviewer))).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("settings update rejected"),
+    });
+    expect(calls).toContainEqual({ close: "session-1" });
+  });
+
   it("keeps the session default when off has no advertised disable value", async () => {
     const calls: unknown[] = [];
     const adapter = createDroidAdapter({
@@ -658,6 +683,7 @@ function mockDroidSdk(
     modelId: string;
     supportedReasoningEfforts?: string[];
   }>,
+  updateSettingsOverride?: () => never,
 ) {
   return {
     SDK_VERSION: "0.3.0-test",
@@ -689,6 +715,7 @@ function mockDroidSdk(
         },
         async updateSettings(params: unknown) {
           calls.push({ updateSettings: params });
+          updateSettingsOverride?.();
           return {};
         },
         async *stream(prompt: string, streamOptions: unknown) {

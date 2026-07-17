@@ -105,7 +105,14 @@ export function createDroidAdapter(
             resolvedSettings.model,
           );
           if (disable !== undefined) {
-            await session.updateSettings({ specModeReasoningEffort: disable });
+            try {
+              await session.updateSettings({ specModeReasoningEffort: disable });
+            } catch (error) {
+              // The session-closing finally below only wraps the stream loop; a
+              // failed settings update must not leak the session subprocess.
+              await session.close().catch(() => undefined);
+              throw error;
+            }
             appliedEffort = disable;
             resolvedSettings = { ...resolvedSettings, effort: disable };
           }
