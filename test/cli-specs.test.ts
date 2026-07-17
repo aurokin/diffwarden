@@ -1541,6 +1541,15 @@ describe("cliSpecs", () => {
     }
   });
 
+  it("maps minimal effort to Codex low", async () => {
+    const invocation = await cliSpecs.codex.buildInvocation(
+      createInput(createReviewer("codex", { effort: "minimal" })),
+      createTempDir(),
+    );
+
+    expect(invocation.args).toContain('model_reasoning_effort="low"');
+  });
+
   it("maps max effort to each CLI's strongest supported value", async () => {
     const cases = [
       { engine: "codex", flag: "-c", expected: 'model_reasoning_effort="xhigh"' },

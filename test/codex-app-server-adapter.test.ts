@@ -179,8 +179,8 @@ describe("createCodexAppServerAdapter", () => {
       requestedModel: "gpt-test",
       resolvedModel: "gpt-test",
       requestedEffort: "minimal",
-      resolvedEffort: "minimal",
-      effortResolutionSource: "requested",
+      resolvedEffort: "low",
+      effortResolutionSource: "adapter-selection",
       codexReviewMode: "structured",
       webSearchPolicy: "disabled",
       webSearchMode: "disabled",
@@ -210,7 +210,7 @@ describe("createCodexAppServerAdapter", () => {
       ephemeral: true,
       codexReviewMode: "structured",
       requestedModel: "gpt-test",
-      resolvedEffort: "minimal",
+      resolvedEffort: "low",
       webSearchPolicy: "disabled",
       webSearchMode: "disabled",
     });
@@ -231,7 +231,7 @@ describe("createCodexAppServerAdapter", () => {
     expect(invocation.threadStart.config).toEqual({ web_search: "disabled" });
     expect(invocation.turnStart).toMatchObject({
       model: "gpt-test",
-      effort: "minimal",
+      effort: "low",
       ...codexAppServerTurnPermissionParams,
     });
     expect(invocation.turnStart?.outputSchema).toEqual(reviewResultStrictJsonSchema);

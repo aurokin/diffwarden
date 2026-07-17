@@ -241,6 +241,123 @@ describe("droidAdapter", () => {
     expect(calls).toContainEqual({ close: "session-1" });
   });
 
+  it("delivers off as the model's advertised native off value", async () => {
+    const calls: unknown[] = [];
+    const adapter = createDroidAdapter({
+      loadSdk: async () =>
+        mockDroidSdk(
+          calls,
+          {},
+          undefined,
+          [],
+          [
+            {
+              id: "claude-test",
+              modelId: "claude-test",
+              supportedReasoningEfforts: ["off", "low", "medium", "high", "max"],
+            },
+          ],
+        ),
+      checkExecutable: async (executable) => executable,
+    });
+    const reviewer = createReviewer({ model: "claude-test", effort: "off" });
+
+    const output = await adapter.run(createInput(reviewer));
+
+    const createCall = calls.find(
+      (call): call is { createSessionOptions: Record<string, unknown> } =>
+        typeof call === "object" && call !== null && "createSessionOptions" in call,
+    );
+    expect(createCall?.createSessionOptions).not.toHaveProperty("specModeReasoningEffort");
+    expect(calls).toContainEqual({ updateSettings: { specModeReasoningEffort: "off" } });
+    expect(output.metadata).toMatchObject({
+      effort: "off",
+      requestedEffort: "off",
+      resolvedEffort: "off",
+    });
+  });
+
+  it("delivers off as native none for models that only advertise none", async () => {
+    const calls: unknown[] = [];
+    const adapter = createDroidAdapter({
+      loadSdk: async () =>
+        mockDroidSdk(
+          calls,
+          {},
+          undefined,
+          [],
+          [
+            {
+              id: "gpt-test",
+              modelId: "gpt-test",
+              supportedReasoningEfforts: ["none", "low", "medium", "high"],
+            },
+          ],
+        ),
+      checkExecutable: async (executable) => executable,
+    });
+    const reviewer = createReviewer({ model: "gpt-test", effort: "off" });
+
+    const output = await adapter.run(createInput(reviewer));
+
+    expect(calls).toContainEqual({ updateSettings: { specModeReasoningEffort: "none" } });
+    expect(output.metadata).toMatchObject({ resolvedEffort: "none" });
+  });
+
+  it("closes the session when the off settings update fails", async () => {
+    const calls: unknown[] = [];
+    const adapter = createDroidAdapter({
+      loadSdk: async () =>
+        mockDroidSdk(
+          calls,
+          {},
+          undefined,
+          [],
+          [{ id: "claude-test", modelId: "claude-test", supportedReasoningEfforts: ["off"] }],
+          () => {
+            throw new Error("settings update rejected");
+          },
+        ),
+      checkExecutable: async (executable) => executable,
+    });
+    const reviewer = createReviewer({ model: "claude-test", effort: "off" });
+
+    await expect(adapter.run(createInput(reviewer))).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message: expect.stringContaining("settings update rejected"),
+    });
+    expect(calls).toContainEqual({ close: "session-1" });
+  });
+
+  it("keeps the session default when off has no advertised disable value", async () => {
+    const calls: unknown[] = [];
+    const adapter = createDroidAdapter({
+      loadSdk: async () =>
+        mockDroidSdk(
+          calls,
+          {},
+          undefined,
+          [],
+          [
+            {
+              id: "fixed-test",
+              modelId: "fixed-test",
+              supportedReasoningEfforts: ["high"],
+            },
+          ],
+        ),
+      checkExecutable: async (executable) => executable,
+    });
+    const reviewer = createReviewer({ model: "fixed-test", effort: "off" });
+
+    const output = await adapter.run(createInput(reviewer));
+
+    expect(
+      calls.some((call) => typeof call === "object" && call !== null && "updateSettings" in call),
+    ).toBe(false);
+    expect(output.metadata).not.toHaveProperty("effort");
+  });
+
   it("passes configured Droid machine IDs to SDK runs", async () => {
     const calls: unknown[] = [];
     const adapter = createDroidAdapter({
@@ -561,6 +678,12 @@ function mockDroidSdk(
   createSessionOverride?: () => never,
   /** Scripted stream messages replayed before the result on every stream call. */
   streamMessages: Array<{ type: string; [key: string]: unknown }> = [],
+  availableModels?: Array<{
+    id: string;
+    modelId: string;
+    supportedReasoningEfforts?: string[];
+  }>,
+  updateSettingsOverride?: () => never,
 ) {
   return {
     SDK_VERSION: "0.3.0-test",
@@ -588,6 +711,12 @@ function mockDroidSdk(
               ? { specModeReasoningEffort: sessionOptions.specModeReasoningEffort }
               : {}),
           },
+          ...(availableModels !== undefined ? { availableModels } : {}),
+        },
+        async updateSettings(params: unknown) {
+          calls.push({ updateSettings: params });
+          updateSettingsOverride?.();
+          return {};
         },
         async *stream(prompt: string, streamOptions: unknown) {
           calls.push({ streamPrompt: prompt, options: streamOptions });
