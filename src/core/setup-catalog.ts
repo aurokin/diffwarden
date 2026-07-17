@@ -184,10 +184,42 @@ async function runCatalogFetch(
 export const CUSTOM_MODEL_CHOICE = "__custom__" as const;
 
 /**
- * Rows for the model select: "default" (clears the override), one row per catalog entry, then
- * "custom…" for ids the catalog does not list. A configured model the catalog omits (a pinned id,
- * a previous custom entry) gets its own row so it stays visible and an accidental Enter keeps it
- * instead of silently clearing the override. Pure so tests can cover it without a TTY.
+ * A catalog row's display label, tagged with `⟨value⟩` exactly when the label alone would
+ * misstate what Enter commits: the value is not the label's own slug (aliases like
+ * `Opus` → `opus[1m]`), or the value is literally `default` — which would otherwise sit next to
+ * the engine-default row as a second, differently-meaning "default".
+ */
+function catalogRowLabel(model: ModelCatalogEntry): string {
+  const label = model.displayName ?? model.value;
+  if (label === model.value) {
+    return label;
+  }
+  const value = model.value.toLowerCase();
+  if (value !== "default" && slugify(label) === value) {
+    return label;
+  }
+  return `${label} ⟨${model.value}⟩`;
+}
+
+function slugify(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Rows for the model select: "engine default" (clears the override), one row per catalog entry,
+ * then "custom…" for ids the catalog does not list. A configured model the catalog omits (a pinned
+ * id, a previous custom entry) gets its own row so it stays visible and an accidental Enter keeps
+ * it instead of silently clearing the override. Pure so tests can cover it without a TTY.
+ *
+ * Three colliding meanings of "default" are kept visibly apart (F2/F3):
+ * - the clear-the-override row is labeled `engine default` (never bare "default");
+ * - an engine-recommended catalog entry is marked `★ recommended`, not "default";
+ * - a catalog label whose committable VALUE diverges from it (aliases like `opus[1m]`, or a
+ *   provider entry literally valued `default`) carries a `⟨value⟩` tag so what Enter commits is
+ *   visible at pick time.
  */
 export function buildModelSelectOptions(
   models: ModelCatalogEntry[],
@@ -198,13 +230,16 @@ export function buildModelSelectOptions(
   return [
     {
       value: "",
-      label: "default",
-      hint: engineDefault !== undefined ? `engine default (${engineDefault})` : "engine default",
+      label: "engine default",
+      hint:
+        engineDefault !== undefined
+          ? `let ${engine} choose (${engineDefault})`
+          : `let ${engine} choose`,
     },
     ...models.map((model) => ({
       value: model.value,
-      label: model.displayName ?? model.value,
-      hint: [model.description, model.default === true ? "default" : undefined]
+      label: catalogRowLabel(model),
+      hint: [model.description, model.default === true ? "★ recommended" : undefined]
         .filter((piece): piece is string => piece !== undefined)
         .join(" · "),
     })),

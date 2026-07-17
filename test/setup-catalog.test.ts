@@ -178,9 +178,11 @@ describe("createModelCatalogSession", () => {
 describe("buildModelSelectOptions", () => {
   it("renders default, catalog entries, and the custom escape hatch in order", () => {
     expect(buildModelSelectOptions(sampleModels(), "claude")).toEqual([
-      { value: "", label: "default", hint: "engine default (sonnet)" },
-      { value: "default", label: "Default (recommended)", hint: "" },
-      { value: "sonnet", label: "Sonnet", hint: "balanced · default" },
+      { value: "", label: "engine default", hint: "let claude choose (sonnet)" },
+      // A committable value of literally "default" always carries its ⟨value⟩ tag, so it can
+      // never be misread as the engine-default row above it.
+      { value: "default", label: "Default (recommended) ⟨default⟩", hint: "" },
+      { value: "sonnet", label: "Sonnet", hint: "balanced · ★ recommended" },
       { value: CUSTOM_MODEL_CHOICE, label: "custom…", hint: "enter a model id" },
     ]);
   });
@@ -188,7 +190,7 @@ describe("buildModelSelectOptions", () => {
   it("falls back to the model value when the catalog omits a display name", () => {
     const options = buildModelSelectOptions([{ value: "sonnet[1m]" }], "pi");
     expect(options[1]).toEqual({ value: "sonnet[1m]", label: "sonnet[1m]", hint: "" });
-    expect(options[0]?.hint).toBe("engine default");
+    expect(options[0]?.hint).toBe("let pi choose");
   });
 
   it("keeps an out-of-catalog current model selectable instead of dropping it", () => {
@@ -317,7 +319,7 @@ describe("buildModelAutocompleteOptions", () => {
   });
 
   it("matches the default row only against its literal label, never its hint", () => {
-    // Claude's default row hints "engine default (sonnet)": a "sonnet" query must not
+    // Claude's default row hints "let claude choose (sonnet)": a "sonnet" query must not
     // resurface it, or Enter on a model-name query could clear the override.
     const modelQuery = buildModelAutocompleteOptions(sampleModels(), "claude", undefined, "sonnet");
     expect(modelQuery.map((row) => row.value)).not.toContain("");

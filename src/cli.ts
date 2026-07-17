@@ -1481,7 +1481,7 @@ function renderReviewerListText(summary: ReviewerListSummary): string {
         reviewer.profile ?? "",
         reviewer.transport,
         reviewer.provider ?? "",
-        reviewer.model ?? "",
+        displayModelValue(reviewer.model),
         reviewer.effort ?? "",
       ]
         .map(escapeMarkdownTable)
@@ -1492,6 +1492,17 @@ function renderReviewerListText(summary: ReviewerListSummary): string {
   }
 
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Model ids that read as plain slugs render bare; anything else (provider aliases like
+ * `opus[1m]`) is wrapped in ⟨…⟩ so it reads as a literal id, not leaked terminal noise (F3).
+ */
+function displayModelValue(model: string | undefined): string {
+  if (model === undefined) {
+    return "";
+  }
+  return /^[a-z0-9._/:@-]+$/i.test(model) ? model : `⟨${model}⟩`;
 }
 
 function publicTransport(transport: "sdk" | "cli" | "app-server"): "native" | "cli" | "app-server" {
