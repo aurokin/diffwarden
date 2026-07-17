@@ -73,6 +73,11 @@ describe("truncateLine", () => {
     expect(truncateLine(styled, 80, "...")).toBe(styled);
   });
 
+  it("never exceeds the requested width, even below the ellipsis length", () => {
+    expect(truncateLine("abcdefgh", 2, "...")).toBe("..");
+    expect(truncateLine("abcdefgh", 0, "...")).toBe("");
+  });
+
   it("de-styles before slicing so no escape is cut mid-sequence", () => {
     const styled = `\u001B[32m${"a".repeat(50)}\u001B[0m`;
     const truncated = truncateLine(styled, 10, "...");

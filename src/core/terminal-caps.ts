@@ -139,5 +139,7 @@ export function truncateLine(line: string, columns: number, ellipsis: string): s
   }
   const plain = line.replace(ansiPattern, "");
   const keep = Math.max(columns - ellipsis.length, 0);
-  return `${plain.slice(0, keep)}${ellipsis}`;
+  // The final slice covers columns narrower than the ellipsis itself: even "..." must not
+  // exceed the requested width, or the row wraps and breaks the volatile block's line count.
+  return `${plain.slice(0, keep)}${ellipsis}`.slice(0, Math.max(columns, 0));
 }
