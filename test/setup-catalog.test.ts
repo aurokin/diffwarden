@@ -20,6 +20,7 @@ function claudeDraft(overrides: Partial<ModelCatalogDraft> = {}): ModelCatalogDr
     id: "claude",
     engine: "claude",
     transport: undefined,
+    provider: undefined,
     model: undefined,
     ...overrides,
   };
@@ -48,7 +49,9 @@ describe("createModelCatalogSession", () => {
     expect(session.supports("cursor", "cli")).toBe(true);
     expect(session.supports("codex", undefined)).toBe(true);
     expect(session.supports("codex", "app-server")).toBe(true);
-    expect(session.supports("pi", undefined)).toBe(false);
+    expect(session.supports("pi", undefined)).toBe(true);
+    expect(session.supports("pi", "cli")).toBe(true);
+    expect(session.supports("opencode", undefined)).toBe(true);
     expect(session.supports("grok", undefined)).toBe(false);
   });
 

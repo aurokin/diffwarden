@@ -184,6 +184,9 @@ const reviewerCapabilityDefinitions = {
         sdkPackage: "@earendil-works/pi-coding-agent",
         supportsModel: true,
         supportsEffort: true,
+        // Via ModelRegistry.getAvailable() over the CLI's shared auth.json — the same login
+        // both transports delegate to.
+        supportsModelCatalog: true,
         captureMode: "tool-call",
         readonlyCapability: "tool-restricted",
       },
@@ -193,6 +196,7 @@ const reviewerCapabilityDefinitions = {
         defaultExecutable: "pi",
         supportsModel: true,
         supportsEffort: true,
+        supportsModelCatalog: true,
         captureMode: "text",
         readonlyCapability: "tool-restricted",
       },
@@ -322,6 +326,8 @@ const reviewerCapabilityDefinitions = {
         defaultExecutable: "opencode",
         supportsModel: true,
         supportsEffort: true,
+        // Via `opencode models` (plain provider/model lines; ids only, no effort metadata).
+        supportsModelCatalog: true,
         captureMode: "text",
         readonlyCapability: "prompt-only",
       },

@@ -8,6 +8,8 @@ import {
 import { claudeAdapter } from "../adapters/claude.js";
 import { codexAppServerListModels } from "../adapters/codex-app-server.js";
 import { cursorAdapter } from "../adapters/cursor.js";
+import { opencodeListModels } from "../adapters/opencode.js";
+import { piAdapter } from "../adapters/pi.js";
 import type { ListModelsInput, ModelCatalogEntry } from "../adapters/types.js";
 
 /**
@@ -25,6 +27,7 @@ export type ModelCatalogDraft = {
   id: string;
   engine: ReviewerSdk;
   transport: ReviewerTransport | undefined;
+  provider: string | undefined;
   model: string | undefined;
 };
 
@@ -45,7 +48,9 @@ const catalogListers: Partial<
 > = {
   ...(claudeAdapter.listModels !== undefined ? { claude: claudeAdapter.listModels } : {}),
   ...(cursorAdapter.listModels !== undefined ? { cursor: cursorAdapter.listModels } : {}),
+  ...(piAdapter.listModels !== undefined ? { pi: piAdapter.listModels } : {}),
   codex: codexAppServerListModels,
+  opencode: opencodeListModels,
 };
 
 const catalogFetch: ModelCatalogFetch = (engine, input) => {
@@ -79,8 +84,12 @@ export function createModelCatalogSession(
 
   // Key on the EFFECTIVE transport: an explicit "sdk" and an unset transport are the same
   // catalog, so a no-op transport toggle must not re-run auth or lose the cached narrowing.
+  // Provider participates too: a provider-scoped draft (pi) lists a different, differently
+  // shaped catalog (bare ids) than an unscoped one.
   const key = (draft: ModelCatalogDraft) =>
-    `${draft.engine}::${draft.transport ?? defaultReviewerTransport(draft.engine) ?? "sdk"}`;
+    `${draft.engine}::${draft.transport ?? defaultReviewerTransport(draft.engine) ?? "sdk"}::${
+      draft.provider ?? ""
+    }`;
 
   return {
     supports(engine, transport) {
@@ -120,13 +129,17 @@ async function runCatalogFetch(
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
 ): Promise<ModelCatalogResult> {
-  // Setup drafts carry no auth settings today, so the fetch resolves auth in "auto"
-  // mode; the reviewer still rides along so future drafts with sdkOptions Just Work.
+  // Setup drafts carry no auth settings: the interactive surface edits PublicReviewerEntry,
+  // which deliberately has no sdkOptions, so an advanced per-reviewer setting like pi's
+  // authSource cannot reach a catalog fetch from here. That is accepted — the catalog is
+  // suggestions, never validation (review preflight enforces the reviewer's real auth), and
+  // adapters honor sdkOptions whenever a fuller reviewer object is passed.
   const input: ListModelsInput = {
     reviewer: {
       id: draft.id,
       sdk: draft.engine,
       ...(draft.transport !== undefined ? { transport: draft.transport } : {}),
+      ...(draft.provider !== undefined ? { provider: draft.provider } : {}),
       ...(draft.model !== undefined ? { model: draft.model } : {}),
       readonly: true,
     },

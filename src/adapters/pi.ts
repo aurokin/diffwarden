@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import {
@@ -21,6 +22,8 @@ import {
 import { piReviewOutputToolName, piSdkReviewTools } from "./pi-tool-policy.js";
 import { activitySinkFromDebugOutput } from "./reviewer-activity.js";
 import type {
+  ListModelsInput,
+  ModelCatalogEntry,
   ReviewAdapter,
   ReviewAdapterInput,
   ReviewAdapterOutput,
@@ -262,7 +265,69 @@ export function createPiAdapter(
 
       return output;
     },
+    async listModels(input: ListModelsInput): Promise<ModelCatalogEntry[]> {
+      const sdk = await dependencies.loadSdk();
+      // List with the CLI's SHARED auth.json when it exists and the reviewer did not pick a
+      // source explicitly: the SDK default is isolated in-memory storage, which would list an
+      // EMPTY catalog for every pi-CLI-authenticated user. The catalog is suggestions, never
+      // validation (an SDK reviewer without shared auth still fails preflight with its own
+      // actionable message if an unusable model is chosen), and review runs keep their
+      // existing isolated default. The existence probe matters: AuthStorage.create CREATES
+      // auth.json (and its parent dir) when absent, and merely opening a picker must not
+      // write outside the repo — a signed-out user falls back to isolated listing, which
+      // still surfaces env-API-key models. When the file exists, create() may refresh an
+      // expired OAuth token in place, exactly as the pi CLI itself does.
+      const explicitSource = optionalStringOption(input.reviewer.sdkOptions, "authSource");
+      const reviewer =
+        explicitSource !== undefined || !piSharedAuthFileExists(sdk, input.env)
+          ? input.reviewer
+          : {
+              ...input.reviewer,
+              sdkOptions: { ...input.reviewer.sdkOptions, authSource: "shared" },
+            };
+      const { availableModels } = createPiRuntimeContext(sdk, input.env, reviewer);
+      // Scope to the reviewer's provider, and emit BARE ids in that case: the provider is
+      // already carried in the reviewer's separate `provider` field, so a provider-qualified
+      // value would double-qualify on the CLI path (`--model anthropic/anthropic/...`) and
+      // let the picker save a model preflight would reject as outside the provider.
+      const entries = filterPiModelsByProvider(availableModels, input.reviewer.provider)
+        .filter((model) => typeof model.id === "string")
+        .map((model) => piCatalogEntry(model, input.reviewer.provider !== undefined));
+      // Signed-out pi does not throw — getAvailable() simply returns nothing. Surface the
+      // actionable state instead of a generic "empty model catalog" notice.
+      if (entries.length === 0) {
+        throw missingAuth(
+          input.reviewer.provider !== undefined && availableModels.length > 0
+            ? `No authenticated Pi models are available for provider: ${input.reviewer.provider}`
+            : "pi is not authenticated — launch pi and run /login",
+        );
+      }
+      return entries;
+    },
   };
+}
+
+/**
+ * Value is the provider-qualified id (`selectPiModel` accepts it verbatim, and bare ids can
+ * collide across providers) — except for provider-scoped reviewers, whose values must stay
+ * bare (see listModels). Effort levels reuse `supportedPiThinkingLevels` unchanged — it is
+ * already exact per model, including `["off"]` for non-reasoning models.
+ */
+function piCatalogEntry(model: PiModel, bareId: boolean): ModelCatalogEntry {
+  return {
+    value: bareId && typeof model.id === "string" ? model.id : formatPiModel(model),
+    supportedEffortLevels: supportedPiThinkingLevels(model),
+  };
+}
+
+/** True when the CLI's shared auth.json already exists; never creates it. */
+function piSharedAuthFileExists(sdk: PiSdk, env: NodeJS.ProcessEnv | undefined): boolean {
+  if (sdk.getAgentDir === undefined) {
+    return false;
+  }
+  // getAgentDir reads PI_CODING_AGENT_DIR/HOME from process.env.
+  const agentDir = withProcessEnvSync(env, () => sdk.getAgentDir?.());
+  return agentDir !== undefined && existsSync(path.join(agentDir, "auth.json"));
 }
 
 export const piAdapter = createPiAdapter();
@@ -272,6 +337,8 @@ type PiSdk = {
     create?(authPath?: string): PiAuthStorage;
     inMemory(data?: Record<string, unknown>): PiAuthStorage;
   };
+  /** Resolves PI_CODING_AGENT_DIR/HOME to the CLI's agent dir (auth.json lives there). */
+  getAgentDir?(): string;
   ModelRegistry: {
     inMemory(authStorage: PiAuthStorage): PiModelRegistry;
   };
