@@ -4,6 +4,7 @@ import {
   CUSTOM_MODEL_CHOICE,
   type ModelCatalogDraft,
   type ModelCatalogResult,
+  buildModelAutocompleteOptions,
   buildModelSelectOptions,
   catalogEffortChoices,
   createModelCatalogSession,
@@ -192,6 +193,83 @@ describe("buildModelSelectOptions", () => {
     // A current model the catalog already lists gets no duplicate row.
     const inCatalog = buildModelSelectOptions(sampleModels(), "claude", "sonnet");
     expect(inCatalog.filter((option) => option.value === "sonnet")).toHaveLength(1);
+  });
+});
+
+describe("buildModelAutocompleteOptions", () => {
+  const gptModels: ModelCatalogEntry[] = [
+    { value: "gpt-5-fast", displayName: "GPT-5 Fast" },
+    { value: "gpt-5-high", displayName: "GPT-5 High" },
+    { value: "sonnet", displayName: "Sonnet", description: "balanced" },
+  ];
+
+  it("returns the full select rows in order on an empty query", () => {
+    const rows = buildModelAutocompleteOptions(sampleModels(), "claude", undefined, "");
+    expect(rows.map((row) => row.value)).toEqual(["", "default", "sonnet", CUSTOM_MODEL_CHOICE]);
+  });
+
+  it("prepends a creatable row carrying the typed slug when no row's value matches exactly", () => {
+    const rows = buildModelAutocompleteOptions(gptModels, "codex", undefined, "gpt-5.3-mini");
+    // Index 0 is what Enter commits: one Enter after typing an off-catalog slug yields the slug.
+    expect(rows[0]).toEqual({
+      value: "gpt-5.3-mini",
+      label: 'use "gpt-5.3-mini"',
+      hint: "off-catalog model id",
+    });
+  });
+
+  it("keeps the creatable row above substring-matching catalog rows", () => {
+    // "gpt-5" is a prefix of two catalog ids but an exact match of none: Enter must commit
+    // "gpt-5", not "gpt-5-fast".
+    const rows = buildModelAutocompleteOptions(gptModels, "codex", undefined, "gpt-5");
+    expect(rows[0]?.value).toBe("gpt-5");
+    expect(rows.map((row) => row.value)).toContain("gpt-5-fast");
+  });
+
+  it("suppresses the creatable row on an exact value match, including case variants", () => {
+    const exact = buildModelAutocompleteOptions(gptModels, "codex", undefined, "gpt-5-fast");
+    expect(exact[0]?.value).toBe("gpt-5-fast");
+    expect(exact[0]?.label).toBe("GPT-5 Fast");
+    // A case variant commits the catalog row rather than forking a new slug.
+    const cased = buildModelAutocompleteOptions(gptModels, "codex", undefined, "GPT-5-FAST");
+    expect(cased[0]?.value).toBe("gpt-5-fast");
+  });
+
+  it("treats the synthetic current-model row as exact-matchable too", () => {
+    const rows = buildModelAutocompleteOptions(
+      gptModels,
+      "codex",
+      "my-pinned-model",
+      "my-pinned-model",
+    );
+    expect(rows.filter((row) => row.value === "my-pinned-model")).toHaveLength(1);
+    expect(rows[0]?.hint).toBe("current — not in the catalog");
+  });
+
+  it("filters catalog rows by fragments of value, label, or description", () => {
+    const byValue = buildModelAutocompleteOptions(gptModels, "codex", undefined, "sonn");
+    expect(byValue.map((row) => row.value)).toEqual(["sonn", "sonnet", CUSTOM_MODEL_CHOICE]);
+    const byHint = buildModelAutocompleteOptions(gptModels, "codex", undefined, "balanced");
+    expect(byHint.map((row) => row.value)).toContain("sonnet");
+  });
+
+  it("matches the default row only against its literal label, never its hint", () => {
+    // Claude's default row hints "engine default (sonnet)": a "sonnet" query must not
+    // resurface it, or Enter on a model-name query could clear the override.
+    const modelQuery = buildModelAutocompleteOptions(sampleModels(), "claude", undefined, "sonnet");
+    expect(modelQuery.map((row) => row.value)).not.toContain("");
+    const defaultQuery = buildModelAutocompleteOptions(
+      sampleModels(),
+      "claude",
+      undefined,
+      "defau",
+    );
+    expect(defaultQuery.map((row) => row.value)).toContain("");
+  });
+
+  it("always retains the custom escape hatch, after the creatable row", () => {
+    const rows = buildModelAutocompleteOptions(gptModels, "codex", undefined, "zzz-no-match");
+    expect(rows.map((row) => row.value)).toEqual(["zzz-no-match", CUSTOM_MODEL_CHOICE]);
   });
 });
 

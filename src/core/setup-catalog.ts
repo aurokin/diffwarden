@@ -195,6 +195,60 @@ export function buildModelSelectOptions(
 }
 
 /**
+ * Rows for the model autocomplete at a given query — the single source of truth the dynamic
+ * options getter returns on every keystroke (clack refocuses to the first survivor and Enter
+ * commits it, so ORDER here is submit behavior). In order:
+ *
+ * 1. Creatable row first: when the query is non-empty and matches no selectable row's value
+ *    exactly (case-insensitive — a case variant of a catalog id should commit the catalog row,
+ *    not fork a new slug), a `use "<typed slug>"` row whose value IS the typed slug. First
+ *    position is what makes "one Enter commits the typed slug" true, even when the slug is a
+ *    substring of catalog ids (`gpt-5` amid `gpt-5-fast`).
+ * 2. The "default" row, matched ONLY against its literal label: its hint embeds the
+ *    engine-default model id, and hint-matching would resurface it — focused first — on exactly
+ *    the model-name queries users type, turning Enter into an accidental clear.
+ * 3. Catalog + current rows, substring-filtered case-insensitively over value, label, and hint.
+ * 4. "custom…" always retained as the free-text escape hatch.
+ *
+ * Pure so tests can cover the filtering/creatable semantics without a TTY.
+ */
+export function buildModelAutocompleteOptions(
+  models: ModelCatalogEntry[],
+  engine: ReviewerSdk,
+  currentModel: string | undefined,
+  query: string,
+): { value: string; label: string; hint?: string }[] {
+  const base = buildModelSelectOptions(models, engine, currentModel);
+  const typed = query.trim();
+  const needle = typed.toLowerCase();
+  const rows: { value: string; label: string; hint?: string }[] = [];
+
+  const exactMatch = base.some(
+    (row) =>
+      row.value !== "" && row.value !== CUSTOM_MODEL_CHOICE && row.value.toLowerCase() === needle,
+  );
+  if (typed !== "" && !exactMatch) {
+    rows.push({ value: typed, label: `use "${typed}"`, hint: "off-catalog model id" });
+  }
+
+  for (const row of base) {
+    if (row.value === CUSTOM_MODEL_CHOICE) {
+      rows.push(row);
+    } else if (row.value === "") {
+      if (needle === "" || row.label.toLowerCase().includes(needle)) {
+        rows.push(row);
+      }
+    } else if (
+      needle === "" ||
+      `${row.value}\n${row.label}\n${row.hint ?? ""}`.toLowerCase().includes(needle)
+    ) {
+      rows.push(row);
+    }
+  }
+  return rows;
+}
+
+/**
  * Effort choices narrowed by the catalog: pure intersection with the effective model's
  * supportedEffortLevels, in menu order. Adapters are authoritative — each catalog entry lists
  * exactly the diffwarden levels deliverable to that model over the effective transport (including
