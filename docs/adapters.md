@@ -3,6 +3,11 @@
 Adapters run reviewer engines and return text or structured output. Core CLI logic owns
 target resolution, prompt assembly, parsing, validation, aggregation, and rendering.
 
+Diffwarden supports only the latest released version of each coding-agent CLI/SDK. Adapter
+behavior (flags, effort vocabularies, listing surfaces) tracks the current engine release;
+older binaries are not compatibility targets, and anything they reject surfaces as the
+engine's own error.
+
 For the source-of-truth capability table, see [`features.md`](./features.md). This page
 explains adapter behavior and operational notes.
 
@@ -863,10 +868,9 @@ maps `minimal` to `low` and passes `low` through `max` verbatim on the CLI trans
 transport resolves `xhigh`/`max` against the model catalog at preflight); Droid and Grok map
 `minimal` to `low`; engines without a distinct `max` level (Droid, Grok, Copilot, Pi) treat
 `max` as `xhigh`, while Codex passes `max` through verbatim — a distinct native level above
-`xhigh` that requires codex-cli 0.144.x or newer; older binaries and models that do not
-advertise it reject the value with Codex's own error rather than being silently downgraded, so
-`effort: max` on codex is an explicit opt-in to that minimum version. Codex, Pi, OpenCode,
-Gemini, and Cursor otherwise record exact requested values where those overrides are supported.
+`xhigh` in current codex-cli; models that do not advertise it reject the value with Codex's
+own error rather than being silently downgraded. Codex, Pi, OpenCode, Gemini, and Cursor
+otherwise record exact requested values where those overrides are supported.
 If stdout contains stable JSON or JSONL runtime fields such as `model`, `modelId`,
 `reasoningEffort`, or `model_reasoning_effort`, those provider-observed values replace the
 deterministic resolved values. Droid CLI stdout does not currently include these fields, so
