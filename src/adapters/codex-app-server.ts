@@ -189,6 +189,11 @@ export async function codexAppServerListModels(
     pending.clear();
   };
 
+  // An already-aborted fetch must not spawn a server at all. A signal that fires DURING
+  // startup still waits for the spawn to settle (the connection opener takes no signal —
+  // the same window the review path has); the post-open listener then tears it down.
+  throwIfAborted(input.signal, "codex model catalog fetch aborted");
+
   let connection: AppServerConnection;
   try {
     connection = await openCodexAppServerConnection({
@@ -284,16 +289,18 @@ function codexEffectiveTransport(reviewer: ReviewReviewerConfig): "cli" | "app-s
  *
  * - drop `ultra` (no diffwarden equivalent) and `max` (both delivery paths collapse
  *   diffwarden max → native xhigh, so offering max would silently downgrade);
- * - drop native `none` — diffwarden spells that setting "off", and the off rule below decides
- *   where it is actually deliverable (exposing raw `none` would commit an invalid value);
- * - include "off" iff the effective transport is app-server: it maps off → native `none`,
- *   while the CLI path omits the flag entirely, which runs the model DEFAULT effort — not off;
- * - include "minimal" whenever "low" is advertised (both delivery paths map minimal → native
- *   low, mirroring the claude catalog rule).
+ * - drop native `none` and `minimal` from the passthrough — diffwarden translates its own
+ *   vocabulary on delivery (off → none, minimal → low), so exposing the raw values would
+ *   commit params the translation layer never produces;
+ * - include "off" iff the effective transport is app-server AND the model advertises native
+ *   `none` (that is what off delivers there; the CLI path omits the flag entirely, which runs
+ *   the model DEFAULT effort — not off);
+ * - include "minimal" whenever "low" is advertised (delivery maps minimal → native low,
+ *   mirroring the claude catalog rule).
  *
  * Entries that advertise no reasoning efforts stay un-narrowed on BOTH transports (no
- * supportedEffortLevels at all) — prepending "off" there would collapse the effort menu to a
- * single row for a model whose effort surface is simply unknown.
+ * supportedEffortLevels at all) — narrowing there would collapse the effort menu for a model
+ * whose effort surface is simply unknown.
  */
 export function codexModelCatalogEntries(
   result: unknown,
@@ -307,16 +314,18 @@ export function codexModelCatalogEntries(
     if (!isRecord(item) || typeof item.model !== "string" || item.model === "") {
       continue;
     }
-    const efforts = Array.isArray(item.supportedReasoningEfforts)
+    const native = Array.isArray(item.supportedReasoningEfforts)
       ? item.supportedReasoningEfforts
           .map((option) => (isRecord(option) ? option.reasoningEffort : undefined))
           .filter((level): level is string => typeof level === "string")
-          .filter((level) => level !== "ultra" && level !== "max" && level !== "none")
       : [];
+    const efforts = native.filter(
+      (level) => level !== "ultra" && level !== "max" && level !== "none" && level !== "minimal",
+    );
     const levels =
       efforts.length > 0
         ? [
-            ...(effectiveTransport === "app-server" ? ["off"] : []),
+            ...(effectiveTransport === "app-server" && native.includes("none") ? ["off"] : []),
             ...(efforts.includes("low") ? ["minimal"] : []),
             ...efforts,
           ]

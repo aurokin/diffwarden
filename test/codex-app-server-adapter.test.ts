@@ -748,16 +748,16 @@ describe("codexModelCatalogEntries", () => {
     expect(entries[1]).toEqual({ value: "gpt-5.2", displayName: "GPT-5.2" });
   });
 
-  it('includes "off" only on the app-server transport, where off maps to native none', () => {
-    const entries = codexModelCatalogEntries(result, "app-server");
-    expect(entries[0]?.supportedEffortLevels).toEqual(["off", "minimal", "low", "high"]);
+  it('offers "off" only on app-server AND only when the model advertises native none', () => {
+    // The fixture models advertise no native "none", so no transport offers off: delivering
+    // off maps to effort "none", which these models did not declare support for.
+    expect(codexModelCatalogEntries(result, "app-server")[0]?.supportedEffortLevels).toEqual([
+      "minimal",
+      "low",
+      "high",
+    ]);
     expect(codexModelCatalogEntries(result, "cli")[0]?.supportedEffortLevels).not.toContain("off");
-    // A model advertising NO efforts stays un-narrowed on app-server too: an off-only entry
-    // would collapse the effort menu to one row for a model whose effort surface is unknown.
-    expect(entries[1]).toEqual({ value: "gpt-5.2", displayName: "GPT-5.2" });
-  });
 
-  it('translates native "none" into the off rule instead of exposing it', () => {
     const noneResult = {
       data: [
         {
@@ -767,16 +767,40 @@ describe("codexModelCatalogEntries", () => {
         },
       ],
     };
-    // Diffwarden spells that setting "off"; raw "none" would commit an invalid effort value.
-    expect(codexModelCatalogEntries(noneResult, "cli")[0]?.supportedEffortLevels).toEqual([
-      "minimal",
-      "low",
-    ]);
+    // Native "none" is never exposed raw — diffwarden spells it "off", and only where it is
+    // deliverable: app-server maps off → none, while the CLI omits the flag (model default).
     expect(codexModelCatalogEntries(noneResult, "app-server")[0]?.supportedEffortLevels).toEqual([
       "off",
       "minimal",
       "low",
     ]);
+    expect(codexModelCatalogEntries(noneResult, "cli")[0]?.supportedEffortLevels).toEqual([
+      "minimal",
+      "low",
+    ]);
+  });
+
+  it('never passes native "minimal" through alongside the synthesized alias', () => {
+    const minimalResult = {
+      data: [
+        {
+          id: "dual",
+          model: "dual",
+          supportedReasoningEfforts: [{ reasoningEffort: "minimal" }, { reasoningEffort: "low" }],
+        },
+        {
+          id: "minimal-only",
+          model: "minimal-only",
+          supportedReasoningEfforts: [{ reasoningEffort: "minimal" }],
+        },
+      ],
+    };
+    const entries = codexModelCatalogEntries(minimalResult, "cli");
+    // No duplicate row when a model advertises both minimal and low.
+    expect(entries[0]?.supportedEffortLevels).toEqual(["minimal", "low"]);
+    // Diffwarden delivers minimal as native low, which this model did not advertise —
+    // offering it would commit an unsupported value, so the entry stays un-narrowed.
+    expect(entries[1]).toEqual({ value: "minimal-only" });
   });
 
   it("uses `model` as the committed value and expects it to equal `id`", () => {
