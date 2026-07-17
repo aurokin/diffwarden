@@ -129,8 +129,11 @@ async function runCatalogFetch(
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
 ): Promise<ModelCatalogResult> {
-  // Setup drafts carry no auth settings today, so the fetch resolves auth in "auto"
-  // mode; the reviewer still rides along so future drafts with sdkOptions Just Work.
+  // Setup drafts carry no auth settings: the interactive surface edits PublicReviewerEntry,
+  // which deliberately has no sdkOptions, so an advanced per-reviewer setting like pi's
+  // authSource cannot reach a catalog fetch from here. That is accepted — the catalog is
+  // suggestions, never validation (review preflight enforces the reviewer's real auth), and
+  // adapters honor sdkOptions whenever a fuller reviewer object is passed.
   const input: ListModelsInput = {
     reviewer: {
       id: draft.id,

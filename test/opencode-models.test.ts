@@ -28,4 +28,20 @@ describe("parseOpencodeModels", () => {
     expect(parseOpencodeModels(stdout)).toEqual([{ value: "zai-coding-plan/glm-5.2" }]);
     expect(parseOpencodeModels("Please run: opencode auth login")).toEqual([]);
   });
+
+  it("scopes to a configured provider with bare ids, so values never double-qualify", () => {
+    const stdout = [
+      "anthropic/claude-haiku-4-5",
+      "openrouter/anthropic/claude-opus-4-5",
+      "openai/gpt-5.2",
+    ].join("\n");
+    // The provider rides in the reviewer's own `provider` field; a qualified value would
+    // produce `--model anthropic/anthropic/claude-haiku-4-5` via providerQualifiedModel.
+    expect(parseOpencodeModels(stdout, "anthropic")).toEqual([{ value: "claude-haiku-4-5" }]);
+    // Nested ids keep everything after the provider segment.
+    expect(parseOpencodeModels(stdout, "openrouter")).toEqual([
+      { value: "anthropic/claude-opus-4-5" },
+    ]);
+    expect(parseOpencodeModels(stdout, "missing")).toEqual([]);
+  });
 });
