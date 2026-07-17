@@ -653,7 +653,9 @@ async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promi
         // typing an off-catalog slug + Enter always commits the slug via the creatable row.
         options() {
           return [
-            ...buildModelAutocompleteOptions(models, entry.engine, currentModel, this.userInput),
+            ...buildModelAutocompleteOptions(models, entry.engine, currentModel, this.userInput, [
+              QUIT,
+            ]),
             quitOption,
           ];
         },

@@ -282,6 +282,19 @@ describe("buildModelAutocompleteOptions", () => {
     expect(defaultQuery.map((row) => row.value)).toContain("");
   });
 
+  it("never creates a row whose value collides with a control sentinel", () => {
+    // Selecting use "__quit__" / use "__custom__" would trigger the control action instead
+    // of committing the id; such ids remain enterable via the custom… free-text path.
+    const custom = buildModelAutocompleteOptions(gptModels, "codex", undefined, "__custom__", [
+      "__quit__",
+    ]);
+    expect(custom.map((row) => row.value)).toEqual([CUSTOM_MODEL_CHOICE]);
+    const quit = buildModelAutocompleteOptions(gptModels, "codex", undefined, "__quit__", [
+      "__quit__",
+    ]);
+    expect(quit.map((row) => row.value)).toEqual([CUSTOM_MODEL_CHOICE]);
+  });
+
   it("always retains the custom escape hatch, after the creatable row", () => {
     const rows = buildModelAutocompleteOptions(gptModels, "codex", undefined, "zzz-no-match");
     expect(rows.map((row) => row.value)).toEqual(["zzz-no-match", CUSTOM_MODEL_CHOICE]);

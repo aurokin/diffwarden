@@ -219,6 +219,7 @@ export function buildModelAutocompleteOptions(
   engine: ReviewerSdk,
   currentModel: string | undefined,
   query: string,
+  reservedValues: readonly string[] = [],
 ): { value: string; label: string; hint?: string }[] {
   const base = buildModelSelectOptions(models, engine, currentModel);
   const typed = query.trim();
@@ -228,7 +229,11 @@ export function buildModelAutocompleteOptions(
   const isSelectable = (row: { value: string }) =>
     row.value !== "" && row.value !== CUSTOM_MODEL_CHOICE;
   const exactMatch = base.some((row) => isSelectable(row) && row.value.toLowerCase() === needle);
-  if (typed !== "" && !exactMatch) {
+  // A creatable row whose value collides with a control sentinel (custom…, the caller's quit
+  // row) would trigger that action instead of committing the id — such ids stay enterable
+  // through the custom… free-text path.
+  const reserved = typed === CUSTOM_MODEL_CHOICE || reservedValues.includes(typed);
+  if (typed !== "" && !exactMatch && !reserved) {
     rows.push({ value: typed, label: `use "${typed}"`, hint: "off-catalog model id" });
   }
 
