@@ -41,6 +41,7 @@
     "test:live:cli": "pnpm live:spend-ok && INTEGRATION_TEST_ON=1 vitest run --config vitest.live.config.ts test/live/cli-live.test.ts",
     "test:live:e2e": "pnpm live:spend-ok && pnpm build && INTEGRATION_TEST_ON=1 vitest run --config vitest.live.config.ts test/live/e2e-live.test.ts",
     "test:live:sdk": "pnpm live:spend-ok && INTEGRATION_TEST_ON=1 vitest run --config vitest.live.config.ts test/cursor-adapter.test.ts test/claude-adapter.test.ts test/pi-adapter.test.ts test/droid-adapter.test.ts test/copilot-adapter.test.ts",
+    "test:live:catalog": "INTEGRATION_TEST_ON=1 DIFFWARDEN_ALLOW_MODEL_SPEND=1 vitest run --config vitest.live.config.ts test/live/model-catalog-live.test.ts",
     "live:spend-ok": "tsx scripts/require-live-spend.ts",
     "typecheck": "tsc -p tsconfig.test.json --noEmit"
   },

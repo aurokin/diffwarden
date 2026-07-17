@@ -125,11 +125,15 @@ Interactive setup is the default in a TTY. A bare `diffwarden reviewers add` ope
 multiselect of discovered reviewers that are not already configured, then steps each selection
 through a field editor for transport, model, effort, and the reviewer id. A bare `diffwarden init`
 runs the discover/scaffold flow. In the model field, engines whose transport declares a live model
-catalog — currently Claude on the SDK transport — replace free text with a picker fetched once per
-setup session behind a spinner; "custom…" keeps the free-text escape hatch, and a failed fetch (no
-auth, offline, timeout) degrades to free text with a one-line notice. When the fetched catalog
-lists a model's supported effort levels, the effort menu narrows to those plus `off` and
-`default`. A bare `reviewers edit` (or `edit <id>` with no field flags) opens
+catalog — claude (SDK transport), cursor, codex, pi, opencode, copilot, and droid — replace free
+text with an autocomplete picker fetched once per setup session behind a spinner; typing filters
+the catalog, an off-catalog id commits in one Enter via the picker's creatable row, and "custom…"
+keeps the full free-text escape hatch. A failed fetch (no auth, offline, timeout) degrades to free
+text with a one-line notice naming the engine and its login command, and logging in then
+re-entering the field recovers without restarting. When the fetched catalog lists a model's
+supported effort levels, the effort menu narrows to exactly the efforts diffwarden can deliver to
+that model over the configured transport, plus `default`. Gemini, grok, and antigravity have no
+listing surface and keep plain free text. A bare `reviewers edit` (or `edit <id>` with no field flags) opens
 a field editor for an existing reviewer's transport, model, effort, and enabled state, and a bare
 `reviewers remove` lets you pick a reviewer and confirm (default No). In any menu, Esc or Ctrl-C steps back one level and cancels at the top, while
 a `✕ quit` choice exits immediately. In the field editor, submitting a blank model clears the model

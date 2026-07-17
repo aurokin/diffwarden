@@ -168,6 +168,58 @@ The Codex app-server transport follows the same metadata convention. It addition
 `codexHome`, `codexHomeShared`, `webSearchPolicy`, `codexReviewMode`, and app-server lifecycle
 metadata because command execution is intentionally still available for this transport.
 
+## Model Catalogs
+
+Interactive setup's model picker is backed by per-adapter `listModels(input)` implementations
+returning `ModelCatalogEntry` rows (value, optional display name/description, optional
+per-model `supportedEffortLevels`, optional `default` mark). A transport declares
+`supportsModelCatalog` only when a listing surface exists for it; the setup flow fetches once
+per engine + effective transport (+ provider) per session behind a 10-second timeout, and any
+failure degrades to free text with a one-line notice — review runs never touch a catalog fetch.
+
+Per-engine listing surfaces:
+
+| Engine | Surface | Transports listing |
+| --- | --- | --- |
+| claude | SDK `query.supportedModels()` under the model-preflight lockdown | sdk only (the CLI has no listing surface) |
+| cursor | `Cursor.models.list` with `CURSOR_API_KEY` on sdk; `cursor-agent models` under delegated login on cli | sdk + cli |
+| codex | Forced stdio-isolated app-server `initialize(experimentalApi)` → paginated `model/list` | cli + app-server (same binary and auth.json) |
+| pi | SDK model registry `getAvailable()` with shared local auth (probed, never created) | sdk + cli |
+| opencode | `opencode models` plain `provider/model` lines — ids only, no effort metadata | cli |
+| copilot | Staged isolated SDK runtime (same staging as reviews, scoped to the setup cwd) → `client.listModels()` | sdk + cli (same backend catalog) |
+| droid | Short-lived spec-mode session → `initResult.availableModels` → close | sdk + cli |
+
+gemini, grok, and antigravity have no listing surface and stay free-text.
+
+Catalog invariants:
+
+- Entries are suggestions, never validation: free-typed model ids stay first-class through
+  the picker's creatable row, and preflight remains the auth/model gate.
+- `supportedEffortLevels` contains exactly the efforts diffwarden can deliver to that model
+  over the effective transport — the delivery mappers are authoritative. Native disable
+  values (`none`/`off`) are surfaced as diffwarden `off` only where the transport can
+  actually deliver disabling for that model; `minimal` appears whenever `low` is deliverable
+  (delivery maps minimal → low); native `max` survives only where it is passed verbatim
+  (droid sdk) and is dropped where delivery collapses max → xhigh. Models with no effort
+  signal stay un-narrowed rather than collapsing the effort menu.
+- Provider-scoped reviewers (pi, opencode) list bare model ids; the provider rides in the
+  reviewer's `provider` field, so values never double-qualify.
+- Auth failures classify to a single actionable line per engine —
+  `<engine> is not authenticated — run <command>` — never raw SDK/CLI error output.
+- Aborted fetches (timeout, Esc) actively tear down: codex's isolated close kills the child
+  group and removes the temp CODEX_HOME, copilot's abort listener stops the client and
+  removes the staged base directory, droid passes the signal into `createSession`, and the
+  CLI-backed listers kill their child process. No reviewer subprocess or temp directory
+  outlives a catalog fetch.
+
+Opt-in live catalog tests assert each engine's fetch returns a non-empty catalog on an
+authenticated machine (catalog listing spends no model budget):
+
+```bash
+pnpm test:live:catalog
+INTEGRATION_DISABLE=cursor,pi pnpm test:live:catalog
+```
+
 ## Codex CLI
 
 The Codex CLI path runs `codex exec` instead of `codex review` so Diffwarden can use its
@@ -413,10 +465,8 @@ The Claude SDK transport declares `supportsModelCatalog`: `claudeAdapter.listMod
 live model catalog via the same locked-down `query.supportedModels()` pattern model preflight
 uses, mapped to `ModelCatalogEntry` (value, display name, description, supported effort levels,
 and a `default` mark on diffwarden's default model). Interactive setup uses it for the model
-picker. Cursor lists on both transports (`Cursor.models.list` with `CURSOR_API_KEY` on sdk;
-`cursor-agent models` under the CLI's delegated login on cli), and codex lists via a forced
-stdio-isolated app-server `model/list` for both of its transports; each transport with a
-listing surface declares `supportsModelCatalog`.
+picker; see [Model Catalogs](#model-catalogs) for the cross-engine listing surfaces and
+invariants.
 
 Live smoke test:
 
