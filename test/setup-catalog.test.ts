@@ -335,6 +335,10 @@ describe("buildModelAutocompleteOptions", () => {
       "defau",
     );
     expect(defaultQuery.map((row) => row.value)).toContain("");
+    // "engine" is a model-name-shaped query, not a request for the clear row — if the clear
+    // row survived it while focused, Enter would clear the override instead of committing.
+    const engineQuery = buildModelAutocompleteOptions(sampleModels(), "claude", undefined, "eng");
+    expect(engineQuery.map((row) => row.value)).not.toContain("");
   });
 
   it("never creates a row whose value collides with a control sentinel", () => {

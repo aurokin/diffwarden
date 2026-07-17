@@ -304,7 +304,11 @@ export function buildModelAutocompleteOptions(
     if (row.value === CUSTOM_MODEL_CHOICE) {
       rows.push(row);
     } else if (row.value === "") {
-      if (needle === "" || row.label.toLowerCase().includes(needle)) {
+      // The clear-override row answers only to "default" prefixes. Matching its full
+      // "engine default" label would keep it alive — and, worse, FOCUSED when it started
+      // focused — for queries like "engine", where Enter would clear the override instead
+      // of committing what the user typed.
+      if (needle === "" || "default".startsWith(needle)) {
         rows.push(row);
       }
     } else if (
