@@ -77,6 +77,14 @@ describe("wrapText", () => {
 });
 
 describe("truncateLine", () => {
+  it("measures wide characters as two terminal cells", () => {
+    // "審査" occupies 4 cells; a JS-length measure would let the row wrap and break the
+    // live renderer's one-physical-line invariant.
+    expect(visibleLength("審査 review")).toBe(4 + " review".length);
+    expect(truncateLine("審査審査審査", 5, "...")).toBe("審...");
+    expect(visibleLength(truncateLine("審査審査審査", 5, "..."))).toBeLessThanOrEqual(5);
+  });
+
   it("measures visible width through SGR sequences", () => {
     const styled = "\u001B[31mred\u001B[0m line";
     expect(visibleLength(styled)).toBe("red line".length);

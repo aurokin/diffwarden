@@ -134,15 +134,39 @@ export function wrapText(text: string, width: number, indent: string): string[] 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: SGR escapes are exactly what this strips
 const ansiPattern = /\u001B\[[0-9;]*m/g;
 
-/** Printable width of a styled line (SGR sequences excluded). */
+/**
+ * Terminal cells for one code point: 2 for East Asian wide/fullwidth ranges and emoji,
+ * 1 otherwise. Approximate on purpose — enough to keep the live renderer's one-physical-line
+ * invariant for CJK reviewer ids without a full wcwidth table.
+ */
+function codePointCells(codePoint: number): number {
+  return (codePoint >= 0x1100 && codePoint <= 0x115f) ||
+    (codePoint >= 0x2e80 && codePoint <= 0xa4cf) ||
+    (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+    (codePoint >= 0xfe30 && codePoint <= 0xfe4f) ||
+    (codePoint >= 0xff00 && codePoint <= 0xff60) ||
+    (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
+    (codePoint >= 0x1f300 && codePoint <= 0x1faff) ||
+    (codePoint >= 0x20000 && codePoint <= 0x3fffd)
+    ? 2
+    : 1;
+}
+
+/** Printable width of a styled line in terminal cells (SGR sequences excluded). */
 export function visibleLength(line: string): number {
-  return line.replace(ansiPattern, "").length;
+  let cells = 0;
+  for (const char of line.replace(ansiPattern, "")) {
+    cells += codePointCells(char.codePointAt(0) ?? 0);
+  }
+  return cells;
 }
 
 /**
  * Truncate one rendered line to the live terminal width, ellipsizing the tail. A line that
  * overflows is de-styled before slicing — cutting mid-escape would leak a broken sequence,
- * and an unstyled truncated row beats a corrupted one.
+ * and an unstyled truncated row beats a corrupted one. Width is measured in terminal cells
+ * so wide characters cannot smuggle a second physical line past the volatile-block math.
  */
 export function truncateLine(line: string, columns: number, ellipsis: string): string {
   if (visibleLength(line) <= columns) {
@@ -150,7 +174,17 @@ export function truncateLine(line: string, columns: number, ellipsis: string): s
   }
   const plain = line.replace(ansiPattern, "");
   const keep = Math.max(columns - ellipsis.length, 0);
+  let kept = "";
+  let cells = 0;
+  for (const char of plain) {
+    const width = codePointCells(char.codePointAt(0) ?? 0);
+    if (cells + width > keep) {
+      break;
+    }
+    kept += char;
+    cells += width;
+  }
   // The final slice covers columns narrower than the ellipsis itself: even "..." must not
   // exceed the requested width, or the row wraps and breaks the volatile block's line count.
-  return `${plain.slice(0, keep)}${ellipsis}`.slice(0, Math.max(columns, 0));
+  return `${kept}${ellipsis}`.slice(0, Math.max(columns, 0));
 }
