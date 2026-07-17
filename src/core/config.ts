@@ -802,7 +802,9 @@ export async function listUserConfigReviewerSets(options: {
     );
   }
   const rawConfig = parseRawConfigObject(existingRaw, configPath);
-  const sets: Record<string, string[]> = {};
+  // Null prototype: set names are unrestricted, and copying a set named "__proto__" into a
+  // plain object would hit the inherited setter and vanish from the returned map.
+  const sets: Record<string, string[]> = Object.create(null);
   if (isRecord(rawConfig.reviewerSets)) {
     for (const [name, members] of Object.entries(rawConfig.reviewerSets)) {
       if (Array.isArray(members)) {

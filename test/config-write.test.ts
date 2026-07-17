@@ -593,6 +593,22 @@ describe("listUserConfigReviewerSets", () => {
     expect(result.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("lists a set literally named __proto__ instead of dropping it", async () => {
+    const { env, configPath } = setup();
+    // Raw JSON: a JS object literal with a "__proto__" key would set the prototype instead.
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        reviewers: [{ id: "codex", engine: "codex" }],
+      }).replace('"reviewers"', '"reviewerSets":{"__proto__":["codex"]},"reviewers"'),
+    );
+
+    const result = await listUserConfigReviewerSets({ env });
+    expect(Object.hasOwn(result.sets, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(result.sets, "__proto__")?.value).toEqual(["codex"]);
+  });
+
   it("throws when no user config exists", async () => {
     const { env } = setup();
     await expect(listUserConfigReviewerSets({ env })).rejects.toThrow(/No diffwarden user config/);
