@@ -200,8 +200,8 @@ Catalog invariants:
   values (`none`/`off`) are surfaced as diffwarden `off` only where the transport can
   actually deliver disabling for that model; `minimal` appears whenever `low` is deliverable
   (delivery maps minimal → low); native `max` survives only where it is passed verbatim
-  (droid sdk) and is dropped where delivery collapses max → xhigh. Models with no effort
-  signal stay un-narrowed rather than collapsing the effort menu.
+  (codex, droid sdk) and is dropped where delivery collapses max → xhigh. Models with no
+  effort signal stay un-narrowed rather than collapsing the effort menu.
 - Provider-scoped reviewers (pi, opencode) list bare model ids; the provider rides in the
   reviewer's `provider` field, so values never double-qualify.
 - Auth failures classify to a single actionable line per engine —
@@ -861,9 +861,11 @@ for values it explicitly passes, including provider-qualified model strings such
 `openrouter/anthropic/claude-sonnet`. Effort mappings follow the invocation arguments: Claude
 maps `minimal` to `low` and passes `low` through `max` verbatim on the CLI transport (the SDK
 transport resolves `xhigh`/`max` against the model catalog at preflight); Droid and Grok map
-`minimal` to `low`; engines without a distinct `max` level (Codex, Droid, Grok, Copilot, Pi)
-treat `max` as `xhigh`; Codex, Pi, OpenCode, Gemini, and Cursor otherwise record exact requested
-values where those overrides are supported.
+`minimal` to `low`; engines without a distinct `max` level (Droid, Grok, Copilot, Pi) treat
+`max` as `xhigh`, while Codex passes `max` through verbatim (a distinct native level above
+`xhigh` since codex-cli 0.144.x; models that do not advertise it reject with the platform's own
+error); Codex, Pi, OpenCode, Gemini, and Cursor otherwise record exact requested values where
+those overrides are supported.
 If stdout contains stable JSON or JSONL runtime fields such as `model`, `modelId`,
 `reasoningEffort`, or `model_reasoning_effort`, those provider-observed values replace the
 deterministic resolved values. Droid CLI stdout does not currently include these fields, so

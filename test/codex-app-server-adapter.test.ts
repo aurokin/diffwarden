@@ -290,7 +290,7 @@ describe("createCodexAppServerAdapter", () => {
     expect(invocation.config).not.toContain("[projects.");
   });
 
-  it("maps max effort to xhigh through native protocol fields", async () => {
+  it("passes max effort verbatim through native protocol fields", async () => {
     const harness = createHarness();
     const adapter = createCodexAppServerAdapter();
     const reviewer = createReviewer(harness.executable, {
@@ -301,13 +301,14 @@ describe("createCodexAppServerAdapter", () => {
     const output = await adapter.run(createInput(reviewer, harness));
     const invocation = harness.readInvocation();
 
+    // max is a distinct native codex level above xhigh — no adapter translation.
     expect(invocation.turnStart).toMatchObject({
-      effort: "xhigh",
+      effort: "max",
     });
     expect(output.metadata).toMatchObject({
       requestedEffort: "max",
-      resolvedEffort: "xhigh",
-      effortResolutionSource: "adapter-selection",
+      resolvedEffort: "max",
+      effortResolutionSource: "requested",
     });
   });
 
@@ -652,14 +653,14 @@ describe("codexAppServerListModels", () => {
     const models = await codexAppServerListModels({ reviewer, env: harness.env });
 
     // Both pages arrive in order. Default (cli) transport: no "off" (the CLI omits the flag,
-    // which runs the model default effort — not off), no max/ultra (both delivery paths
-    // collapse max→xhigh).
+    // which runs the model default effort — not off), no ultra (no diffwarden equivalent);
+    // max survives as a distinct native level delivered verbatim.
     expect(models).toEqual([
       {
         value: "gpt-5.6-sol",
         displayName: "GPT-5.6-Sol",
         description: "Latest frontier agentic coding model.",
-        supportedEffortLevels: ["minimal", "low", "medium", "high", "xhigh"],
+        supportedEffortLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
         default: true,
       },
       {
@@ -741,9 +742,10 @@ describe("codexModelCatalogEntries", () => {
 
   it("extracts effort levels from the object-shaped supportedReasoningEfforts", () => {
     // A naive string filter over the objects would narrow every model to nothing. "minimal"
-    // rides along whenever "low" is advertised (both delivery paths map minimal → low).
+    // rides along whenever "low" is advertised (both delivery paths map minimal → low);
+    // "max" survives (delivered verbatim); "ultra" drops (no diffwarden equivalent).
     const entries = codexModelCatalogEntries(result, "cli");
-    expect(entries[0]?.supportedEffortLevels).toEqual(["minimal", "low", "high"]);
+    expect(entries[0]?.supportedEffortLevels).toEqual(["minimal", "low", "high", "max"]);
     // No advertised efforts → no narrowing metadata at all.
     expect(entries[1]).toEqual({ value: "gpt-5.2", displayName: "GPT-5.2" });
   });
@@ -755,6 +757,7 @@ describe("codexModelCatalogEntries", () => {
       "minimal",
       "low",
       "high",
+      "max",
     ]);
     expect(codexModelCatalogEntries(result, "cli")[0]?.supportedEffortLevels).not.toContain("off");
 
