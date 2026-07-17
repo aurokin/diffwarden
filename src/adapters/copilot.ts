@@ -44,6 +44,8 @@ import {
 } from "./metadata.js";
 import { activitySinkFromDebugOutput } from "./reviewer-activity.js";
 import type {
+  ListModelsInput,
+  ModelCatalogEntry,
   ReviewAdapter,
   ReviewAdapterInput,
   ReviewAdapterOutput,
@@ -145,36 +147,14 @@ export function createCopilotAdapter(
         copilotRunContext(input.runContext)?.packageVersion ??
         (await dependencies.readPackageVersion());
       const reviewRoot = copilotReviewRoot(input);
-      const sourcePathRoot = copilotSourcePathRoot(input);
-      const executable = copilotSdkExecutable(input.reviewer);
-      const resolvedExecutable =
-        executable === undefined
-          ? await dependencies.resolveBundledRuntimeExecutable()
-          : await resolveCopilotRuntimeExecutable(executable, input.env, sourcePathRoot);
-      assertCopilotRuntimeLaunchCommandSupported(resolvedExecutable);
-      const sourceBaseDirectory = resolveCopilotReviewPath(
-        requiredCopilotBaseDirectory(input.reviewer, input.env),
-        sourcePathRoot,
-      );
-      const reviewRoots = [reviewRoot, input.target.repo_root];
-      await assertCopilotBaseDirectoryOutsideWorkspace(reviewRoots, sourceBaseDirectory);
-      // Even the adapter-default bundled runtime is executable code from the reviewed tree
-      // in project-local installs, so fail closed and require an external runtime or CLI.
-      await assertCopilotRuntimeOutsideWorkspace(reviewRoots, resolvedExecutable);
-      await assertCopilotGithubAuthDirsOutsideWorkspace(reviewRoots, sourcePathRoot, input.env);
-      const stagedBaseDirectory = await stageCopilotSdkBaseDirectory(
-        sourceBaseDirectory,
-        reviewRoots,
+      const runtime = await stageCopilotSdkRuntime(
+        dependencies,
+        input.reviewer,
         input.env,
-        sourcePathRoot,
+        [reviewRoot, input.target.repo_root],
+        copilotSourcePathRoot(input),
       );
-      const env = copilotProcessEnv(
-        input.env,
-        stagedBaseDirectory.baseDirectory,
-        stagedBaseDirectory.ghConfigDir,
-        stagedBaseDirectory.homeDirectory,
-        stagedBaseDirectory.toolOutputTempDir,
-      );
+      const stagedBaseDirectory = runtime.staged;
       const deadline = createCopilotRunDeadline(input.timeoutMs);
       let client: CopilotClient | undefined;
       let session: CopilotSession | undefined;
@@ -183,10 +163,9 @@ export function createCopilotAdapter(
         const constructedClient = new sdk.CopilotClient(
           copilotClientOptions(
             sdk,
-            input,
-            env,
+            runtime.env,
             stagedBaseDirectory.baseDirectory,
-            resolvedExecutable,
+            runtime.resolvedExecutable,
             reviewRoot,
           ),
         );
@@ -209,9 +188,9 @@ export function createCopilotAdapter(
           copilotOutputMetadata(input.reviewer, {
             baseDirectory: stagedBaseDirectory.baseDirectory,
             sourceBaseDirectory: stagedBaseDirectory.sourceBaseDirectory,
-            executable,
-            resolvedExecutable,
-            runtimeSource: executable === undefined ? "sdk-bundled" : "config",
+            executable: runtime.executable,
+            resolvedExecutable: runtime.resolvedExecutable,
+            runtimeSource: runtime.executable === undefined ? "sdk-bundled" : "config",
             packageVersion,
             model: result.model,
             effort: result.effort,
@@ -240,7 +219,188 @@ export function createCopilotAdapter(
         await stagedBaseDirectory.cleanup().catch(() => undefined);
       }
     },
+    /**
+     * List Copilot's model catalog by staging the same isolated runtime a review run uses
+     * (auth staging is what makes `listModels()` answer with the user's entitled models) and
+     * asking the runtime directly. Both transports list here: the catalog is served by the
+     * same Copilot backend the CLI queries.
+     */
+    async listModels(input: ListModelsInput): Promise<ModelCatalogEntry[]> {
+      const sdk = await dependencies.loadSdk();
+      const cwd = path.resolve(input.cwd ?? process.cwd());
+      throwIfAborted(input.signal, "Copilot model catalog fetch aborted");
+      // No review target here — the workspace-isolation asserts run scoped to the setup
+      // flow's cwd, keeping the same fail-closed boundary for repo-local runtimes/auth.
+      const runtime = await stageCopilotSdkRuntime(
+        dependencies,
+        input.reviewer,
+        input.env,
+        [cwd],
+        cwd,
+      );
+      let client: CopilotClient | undefined;
+      // The SDK's listModels() takes no signal, so stopping the client is the only
+      // cancellation lever — and cleanup must also run for a timeout-abandoned fetch the
+      // caller never awaits, which is why teardown is bound to the abort signal itself.
+      const teardown = async () => {
+        await client?.stop().catch(() => []);
+        await runtime.staged.cleanup().catch(() => undefined);
+      };
+      const removeAbortListener = bindAbortSignal(input.signal, () => {
+        void teardown();
+      });
+      try {
+        throwIfAborted(input.signal, "Copilot model catalog fetch aborted");
+        client = new sdk.CopilotClient(
+          copilotClientOptions(
+            sdk,
+            runtime.env,
+            runtime.staged.baseDirectory,
+            runtime.resolvedExecutable,
+            cwd,
+          ),
+        );
+        await client.start();
+        const models = await client.listModels();
+        throwIfAborted(input.signal, "Copilot model catalog fetch aborted");
+        return copilotModelCatalogEntries(models, copilotEffectiveTransport(input.reviewer));
+      } catch (error) {
+        if (error instanceof DiffwardenError) {
+          throw error;
+        }
+        throwIfAborted(input.signal, "Copilot model catalog fetch aborted");
+        const detail = errorMessage(error);
+        if (isCopilotAuthFailure(detail)) {
+          throw missingAuth('copilot is not authenticated — run "copilot" and use /login');
+        }
+        throw reviewerFailed(`Copilot model catalog fetch failed: ${detail}`);
+      } finally {
+        removeAbortListener();
+        await teardown();
+      }
+    },
   };
+}
+
+type CopilotStagedRuntime = {
+  executable: string | undefined;
+  resolvedExecutable: string;
+  staged: CopilotStagedBaseDirectory;
+  env: NodeJS.ProcessEnv;
+};
+
+/**
+ * Shared staging for review runs and catalog listing: resolve the runtime executable, enforce
+ * the workspace-isolation boundaries, stage the isolated base directory (with auth state), and
+ * build the process env. `workspaceRoots` is [reviewRoot, repo_root] for reviews and [cwd] for
+ * catalog listing. Callers own `staged.cleanup()`.
+ */
+async function stageCopilotSdkRuntime(
+  dependencies: CopilotAdapterDependencies,
+  reviewer: ReviewReviewerConfig,
+  env: NodeJS.ProcessEnv | undefined,
+  workspaceRoots: readonly string[],
+  sourcePathRoot: string,
+): Promise<CopilotStagedRuntime> {
+  const executable = copilotSdkExecutable(reviewer);
+  const resolvedExecutable =
+    executable === undefined
+      ? await dependencies.resolveBundledRuntimeExecutable()
+      : await resolveCopilotRuntimeExecutable(executable, env, sourcePathRoot);
+  assertCopilotRuntimeLaunchCommandSupported(resolvedExecutable);
+  const sourceBaseDirectory = resolveCopilotReviewPath(
+    requiredCopilotBaseDirectory(reviewer, env),
+    sourcePathRoot,
+  );
+  await assertCopilotBaseDirectoryOutsideWorkspace(workspaceRoots, sourceBaseDirectory);
+  // Even the adapter-default bundled runtime is executable code from the reviewed tree
+  // in project-local installs, so fail closed and require an external runtime or CLI.
+  await assertCopilotRuntimeOutsideWorkspace(workspaceRoots, resolvedExecutable);
+  await assertCopilotGithubAuthDirsOutsideWorkspace(workspaceRoots, sourcePathRoot, env);
+  const staged = await stageCopilotSdkBaseDirectory(
+    sourceBaseDirectory,
+    workspaceRoots,
+    env,
+    sourcePathRoot,
+  );
+  const processEnv = copilotProcessEnv(
+    env,
+    staged.baseDirectory,
+    staged.ghConfigDir,
+    staged.homeDirectory,
+    staged.toolOutputTempDir,
+  );
+  return { executable, resolvedExecutable, staged, env: processEnv };
+}
+
+function copilotEffectiveTransport(reviewer: ReviewReviewerConfig): "sdk" | "cli" {
+  return reviewer.transport === "cli" ? "cli" : "sdk";
+}
+
+/**
+ * Map Copilot's `listModels()` payload into catalog entries, narrowing each model's effort
+ * levels to exactly what diffwarden can deliver over the effective transport:
+ *
+ * - reasoning models (`capabilities.supports.reasoningEffort === true`): per-model
+ *   `supportedReasoningEfforts` minus native `none`/`minimal`/`max` — diffwarden translates
+ *   its own vocabulary on delivery (off → none, minimal → low, max → xhigh on BOTH
+ *   transports), so the raw values would commit params the translation layer never produces,
+ *   and diffwarden "max" would deliver native `xhigh`, duplicating (or missing) that setting;
+ * - include "minimal" whenever "low" survives (delivery maps minimal → native low);
+ * - include "off" only when the effective transport is cli AND the model advertises native
+ *   `none` (`copilotCliEffort` maps off → `--effort none`; the SDK param cannot express
+ *   disabling — `copilotSdkEffort` maps off to omission, which runs the model default);
+ * - non-reasoning models (`supports.reasoningEffort === false`): ["off"] on both transports —
+ *   SDK omission genuinely means no reasoning, and the CLI statically accepts `--effort none`
+ *   for any model (verified against copilot CLI 0.0.354 --help), where it is a no-op;
+ * - models with no `supports.reasoningEffort` flag at all (e.g. "auto") stay un-narrowed.
+ */
+export function copilotModelCatalogEntries(
+  models: unknown,
+  effectiveTransport: "sdk" | "cli",
+): ModelCatalogEntry[] {
+  if (!Array.isArray(models)) {
+    return [];
+  }
+  const entries: ModelCatalogEntry[] = [];
+  for (const item of models) {
+    if (!isRecord(item) || typeof item.id !== "string" || item.id === "") {
+      continue;
+    }
+    const capabilities = isRecord(item.capabilities) ? item.capabilities : undefined;
+    const supports =
+      capabilities !== undefined && isRecord(capabilities.supports)
+        ? capabilities.supports
+        : undefined;
+    const supportsReasoning = supports?.reasoningEffort;
+    let levels: string[] = [];
+    if (supportsReasoning === true) {
+      const native = Array.isArray(item.supportedReasoningEfforts)
+        ? item.supportedReasoningEfforts.filter(
+            (level): level is string => typeof level === "string",
+          )
+        : [];
+      const efforts = native.filter(
+        (level) => level !== "none" && level !== "minimal" && level !== "max",
+      );
+      const offEligible = effectiveTransport === "cli" && native.includes("none");
+      if (efforts.length > 0 || offEligible) {
+        levels = [
+          ...(offEligible ? ["off"] : []),
+          ...(efforts.includes("low") ? ["minimal"] : []),
+          ...efforts,
+        ];
+      }
+    } else if (supportsReasoning === false) {
+      levels = ["off"];
+    }
+    entries.push({
+      value: item.id,
+      ...(typeof item.name === "string" ? { displayName: item.name } : {}),
+      ...(levels.length > 0 ? { supportedEffortLevels: levels } : {}),
+    });
+  }
+  return entries;
 }
 
 async function prepareCopilotAdapter(
@@ -848,15 +1008,14 @@ async function readCopilotPackageJson(
 
 function copilotClientOptions(
   sdk: CopilotSdk,
-  input: ReviewAdapterInput,
   env: NodeJS.ProcessEnv,
   baseDirectory: string,
   resolvedExecutable: string,
-  reviewRoot: string,
+  workingDirectory: string,
 ): CopilotClientOptions {
   return {
     mode: "empty",
-    workingDirectory: reviewRoot,
+    workingDirectory,
     baseDirectory,
     env,
     // Copilot SDK spawns .js runtime entries through Node, so the bundled runtime path is cross-platform.

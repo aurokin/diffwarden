@@ -7,7 +7,9 @@ import {
 } from "../adapters/capabilities.js";
 import { claudeAdapter } from "../adapters/claude.js";
 import { codexAppServerListModels } from "../adapters/codex-app-server.js";
+import { copilotAdapter } from "../adapters/copilot.js";
 import { cursorAdapter } from "../adapters/cursor.js";
+import { droidAdapter } from "../adapters/droid.js";
 import { opencodeListModels } from "../adapters/opencode.js";
 import { piAdapter } from "../adapters/pi.js";
 import type { ListModelsInput, ModelCatalogEntry } from "../adapters/types.js";
@@ -49,6 +51,8 @@ const catalogListers: Partial<
   ...(claudeAdapter.listModels !== undefined ? { claude: claudeAdapter.listModels } : {}),
   ...(cursorAdapter.listModels !== undefined ? { cursor: cursorAdapter.listModels } : {}),
   ...(piAdapter.listModels !== undefined ? { pi: piAdapter.listModels } : {}),
+  ...(copilotAdapter.listModels !== undefined ? { copilot: copilotAdapter.listModels } : {}),
+  ...(droidAdapter.listModels !== undefined ? { droid: droidAdapter.listModels } : {}),
   codex: codexAppServerListModels,
   opencode: opencodeListModels,
 };

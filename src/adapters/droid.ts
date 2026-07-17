@@ -30,6 +30,8 @@ import {
 } from "./metadata.js";
 import { activitySinkFromDebugOutput } from "./reviewer-activity.js";
 import type {
+  ListModelsInput,
+  ModelCatalogEntry,
   ReviewAdapter,
   ReviewAdapterInput,
   ReviewAdapterOutput,
@@ -192,7 +194,133 @@ export function createDroidAdapter(
         throw reviewerFailed(`Droid reviewer failed: ${detail}`);
       }
     },
+    /**
+     * List Droid's model catalog: `availableModels` only arrives in the createSession init
+     * result, so listing opens a short-lived spec-mode session and closes it immediately.
+     * The abort signal goes INTO createSession — the hang-prone call is session init itself,
+     * before any handle exists, and the SDK cancels a pending init natively.
+     */
+    async listModels(input: ListModelsInput): Promise<ModelCatalogEntry[]> {
+      const sdk = await dependencies.loadSdk();
+      if (input.signal?.aborted) {
+        throw reviewerFailed("Droid model catalog fetch aborted");
+      }
+      const machineId = droidMachineId(input.reviewer);
+      try {
+        const session = await sdk.createSession({
+          cwd: input.cwd ?? process.cwd(),
+          ...(machineId !== undefined ? { machineId } : {}),
+          execPath: droidExecutable(input.reviewer),
+          interactionMode: sdk.DroidInteractionMode.Spec,
+          autonomyLevel: sdk.AutonomyLevel.Off,
+          enabledToolIds: droidSdkReviewAllowedToolList(),
+          tags: [
+            {
+              name: "diffwarden",
+              metadata: {
+                transport: "sdk",
+                reviewer: input.reviewer.id,
+                target: "model-catalog",
+              },
+            },
+          ],
+          ...(input.env !== undefined ? { env: stringEnv(droidProcessEnv(input.env)) } : {}),
+          ...(input.signal !== undefined ? { abortSignal: input.signal } : {}),
+        } satisfies CreateSessionOptions);
+        try {
+          return droidModelCatalogEntries(
+            session.initResult.availableModels,
+            droidEffectiveTransport(input.reviewer),
+          );
+        } finally {
+          await session.close().catch(() => undefined);
+        }
+      } catch (error) {
+        if (error instanceof DiffwardenError) {
+          throw error;
+        }
+        const detail = errorMessage(error);
+        if (isDroidMissingAuth(detail)) {
+          throw missingAuth(
+            'droid is not authenticated — run "droid" and sign in, or set FACTORY_API_KEY',
+          );
+        }
+        if (isDroidMissingExecutable(detail)) {
+          throw missingRequirement(`Droid executable is unavailable: ${detail}`);
+        }
+        throw reviewerFailed(`Droid model catalog fetch failed: ${detail}`);
+      }
+    },
   };
+}
+
+function droidEffectiveTransport(reviewer: ReviewReviewerConfig): "sdk" | "cli" {
+  return reviewer.transport === "cli" ? "cli" : "sdk";
+}
+
+/**
+ * Map droid's `availableModels` init payload into catalog entries, narrowing each model's
+ * effort levels to exactly what diffwarden can deliver over the effective transport:
+ *
+ * - keep native low/medium/high/xhigh verbatim (both delivery paths pass them through);
+ * - drop native `none`/`off`/`minimal` from the passthrough — diffwarden translates its own
+ *   vocabulary on delivery (off via updateSettings post-init, minimal → low), so the raw
+ *   values would commit params the translation layer never produces;
+ * - include "minimal" whenever "low" survives (delivery maps minimal → native low);
+ * - include "off" only on the sdk transport, when the model advertises native `off` OR `none`
+ *   (exactly droidDisableEffort's rule); the cli transport delivers off by OMITTING the
+ *   effort flag, which runs the model default — not disabled — so cli emits no "off";
+ * - keep native `max` on sdk (droidEffort delivers it verbatim), drop it on cli
+ *   (`droidCliEffort` collapses max → xhigh, undeliverable for max-but-not-xhigh models);
+ * - models whose deliverable set comes out empty (e.g. the none-only "auto" router on cli)
+ *   stay un-narrowed rather than collapsing the effort menu to nothing.
+ *
+ * `deprecated: true` models stay selectable but are marked in the description.
+ */
+export function droidModelCatalogEntries(
+  models: unknown,
+  effectiveTransport: "sdk" | "cli",
+): ModelCatalogEntry[] {
+  if (!Array.isArray(models)) {
+    return [];
+  }
+  const entries: ModelCatalogEntry[] = [];
+  for (const item of models) {
+    if (!isRecord(item) || typeof item.id !== "string" || item.id === "") {
+      continue;
+    }
+    const native = Array.isArray(item.supportedReasoningEfforts)
+      ? item.supportedReasoningEfforts.filter((level): level is string => typeof level === "string")
+      : [];
+    const efforts = native.filter(
+      (level) =>
+        level !== "none" &&
+        level !== "off" &&
+        level !== "minimal" &&
+        (effectiveTransport === "sdk" || level !== "max"),
+    );
+    const offEligible =
+      effectiveTransport === "sdk" && (native.includes("off") || native.includes("none"));
+    const levels =
+      efforts.length > 0 || offEligible
+        ? [
+            ...(offEligible ? ["off"] : []),
+            ...(efforts.includes("low") ? ["minimal"] : []),
+            ...efforts,
+          ]
+        : [];
+    entries.push({
+      value: item.id,
+      ...(typeof item.displayName === "string" ? { displayName: item.displayName } : {}),
+      ...(item.deprecated === true ? { description: "deprecated" } : {}),
+      ...(levels.length > 0 ? { supportedEffortLevels: levels } : {}),
+    });
+  }
+  return entries;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 async function prepareDroidAdapter(

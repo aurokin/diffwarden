@@ -1,6 +1,10 @@
 import type { DroidResultMessage } from "@factory/droid-sdk";
 import { describe, expect, it } from "vitest";
-import { createDroidAdapter, droidAdapter } from "../src/adapters/droid.js";
+import {
+  createDroidAdapter,
+  droidAdapter,
+  droidModelCatalogEntries,
+} from "../src/adapters/droid.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 import { missingRequirement } from "../src/core/errors.js";
 import { isIntegrationDisabled } from "./integration.js";
@@ -645,6 +649,167 @@ describe("droidAdapter SDK debug output", () => {
   });
 });
 
+describe("droid model catalog", () => {
+  // Trimmed from the live availableModels probe (2026-07-16): auto is the none-only router,
+  // opus-4-6 advertises max but not xhigh, sonnet-5 advertises both, gpt-5.6 uses none.
+  const auto = {
+    id: "auto",
+    modelId: "auto",
+    displayName: "Auto Model",
+    supportedReasoningEfforts: ["none"],
+    deprecated: false,
+  };
+  const opus46 = {
+    id: "claude-opus-4-6",
+    modelId: "claude-opus-4-6",
+    displayName: "Opus 4.6",
+    supportedReasoningEfforts: ["off", "low", "medium", "high", "max"],
+    deprecated: false,
+  };
+  const sonnet5 = {
+    id: "claude-sonnet-5",
+    modelId: "claude-sonnet-5",
+    displayName: "Sonnet 5",
+    supportedReasoningEfforts: ["off", "low", "medium", "high", "xhigh", "max"],
+    deprecated: false,
+  };
+  const gpt56 = {
+    id: "gpt-5.6",
+    modelId: "gpt-5.6",
+    displayName: "GPT-5.6",
+    supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+    deprecated: true,
+  };
+
+  it("keeps per-model efforts diffwarden can deliver over the sdk transport", () => {
+    expect(droidModelCatalogEntries([auto, opus46, sonnet5, gpt56], "sdk")).toEqual([
+      // The none-only router narrows to its sole deliverable setting: off via updateSettings.
+      { value: "auto", displayName: "Auto Model", supportedEffortLevels: ["off"] },
+      {
+        value: "claude-opus-4-6",
+        displayName: "Opus 4.6",
+        // Native max stays on sdk: droidEffort delivers it verbatim.
+        supportedEffortLevels: ["off", "minimal", "low", "medium", "high", "max"],
+      },
+      {
+        value: "claude-sonnet-5",
+        displayName: "Sonnet 5",
+        supportedEffortLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+      },
+      {
+        value: "gpt-5.6",
+        displayName: "GPT-5.6",
+        description: "deprecated",
+        supportedEffortLevels: ["off", "minimal", "low", "medium", "high", "xhigh"],
+      },
+    ]);
+  });
+
+  it("drops off and max on the cli transport where delivery cannot express them", () => {
+    expect(droidModelCatalogEntries([auto, opus46, sonnet5, gpt56], "cli")).toEqual([
+      // The cli delivers off by omitting the flag — which runs the model DEFAULT — and the
+      // router advertises nothing else deliverable, so it stays un-narrowed over cli.
+      { value: "auto", displayName: "Auto Model" },
+      {
+        value: "claude-opus-4-6",
+        displayName: "Opus 4.6",
+        // droidCliEffort collapses max → xhigh, which opus-4-6 does not advertise.
+        supportedEffortLevels: ["minimal", "low", "medium", "high"],
+      },
+      {
+        value: "claude-sonnet-5",
+        displayName: "Sonnet 5",
+        supportedEffortLevels: ["minimal", "low", "medium", "high", "xhigh"],
+      },
+      {
+        value: "gpt-5.6",
+        displayName: "GPT-5.6",
+        description: "deprecated",
+        supportedEffortLevels: ["minimal", "low", "medium", "high", "xhigh"],
+      },
+    ]);
+  });
+
+  it("skips malformed entries and tolerates a missing payload", () => {
+    expect(droidModelCatalogEntries(undefined, "sdk")).toEqual([]);
+    expect(droidModelCatalogEntries([{ displayName: "no id" }, 42, { id: "" }], "sdk")).toEqual([]);
+  });
+
+  it("lists models from a short-lived session and closes it", async () => {
+    const calls: unknown[] = [];
+    const adapter = createDroidAdapter({
+      loadSdk: async () => mockDroidSdk(calls, {}, undefined, [], [opus46]),
+      checkExecutable: async (executable) => executable,
+    });
+
+    const models = await adapter.listModels?.({
+      cwd: "/repo",
+      // A drafted model must not scope the listing session — the catalog is what the user
+      // picks a model FROM.
+      reviewer: createReviewer({ model: "claude-sonnet-5", effort: "high" }),
+    });
+
+    expect(models).toEqual([
+      {
+        value: "claude-opus-4-6",
+        displayName: "Opus 4.6",
+        supportedEffortLevels: ["off", "minimal", "low", "medium", "high", "max"],
+      },
+    ]);
+    const createCall = calls.find(
+      (call): call is { createSessionOptions: Record<string, unknown> } =>
+        typeof call === "object" && call !== null && "createSessionOptions" in call,
+    );
+    expect(createCall?.createSessionOptions).not.toHaveProperty("specModeModelId");
+    expect(createCall?.createSessionOptions).not.toHaveProperty("specModeReasoningEffort");
+    expect(createCall?.createSessionOptions).toMatchObject({
+      tags: [
+        {
+          name: "diffwarden",
+          metadata: { transport: "sdk", reviewer: "droid", target: "model-catalog" },
+        },
+      ],
+    });
+    expect(calls).toContainEqual({ close: "session-1" });
+  });
+
+  it("maps auth-shaped catalog failures to an actionable not-authenticated message", async () => {
+    const adapter = createDroidAdapter({
+      loadSdk: async () =>
+        mockDroidSdk([], {}, () => {
+          throw new Error("You are not logged in to Factory");
+        }),
+      checkExecutable: async (executable) => executable,
+    });
+
+    await expect(
+      adapter.listModels?.({ cwd: "/repo", reviewer: createReviewer() }),
+    ).rejects.toMatchObject({
+      code: "missing_auth",
+      message: 'droid is not authenticated — run "droid" and sign in, or set FACTORY_API_KEY',
+    });
+  });
+
+  it("refuses to open a session for an already-aborted fetch", async () => {
+    const calls: unknown[] = [];
+    const adapter = createDroidAdapter({
+      loadSdk: async () => mockDroidSdk(calls),
+      checkExecutable: async (executable) => executable,
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      adapter.listModels?.({
+        cwd: "/repo",
+        reviewer: createReviewer(),
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ message: expect.stringMatching(/aborted/i) });
+    expect(calls).toEqual([]);
+  });
+});
+
 function createReviewer(extra: Partial<ReviewReviewerConfig> = {}): ReviewReviewerConfig {
   return {
     id: "droid",
@@ -681,7 +846,9 @@ function mockDroidSdk(
   availableModels?: Array<{
     id: string;
     modelId: string;
+    displayName?: string;
     supportedReasoningEfforts?: string[];
+    deprecated?: boolean;
   }>,
   updateSettingsOverride?: () => never,
 ) {
