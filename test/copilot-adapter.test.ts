@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   writeFileSync,
 } from "node:fs";
@@ -18,7 +19,7 @@ import {
   copilotSdkReviewAvailableTools,
   createCopilotSdkPermissionHandler,
 } from "../src/adapters/copilot-tool-policy.js";
-import { createCopilotAdapter } from "../src/adapters/copilot.js";
+import { copilotModelCatalogEntries, createCopilotAdapter } from "../src/adapters/copilot.js";
 import type { ReviewAdapterInput, ReviewReviewerConfig } from "../src/adapters/types.js";
 import { isIntegrationDisabled } from "./integration.js";
 import {
@@ -1856,6 +1857,145 @@ describe.skipIf(isIntegrationDisabled("copilot"))("live Copilot SDK adapter", ()
   }, 180_000);
 });
 
+describe("copilot model catalog", () => {
+  // Trimmed from the live `listModels()` probe (2026-07-16): sonnet-4.6 advertises max but
+  // not xhigh, gpt-5.4 advertises none, haiku-4.5 is non-reasoning, auto has no supports flag.
+  const sonnet46 = {
+    id: "claude-sonnet-4.6",
+    name: "Claude Sonnet 4.6",
+    capabilities: { supports: { reasoningEffort: true }, limits: {} },
+    supportedReasoningEfforts: ["low", "medium", "high", "max"],
+    defaultReasoningEffort: "medium",
+  };
+  const gpt54 = {
+    id: "gpt-5.4",
+    name: "GPT-5.4",
+    capabilities: { supports: { reasoningEffort: true }, limits: {} },
+    supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+    defaultReasoningEffort: "medium",
+  };
+  const haiku45 = {
+    id: "claude-haiku-4.5",
+    name: "Claude Haiku 4.5",
+    capabilities: { supports: { reasoningEffort: false }, limits: {} },
+  };
+  const auto = { id: "auto", name: "Auto", capabilities: { supports: {}, limits: {} } };
+
+  function catalogEnv(tempRoot: string): NodeJS.ProcessEnv {
+    return { HOME: "/home/test", TMPDIR: tempRoot };
+  }
+
+  it("keeps per-model efforts diffwarden can deliver over the sdk transport", () => {
+    expect(copilotModelCatalogEntries([auto, sonnet46, haiku45, gpt54], "sdk")).toEqual([
+      // No supports.reasoningEffort flag at all: effort surface unknown, stay un-narrowed.
+      { value: "auto", displayName: "Auto" },
+      {
+        value: "claude-sonnet-4.6",
+        displayName: "Claude Sonnet 4.6",
+        // Native max drops: both delivery paths collapse diffwarden max to native xhigh,
+        // which this model does not advertise.
+        supportedEffortLevels: ["minimal", "low", "medium", "high"],
+      },
+      // Non-reasoning models narrow to off only: SDK omission genuinely runs no reasoning.
+      {
+        value: "claude-haiku-4.5",
+        displayName: "Claude Haiku 4.5",
+        supportedEffortLevels: ["off"],
+      },
+      {
+        value: "gpt-5.4",
+        displayName: "GPT-5.4",
+        // No "off" on sdk: the SDK effort param cannot express disabling for reasoning models.
+        supportedEffortLevels: ["minimal", "low", "medium", "high", "xhigh"],
+      },
+    ]);
+  });
+
+  it("adds off on the cli transport only where --effort none is deliverable", () => {
+    expect(copilotModelCatalogEntries([sonnet46, haiku45, gpt54], "cli")).toEqual([
+      // sonnet-4.6 does not advertise native none, so cli off (--effort none) stays off the menu.
+      expect.objectContaining({
+        supportedEffortLevels: ["minimal", "low", "medium", "high"],
+      }),
+      expect.objectContaining({ supportedEffortLevels: ["off"] }),
+      expect.objectContaining({
+        supportedEffortLevels: ["off", "minimal", "low", "medium", "high", "xhigh"],
+      }),
+    ]);
+  });
+
+  it("skips malformed entries and tolerates a non-array payload", () => {
+    expect(copilotModelCatalogEntries(undefined, "sdk")).toEqual([]);
+    expect(copilotModelCatalogEntries([{ name: "no id" }, 42, { id: "" }], "sdk")).toEqual([]);
+  });
+
+  it("lists models through a staged isolated runtime and cleans it up", async () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "diffwarden-copilot-catalog-test-"));
+    const { adapter, calls } = createMockCopilotAdapter({ models: [haiku45] });
+
+    const models = await adapter.listModels?.({
+      cwd: "/repo",
+      reviewer: createReviewer(),
+      env: catalogEnv(tempRoot),
+    });
+
+    expect(models).toEqual([
+      {
+        value: "claude-haiku-4.5",
+        displayName: "Claude Haiku 4.5",
+        supportedEffortLevels: ["off"],
+      },
+    ]);
+    expect(calls.started).toBe(true);
+    expect(calls.stopped).toBe(true);
+    expect(calls.clientOptions?.workingDirectory).toBe("/repo");
+    // The staged base directory never outlives the fetch.
+    expect(readdirSync(tempRoot)).toEqual([]);
+  });
+
+  it("maps auth-shaped catalog failures to an actionable not-authenticated message", async () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "diffwarden-copilot-catalog-test-"));
+    const { adapter } = createMockCopilotAdapter({
+      listModelsError: "Request failed with status 401",
+    });
+
+    await expect(
+      adapter.listModels?.({
+        cwd: "/repo",
+        reviewer: createReviewer(),
+        env: catalogEnv(tempRoot),
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_auth",
+      message: 'copilot is not authenticated — run "copilot" and use /login',
+    });
+    expect(readdirSync(tempRoot)).toEqual([]);
+  });
+
+  it("tears down the client and staged directory when aborted mid-fetch", async () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "diffwarden-copilot-catalog-test-"));
+    const controller = new AbortController();
+    const { adapter, calls } = createMockCopilotAdapter({ listModels: "never" });
+
+    const pending = adapter.listModels?.({
+      cwd: "/repo",
+      reviewer: createReviewer(),
+      env: catalogEnv(tempRoot),
+      signal: controller.signal,
+    });
+    while (calls.listedModels !== true) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({
+      message: expect.stringMatching(/aborted/i),
+    });
+    expect(calls.stopped).toBe(true);
+    expect(readdirSync(tempRoot)).toEqual([]);
+  });
+});
+
 function createReviewer(extra: Partial<ReviewReviewerConfig> = {}): ReviewReviewerConfig {
   return {
     id: "copilot",
@@ -2012,8 +2152,27 @@ function mockCopilotSdk(
       return session;
     }
 
+    async start() {
+      calls.started = true;
+    }
+
+    async listModels() {
+      calls.listedModels = true;
+      if (result.listModelsError !== undefined) {
+        throw new Error(result.listModelsError);
+      }
+      if (result.listModels === "never") {
+        // Mirrors the real SDK: stop() closes the connection, rejecting pending requests.
+        return await new Promise<never>((_, reject) => {
+          calls.rejectPendingListModels = () => reject(new Error("connection closed"));
+        });
+      }
+      return result.models ?? [];
+    }
+
     async stop() {
       calls.stopped = true;
+      calls.rejectPendingListModels?.();
       return [];
     }
   }
@@ -2416,6 +2575,9 @@ type MockCopilotResult = {
   preReviewEvents?: Array<Record<string, unknown>>;
   throwOnClientConstruction?: boolean;
   bundledRuntimeExecutable?: string;
+  models?: unknown[];
+  listModels?: "never";
+  listModelsError?: string;
 };
 
 type MockCopilotCalls = {
@@ -2439,6 +2601,9 @@ type MockCopilotCalls = {
   aborted?: boolean;
   disconnected?: boolean;
   stopped?: boolean;
+  started?: boolean;
+  listedModels?: boolean;
+  rejectPendingListModels?: () => void;
   session?: MockCopilotSession;
 };
 
