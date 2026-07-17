@@ -399,10 +399,17 @@ function bestWordBoundaryMatchIndex(
 
 function wordBoundaryMatches(row: { value: string; label: string }, needle: string): boolean {
   const haystack = `${row.value} ${row.label}`.toLowerCase();
-  if (haystack.startsWith(needle)) {
-    return true;
+  // Positional scan rather than tokenizing: a needle containing separators ("5.6-sol")
+  // still matches when it starts at a word boundary of the haystack.
+  let index = haystack.indexOf(needle);
+  while (index !== -1) {
+    const before = index === 0 ? "" : (haystack[index - 1] ?? "");
+    if (before === "" || !/[a-z0-9.]/.test(before)) {
+      return true;
+    }
+    index = haystack.indexOf(needle, index + 1);
   }
-  return haystack.split(/[^a-z0-9.]+/).some((word) => word !== "" && word.startsWith(needle));
+  return false;
 }
 
 /**

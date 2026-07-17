@@ -90,7 +90,11 @@ export function clampSummaryWidth(columns: number | undefined): number {
   return Math.min(Math.max(width, MIN_USABLE_COLUMNS), 100);
 }
 
-/** Word-aware wrap: breaks on spaces, preserves existing newlines, prefixes every line. */
+/**
+ * Word-aware wrap: preserves existing newlines and leading indentation, prefixes every line.
+ * Lines that already fit pass through untouched so spacing-sensitive content (code snippets,
+ * aligned commands) keeps its internal whitespace; only overlong lines are re-broken on spaces.
+ */
 export function wrapText(text: string, width: number, indent: string): string[] {
   const usable = Math.max(width - indent.length, 20);
   const lines: string[] = [];
@@ -99,22 +103,29 @@ export function wrapText(text: string, width: number, indent: string): string[] 
       lines.push("");
       continue;
     }
+    if (paragraph.length <= usable) {
+      lines.push(`${indent}${paragraph}`);
+      continue;
+    }
+    const lead = /^[ \t]*/.exec(paragraph)?.[0] ?? "";
+    const prefix = `${indent}${lead}`;
+    const usableBody = Math.max(width - prefix.length, 20);
     let current = "";
-    for (const word of paragraph.split(/\s+/)) {
+    for (const word of paragraph.slice(lead.length).split(/\s+/)) {
       if (word === "") {
         continue;
       }
       if (current === "") {
         current = word;
-      } else if (current.length + 1 + word.length <= usable) {
+      } else if (current.length + 1 + word.length <= usableBody) {
         current = `${current} ${word}`;
       } else {
-        lines.push(`${indent}${current}`);
+        lines.push(`${prefix}${current}`);
         current = word;
       }
     }
     if (current !== "") {
-      lines.push(`${indent}${current}`);
+      lines.push(`${prefix}${current}`);
     }
   }
   return lines;

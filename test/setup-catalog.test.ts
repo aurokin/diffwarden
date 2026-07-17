@@ -245,6 +245,14 @@ describe("buildModelAutocompleteOptions", () => {
     expect(rows.map((row) => row.value)).toEqual(["gpt-5-fast", "fast", CUSTOM_MODEL_CHOICE]);
   });
 
+  it("matches a separator-containing query at a non-leading word boundary", () => {
+    // "5.6-sol" spans a "-" separator, so token-splitting the haystack can never match it;
+    // the positional scan must still rank the catalog row above the creatable fragment.
+    const models: ModelCatalogEntry[] = [{ value: "gpt-5.6-sol", displayName: "GPT-5.6 Sol" }];
+    const rows = buildModelAutocompleteOptions(models, "codex", undefined, "5.6-sol");
+    expect(rows[0]?.value).toBe("gpt-5.6-sol");
+  });
+
   it("keeps index 0 committable across an incremental keystroke sequence", () => {
     // clack keeps focus on a surviving row and only refocuses to index 0 when it drops out,
     // so each intermediate query's index 0 is a potential Enter target — assert the whole

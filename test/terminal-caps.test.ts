@@ -64,6 +64,16 @@ describe("wrapText", () => {
   it("preserves paragraph breaks", () => {
     expect(wrapText("one\n\ntwo", 40, "")).toEqual(["one", "", "two"]);
   });
+
+  it("passes fitting lines through untouched, keeping indentation and internal spacing", () => {
+    const snippet = "    if ok:\n        return  {'a':  1}";
+    expect(wrapText(snippet, 60, "  ")).toEqual(["      if ok:", "          return  {'a':  1}"]);
+  });
+
+  it("keeps leading indentation on wrapped continuation lines", () => {
+    const lines = wrapText("    alpha beta gamma delta epsilon zeta", 24, "");
+    expect(lines).toEqual(["    alpha beta gamma", "    delta epsilon zeta"]);
+  });
 });
 
 describe("truncateLine", () => {
