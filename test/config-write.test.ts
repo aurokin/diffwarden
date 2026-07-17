@@ -507,6 +507,22 @@ describe("replaceReviewerSetInUserConfig", () => {
     ]);
   });
 
+  it("persists a set literally named __proto__ as an own property", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: twoReviewers });
+
+    const result = await replaceReviewerSetInUserConfig({
+      setName: "__proto__",
+      members: ["codex"],
+      env,
+    });
+
+    expect(result.members).toEqual(["codex"]);
+    const sets = readRaw(configPath).reviewerSets as Record<string, string[]>;
+    expect(Object.hasOwn(sets, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(sets, "__proto__")?.value).toEqual(["codex"]);
+  });
+
   it("makes the set the default when asked", async () => {
     const { env, configPath } = setup();
     writeExisting(configPath, {

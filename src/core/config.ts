@@ -853,7 +853,14 @@ export async function replaceReviewerSetInUserConfig(
       }
     }
     const sets = isRecord(rawConfig.reviewerSets) ? rawConfig.reviewerSets : {};
-    sets[options.setName] = [...new Set(options.members)];
+    // defineProperty, not assignment: set names are unrestricted, and assigning a name like
+    // "__proto__" would hit the inherited setter — reporting success while never persisting.
+    Object.defineProperty(sets, options.setName, {
+      value: [...new Set(options.members)],
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
     rawConfig.reviewerSets = sets;
     if (options.makeDefault === true) {
       rawConfig.defaultReviewerSet = options.setName;

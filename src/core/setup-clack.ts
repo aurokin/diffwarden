@@ -956,6 +956,12 @@ export async function runClackReviewerSetEdit(options: {
   // would reject it anyway; failing here keeps the refusal interactive instead of terminal.
   let warnedEmptySelection = false;
   let members: string[];
+  // Re-prompts (the empty-selection warning) must reopen with the user's LAST selection, not
+  // the original membership — otherwise "Enter again to save an empty set" would silently
+  // restore and save the members the user just deselected.
+  let initialMembers = currentMembers.filter((member) =>
+    options.reviewers.some((reviewer) => reviewer.id === member),
+  );
   while (true) {
     const pickedMembers = await multiselect({
       message: `Members of "${setName}"  (space toggles · enter confirms · Esc cancels)`,
@@ -964,9 +970,7 @@ export async function runClackReviewerSetEdit(options: {
         label: reviewer.id,
         hint: `${reviewer.engine}${reviewer.enabled ? "" : " · disabled"}`,
       })),
-      initialValues: currentMembers.filter((member) =>
-        options.reviewers.some((reviewer) => reviewer.id === member),
-      ),
+      initialValues: initialMembers,
       required: false,
       ...io,
     });
@@ -981,6 +985,7 @@ export async function runClackReviewerSetEdit(options: {
       }
       if (!warnedEmptySelection) {
         warnedEmptySelection = true;
+        initialMembers = [];
         log.warn(
           "Nothing selected — space toggles a reviewer. Enter again to save an empty set.",
           io,
