@@ -229,12 +229,45 @@ describe("buildModelAutocompleteOptions", () => {
     });
   });
 
-  it("keeps the creatable row above substring-matching catalog rows", () => {
-    // "gpt-5" is a prefix of two catalog ids but an exact match of none: Enter must commit
-    // "gpt-5", not "gpt-5-fast".
-    const rows = buildModelAutocompleteOptions(gptModels, "codex", undefined, "gpt-5");
-    expect(rows[0]?.value).toBe("gpt-5");
-    expect(rows.map((row) => row.value)).toContain("gpt-5-fast");
+  it("ranks a word-boundary catalog match above the creatable row, demoted not dropped", () => {
+    // The audit's #1 footgun: typing "fast" then Enter must commit the catalog row the query
+    // plainly names, not fork the fragment into an off-catalog id. The creatable row stays
+    // reachable just above custom….
+    const rows = buildModelAutocompleteOptions(gptModels, "codex", undefined, "fast");
+    expect(rows[0]?.value).toBe("gpt-5-fast");
+    expect(rows.map((row) => row.value)).toEqual(["gpt-5-fast", "fast", CUSTOM_MODEL_CHOICE]);
+  });
+
+  it("keeps index 0 committable across an incremental keystroke sequence", () => {
+    // clack keeps focus on a surviving row and only refocuses to index 0 when it drops out,
+    // so each intermediate query's index 0 is a potential Enter target — assert the whole
+    // sequence, not just the final query.
+    const byQuery = (query: string) =>
+      buildModelAutocompleteOptions(gptModels, "codex", undefined, query).map((row) => row.value);
+    expect(byQuery("s")[0]).toBe("sonnet");
+    expect(byQuery("so")[0]).toBe("sonnet");
+    expect(byQuery("son")[0]).toBe("sonnet");
+    expect(byQuery("sonnet")[0]).toBe("sonnet");
+  });
+
+  it("breaks word-boundary ties deterministically: recommended, then shortest, then order", () => {
+    const family: ModelCatalogEntry[] = [
+      { value: "gpt-5.6-terra", displayName: "GPT-5.6-Terra" },
+      { value: "gpt-5.6-sol", displayName: "GPT-5.6-Sol", default: true },
+      { value: "gpt-5.6-luna", displayName: "GPT-5.6-Luna" },
+    ];
+    // Recommended entry wins the shared "gpt" prefix.
+    expect(buildModelAutocompleteOptions(family, "codex", undefined, "gpt")[0]?.value).toBe(
+      "gpt-5.6-sol",
+    );
+    // Without a recommended entry, the shortest id wins; equal lengths fall to catalog order.
+    const noDefault = family.map(({ value, displayName }) => ({ value, displayName }));
+    expect(buildModelAutocompleteOptions(noDefault, "codex", undefined, "gpt")[0]?.value).toBe(
+      "gpt-5.6-sol",
+    );
+    // A pure mid-string fragment never outranks the creatable row.
+    const mid = buildModelAutocompleteOptions(family, "codex", undefined, "erra");
+    expect(mid[0]?.value).toBe("erra");
   });
 
   it("hoists an exact value match above earlier substring survivors", () => {
@@ -274,7 +307,7 @@ describe("buildModelAutocompleteOptions", () => {
 
   it("filters catalog rows by fragments of value, label, or description", () => {
     const byValue = buildModelAutocompleteOptions(gptModels, "codex", undefined, "sonn");
-    expect(byValue.map((row) => row.value)).toEqual(["sonn", "sonnet", CUSTOM_MODEL_CHOICE]);
+    expect(byValue.map((row) => row.value)).toEqual(["sonnet", "sonn", CUSTOM_MODEL_CHOICE]);
     const byHint = buildModelAutocompleteOptions(gptModels, "codex", undefined, "balanced");
     expect(byHint.map((row) => row.value)).toContain("sonnet");
   });
