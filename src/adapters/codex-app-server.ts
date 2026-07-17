@@ -284,8 +284,12 @@ function codexEffectiveTransport(reviewer: ReviewReviewerConfig): "cli" | "app-s
  *
  * - drop `ultra` (no diffwarden equivalent) and `max` (both delivery paths collapse
  *   diffwarden max → native xhigh, so offering max would silently downgrade);
+ * - drop native `none` — diffwarden spells that setting "off", and the off rule below decides
+ *   where it is actually deliverable (exposing raw `none` would commit an invalid value);
  * - include "off" iff the effective transport is app-server: it maps off → native `none`,
- *   while the CLI path omits the flag entirely, which runs the model DEFAULT effort — not off.
+ *   while the CLI path omits the flag entirely, which runs the model DEFAULT effort — not off;
+ * - include "minimal" whenever "low" is advertised (both delivery paths map minimal → native
+ *   low, mirroring the claude catalog rule).
  *
  * Entries that advertise no reasoning efforts stay un-narrowed on BOTH transports (no
  * supportedEffortLevels at all) — prepending "off" there would collapse the effort menu to a
@@ -307,10 +311,16 @@ export function codexModelCatalogEntries(
       ? item.supportedReasoningEfforts
           .map((option) => (isRecord(option) ? option.reasoningEffort : undefined))
           .filter((level): level is string => typeof level === "string")
-          .filter((level) => level !== "ultra" && level !== "max")
+          .filter((level) => level !== "ultra" && level !== "max" && level !== "none")
       : [];
     const levels =
-      efforts.length > 0 && effectiveTransport === "app-server" ? ["off", ...efforts] : efforts;
+      efforts.length > 0
+        ? [
+            ...(effectiveTransport === "app-server" ? ["off"] : []),
+            ...(efforts.includes("low") ? ["minimal"] : []),
+            ...efforts,
+          ]
+        : [];
     entries.push({
       value: item.model,
       ...(typeof item.displayName === "string" ? { displayName: item.displayName } : {}),

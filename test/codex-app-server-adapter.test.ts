@@ -659,13 +659,13 @@ describe("codexAppServerListModels", () => {
         value: "gpt-5.6-sol",
         displayName: "GPT-5.6-Sol",
         description: "Latest frontier agentic coding model.",
-        supportedEffortLevels: ["low", "medium", "high", "xhigh"],
+        supportedEffortLevels: ["minimal", "low", "medium", "high", "xhigh"],
         default: true,
       },
       {
         value: "gpt-5.6-luna",
         displayName: "GPT-5.6-Luna",
-        supportedEffortLevels: ["low", "medium"],
+        supportedEffortLevels: ["minimal", "low", "medium"],
       },
     ]);
 
@@ -740,20 +740,43 @@ describe("codexModelCatalogEntries", () => {
   };
 
   it("extracts effort levels from the object-shaped supportedReasoningEfforts", () => {
-    // A naive string filter over the objects would narrow every model to nothing.
+    // A naive string filter over the objects would narrow every model to nothing. "minimal"
+    // rides along whenever "low" is advertised (both delivery paths map minimal → low).
     const entries = codexModelCatalogEntries(result, "cli");
-    expect(entries[0]?.supportedEffortLevels).toEqual(["low", "high"]);
+    expect(entries[0]?.supportedEffortLevels).toEqual(["minimal", "low", "high"]);
     // No advertised efforts → no narrowing metadata at all.
     expect(entries[1]).toEqual({ value: "gpt-5.2", displayName: "GPT-5.2" });
   });
 
   it('includes "off" only on the app-server transport, where off maps to native none', () => {
     const entries = codexModelCatalogEntries(result, "app-server");
-    expect(entries[0]?.supportedEffortLevels).toEqual(["off", "low", "high"]);
+    expect(entries[0]?.supportedEffortLevels).toEqual(["off", "minimal", "low", "high"]);
     expect(codexModelCatalogEntries(result, "cli")[0]?.supportedEffortLevels).not.toContain("off");
     // A model advertising NO efforts stays un-narrowed on app-server too: an off-only entry
     // would collapse the effort menu to one row for a model whose effort surface is unknown.
     expect(entries[1]).toEqual({ value: "gpt-5.2", displayName: "GPT-5.2" });
+  });
+
+  it('translates native "none" into the off rule instead of exposing it', () => {
+    const noneResult = {
+      data: [
+        {
+          id: "quiet-model",
+          model: "quiet-model",
+          supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "low" }],
+        },
+      ],
+    };
+    // Diffwarden spells that setting "off"; raw "none" would commit an invalid effort value.
+    expect(codexModelCatalogEntries(noneResult, "cli")[0]?.supportedEffortLevels).toEqual([
+      "minimal",
+      "low",
+    ]);
+    expect(codexModelCatalogEntries(noneResult, "app-server")[0]?.supportedEffortLevels).toEqual([
+      "off",
+      "minimal",
+      "low",
+    ]);
   });
 
   it("uses `model` as the committed value and expects it to equal `id`", () => {
