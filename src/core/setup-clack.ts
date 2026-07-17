@@ -262,6 +262,10 @@ async function runReviewerConfigureFlow(options: {
   // by the stable discovery id so per-reviewer edits survive stepping back to re-pick reviewers.
   const draftsById = new Map<string, Draft>();
 
+  // F4: an accidental Enter on an empty selection used to hard-abort the whole flow. Warn and
+  // re-prompt once; only a second consecutive empty confirm quits.
+  let warnedEmptySelection = false;
+
   while (true) {
     const readyOptions = options.ready.map((entry) => {
       const draft = draftsById.get(entry.id) ?? toDraft(entry);
@@ -304,9 +308,15 @@ async function runReviewerConfigureFlow(options: {
       .map((entry) => draftsById.get(entry.id))
       .filter((entry): entry is Draft => entry !== undefined);
     if (draft.length === 0) {
+      if (!warnedEmptySelection) {
+        warnedEmptySelection = true;
+        log.warn("Nothing selected — space toggles a reviewer. Enter again to quit.", io);
+        continue;
+      }
       cancel("No reviewers selected — nothing written.", io);
       return undefined;
     }
+    warnedEmptySelection = false;
 
     const outcome = await configureLoop(
       draft,
@@ -669,6 +679,10 @@ async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promi
         ...io,
       });
       if (isCancel(value)) {
+        // F8: clack commits the cancelled prompt's typed query to scrollback (strikethrough is
+        // unreliable, e.g. under tmux), where it reads like a committed model. State the truth
+        // right below it so the ghost cannot be misread.
+        log.info(modelUnchangedNote(entry), io);
         return "continue";
       }
       if (value === QUIT) {
@@ -692,11 +706,17 @@ async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promi
     ...io,
   });
   if (isCancel(value)) {
+    log.info(modelUnchangedNote(entry), io);
     return "continue";
   }
   const trimmed = value.trim();
   entry.model = trimmed === "" ? undefined : trimmed;
   return "continue";
+}
+
+/** F8 cancel note: names the value actually kept, so a cancelled prompt's ghost cannot mislead. */
+function modelUnchangedNote(entry: Draft): string {
+  return `model unchanged — kept ${entry.model ?? "engine default"}`;
 }
 
 /**

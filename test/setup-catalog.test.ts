@@ -261,7 +261,11 @@ describe("buildModelAutocompleteOptions", () => {
       "gpt-5.6-sol",
     );
     // Without a recommended entry, the shortest id wins; equal lengths fall to catalog order.
-    const noDefault = family.map(({ value, displayName }) => ({ value, displayName }));
+    const noDefault: ModelCatalogEntry[] = [
+      { value: "gpt-5.6-terra", displayName: "GPT-5.6-Terra" },
+      { value: "gpt-5.6-sol", displayName: "GPT-5.6-Sol" },
+      { value: "gpt-5.6-luna", displayName: "GPT-5.6-Luna" },
+    ];
     expect(buildModelAutocompleteOptions(noDefault, "codex", undefined, "gpt")[0]?.value).toBe(
       "gpt-5.6-sol",
     );

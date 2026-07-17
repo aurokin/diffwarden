@@ -360,9 +360,7 @@ function wordBoundaryMatches(row: { value: string; label: string }, needle: stri
   if (haystack.startsWith(needle)) {
     return true;
   }
-  return haystack
-    .split(/[^a-z0-9.]+/)
-    .some((word) => word !== "" && word.startsWith(needle));
+  return haystack.split(/[^a-z0-9.]+/).some((word) => word !== "" && word.startsWith(needle));
 }
 
 /**
