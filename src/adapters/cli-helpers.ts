@@ -75,6 +75,9 @@ export function codexGlobalArgs(reviewer: ReviewReviewerConfig): string[] {
 }
 
 function codexCliEffort(effort: string): string {
+  if (effort === "minimal") {
+    return "low";
+  }
   return effort === "max" ? "xhigh" : effort;
 }
 

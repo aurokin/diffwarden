@@ -1649,11 +1649,14 @@ function codexAppServerEffort(effort: string): string {
   if (effort === "off") {
     return "none";
   }
+  if (effort === "minimal") {
+    return "low";
+  }
   return effort === "max" ? "xhigh" : effort;
 }
 
 function codexAppServerEffortSource(reviewer: ReviewReviewerConfig): ResolutionSource {
-  return reviewer.effort === "off" || reviewer.effort === "max"
+  return reviewer.effort === "off" || reviewer.effort === "minimal" || reviewer.effort === "max"
     ? "adapter-selection"
     : (reviewer.effortSource ?? "requested");
 }

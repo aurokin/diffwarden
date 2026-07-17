@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type {
+  AvailableModelConfig,
   CreateSessionOptions,
   DroidResultMessage,
   OutputFormat,
@@ -97,6 +98,19 @@ export function createDroidAdapter(
         } satisfies CreateSessionOptions);
         resolvedSettings = resolveDroidSettings(session.initResult.settings);
 
+        let appliedEffort = effort;
+        if (input.reviewer.effort === "off") {
+          const disable = droidDisableEffort(
+            session.initResult.availableModels,
+            resolvedSettings.model,
+          );
+          if (disable !== undefined) {
+            await session.updateSettings({ specModeReasoningEffort: disable });
+            appliedEffort = disable;
+            resolvedSettings = { ...resolvedSettings, effort: disable };
+          }
+        }
+
         let result: DroidResultMessage | undefined;
         // Event summaries deliberately feed both the live debug events and the
         // artifact's debug_output recorder (mirroring
@@ -140,7 +154,7 @@ export function createDroidAdapter(
             input.reviewer,
             result,
             executable,
-            effort,
+            appliedEffort,
             machineId,
             resolvedSettings,
             {
@@ -330,6 +344,30 @@ function droidEffort(effort: string | undefined): ReasoningEffort | undefined {
     return undefined;
   }
   return (effort === "minimal" ? "low" : effort) as ReasoningEffort;
+}
+
+/**
+ * Droid models advertise different native disable values ("off" for the claude/glm families,
+ * "none" for the auto router and gpt-5.6 family), and omitting the effort param runs the
+ * model's default effort — not disabled. availableModels only arrives in the createSession
+ * init result, so "off" is applied post-init via updateSettings. Models advertising neither
+ * value keep the session default (omission).
+ */
+function droidDisableEffort(
+  availableModels: readonly AvailableModelConfig[] | undefined,
+  model: string,
+): ReasoningEffort | undefined {
+  const entry = availableModels?.find(
+    (candidate) => candidate.id === model || candidate.modelId === model,
+  );
+  const supported = entry?.supportedReasoningEfforts;
+  if (supported?.includes("off" as ReasoningEffort)) {
+    return "off" as ReasoningEffort;
+  }
+  if (supported?.includes("none" as ReasoningEffort)) {
+    return "none" as ReasoningEffort;
+  }
+  return undefined;
 }
 
 function hasFactoryApiKey(env: NodeJS.ProcessEnv | undefined): boolean {
