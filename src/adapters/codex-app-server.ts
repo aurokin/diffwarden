@@ -291,11 +291,10 @@ function codexEffectiveTransport(reviewer: ReviewReviewerConfig): "cli" | "app-s
  * `supportedReasoningEfforts` — extract `reasoningEffort` (a naive string filter would narrow
  * every model to nothing) — then keep exactly what diffwarden can deliver:
  *
- * - keep native `xhigh` as-is: "xhigh" is a first-class diffwarden effort value (see the
- *   config effort enum) delivered verbatim to codex — it needs no translation to "max";
- * - drop `ultra` (no diffwarden equivalent) and `max` (diffwarden "max" is the redundant
- *   alias here — both delivery paths collapse it to native xhigh, so offering both would
- *   duplicate the same setting);
+ * - keep native `xhigh` and `max` as-is: both are first-class diffwarden effort values (see
+ *   the config effort enum) delivered verbatim to codex — max is a distinct native level
+ *   above xhigh (codex-cli 0.144.5), so it appears exactly where the model advertises it;
+ * - drop `ultra` (no diffwarden equivalent);
  * - drop native `none` and `minimal` from the passthrough — diffwarden translates its own
  *   vocabulary on delivery (off → none, minimal → low), so exposing the raw values would
  *   commit params the translation layer never produces;
@@ -327,7 +326,7 @@ export function codexModelCatalogEntries(
           .filter((level): level is string => typeof level === "string")
       : [];
     const efforts = native.filter(
-      (level) => level !== "ultra" && level !== "max" && level !== "none" && level !== "minimal",
+      (level) => level !== "ultra" && level !== "none" && level !== "minimal",
     );
     // Independent of efforts: a none-only model narrows to ["off"] on app-server — its sole
     // deliverable setting — rather than being treated as unrestricted.
@@ -1853,11 +1852,16 @@ function codexAppServerEffort(effort: string): string {
   if (effort === "minimal") {
     return "low";
   }
-  return effort === "max" ? "xhigh" : effort;
+  // "max" passes through verbatim: codex accepts it as a distinct native level above xhigh
+  // (verified codex-cli 0.144.5; models that don't advertise it reject with the platform's
+  // own 400, and the catalog only offers max where the model declares it). Requiring
+  // codex-cli >= 0.144 is deliberate — older binaries reject the value with codex's own
+  // config error rather than diffwarden silently downgrading an explicit max to xhigh.
+  return effort;
 }
 
 function codexAppServerEffortSource(reviewer: ReviewReviewerConfig): ResolutionSource {
-  return reviewer.effort === "off" || reviewer.effort === "minimal" || reviewer.effort === "max"
+  return reviewer.effort === "off" || reviewer.effort === "minimal"
     ? "adapter-selection"
     : (reviewer.effortSource ?? "requested");
 }

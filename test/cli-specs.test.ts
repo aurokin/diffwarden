@@ -1552,7 +1552,8 @@ describe("cliSpecs", () => {
 
   it("maps max effort to each CLI's strongest supported value", async () => {
     const cases = [
-      { engine: "codex", flag: "-c", expected: 'model_reasoning_effort="xhigh"' },
+      // codex accepts max as a distinct native level above xhigh (codex-cli 0.144.5).
+      { engine: "codex", flag: "-c", expected: 'model_reasoning_effort="max"' },
       { engine: "droid", flag: "--spec-reasoning-effort", expected: "xhigh" },
       { engine: "grok", flag: "--reasoning-effort", expected: "xhigh" },
       { engine: "pi", flag: "--thinking", expected: "xhigh" },
