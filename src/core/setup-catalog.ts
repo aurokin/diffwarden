@@ -27,6 +27,7 @@ export type ModelCatalogDraft = {
   id: string;
   engine: ReviewerSdk;
   transport: ReviewerTransport | undefined;
+  provider: string | undefined;
   model: string | undefined;
 };
 
@@ -83,8 +84,12 @@ export function createModelCatalogSession(
 
   // Key on the EFFECTIVE transport: an explicit "sdk" and an unset transport are the same
   // catalog, so a no-op transport toggle must not re-run auth or lose the cached narrowing.
+  // Provider participates too: a provider-scoped draft (pi) lists a different, differently
+  // shaped catalog (bare ids) than an unscoped one.
   const key = (draft: ModelCatalogDraft) =>
-    `${draft.engine}::${draft.transport ?? defaultReviewerTransport(draft.engine) ?? "sdk"}`;
+    `${draft.engine}::${draft.transport ?? defaultReviewerTransport(draft.engine) ?? "sdk"}::${
+      draft.provider ?? ""
+    }`;
 
   return {
     supports(engine, transport) {
@@ -131,6 +136,7 @@ async function runCatalogFetch(
       id: draft.id,
       sdk: draft.engine,
       ...(draft.transport !== undefined ? { transport: draft.transport } : {}),
+      ...(draft.provider !== undefined ? { provider: draft.provider } : {}),
       ...(draft.model !== undefined ? { model: draft.model } : {}),
       readonly: true,
     },

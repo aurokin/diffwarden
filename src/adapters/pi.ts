@@ -286,13 +286,21 @@ export function createPiAdapter(
               sdkOptions: { ...input.reviewer.sdkOptions, authSource: "shared" },
             };
       const { availableModels } = createPiRuntimeContext(sdk, input.env, reviewer);
-      const entries = availableModels
+      // Scope to the reviewer's provider, and emit BARE ids in that case: the provider is
+      // already carried in the reviewer's separate `provider` field, so a provider-qualified
+      // value would double-qualify on the CLI path (`--model anthropic/anthropic/...`) and
+      // let the picker save a model preflight would reject as outside the provider.
+      const entries = filterPiModelsByProvider(availableModels, input.reviewer.provider)
         .filter((model) => typeof model.id === "string")
-        .map(piCatalogEntry);
+        .map((model) => piCatalogEntry(model, input.reviewer.provider !== undefined));
       // Signed-out pi does not throw — getAvailable() simply returns nothing. Surface the
       // actionable state instead of a generic "empty model catalog" notice.
       if (entries.length === 0) {
-        throw missingAuth("pi is not authenticated — launch pi and run /login");
+        throw missingAuth(
+          input.reviewer.provider !== undefined && availableModels.length > 0
+            ? `No authenticated Pi models are available for provider: ${input.reviewer.provider}`
+            : "pi is not authenticated — launch pi and run /login",
+        );
       }
       return entries;
     },
@@ -301,12 +309,13 @@ export function createPiAdapter(
 
 /**
  * Value is the provider-qualified id (`selectPiModel` accepts it verbatim, and bare ids can
- * collide across providers). Effort levels reuse `supportedPiThinkingLevels` unchanged — it is
+ * collide across providers) — except for provider-scoped reviewers, whose values must stay
+ * bare (see listModels). Effort levels reuse `supportedPiThinkingLevels` unchanged — it is
  * already exact per model, including `["off"]` for non-reasoning models.
  */
-function piCatalogEntry(model: PiModel): ModelCatalogEntry {
+function piCatalogEntry(model: PiModel, bareId: boolean): ModelCatalogEntry {
   return {
-    value: formatPiModel(model),
+    value: bareId && typeof model.id === "string" ? model.id : formatPiModel(model),
     supportedEffortLevels: supportedPiThinkingLevels(model),
   };
 }

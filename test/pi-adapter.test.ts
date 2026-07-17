@@ -1330,6 +1330,35 @@ describe("piAdapter listModels", () => {
     }
   });
 
+  it("scopes to the reviewer's provider with bare ids, so values never double-qualify", async () => {
+    await withSharedAuthDir(async (agentDir) => {
+      const { adapter } = createMockPiAdapter(
+        [
+          { provider: "anthropic", id: "claude-opus-4-8", reasoning: true },
+          { provider: "openai", id: "gpt-5.2", reasoning: false },
+        ],
+        { agentDir },
+      );
+
+      const models = await adapter.listModels?.({
+        reviewer: { id: "pi", sdk: "pi", readonly: true, provider: "anthropic" },
+        env: {},
+      });
+
+      // Bare id: the provider rides in the reviewer's own `provider` field, and the CLI path
+      // would otherwise emit `--model anthropic/anthropic/claude-opus-4-8`.
+      expect(models?.map((model) => model.value)).toEqual(["claude-opus-4-8"]);
+
+      // A provider with no models gets the provider-scoped message, not the signed-out one.
+      await expect(
+        adapter.listModels?.({
+          reviewer: { id: "pi", sdk: "pi", readonly: true, provider: "missing" },
+          env: {},
+        }),
+      ).rejects.toThrow("No authenticated Pi models are available for provider: missing");
+    });
+  });
+
   it("treats an empty catalog as the signed-out state with one actionable sentence", async () => {
     const { adapter } = createMockPiAdapter([]);
     await expect(

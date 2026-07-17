@@ -20,6 +20,7 @@ function claudeDraft(overrides: Partial<ModelCatalogDraft> = {}): ModelCatalogDr
     id: "claude",
     engine: "claude",
     transport: undefined,
+    provider: undefined,
     model: undefined,
     ...overrides,
   };
