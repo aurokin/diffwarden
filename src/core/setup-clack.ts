@@ -900,13 +900,15 @@ export async function runClackReviewerSetEdit(options: {
 }): Promise<{ setName: string; members: string[]; makeDefault: boolean } | undefined> {
   intro("diffwarden · reviewer sets", io);
 
-  const NEW_SET = "__new_set__";
+  // Set names are unrestricted strings, so option values are index-keyed (`set:<i>`) rather
+  // than the names themselves — no set name can collide with the new-set control row.
+  const NEW_SET = "new";
   const setNames = Object.keys(options.sets);
   const picked = await select({
     message: "Select a reviewer set to edit (Esc to cancel)",
     options: [
-      ...setNames.map((name) => ({
-        value: name,
+      ...setNames.map((name, index) => ({
+        value: `set:${index}`,
         label: name,
         hint: `${(options.sets[name] ?? []).join(", ") || "empty"}${
           name === options.defaultReviewerSet ? " · default" : ""
@@ -921,7 +923,9 @@ export async function runClackReviewerSetEdit(options: {
     return undefined;
   }
 
-  let setName = picked;
+  let setName = picked.startsWith("set:")
+    ? (setNames[Number.parseInt(picked.slice(4), 10)] ?? "")
+    : picked;
   if (picked === NEW_SET) {
     const typed = await text({
       message: "Name for the new set (Esc to cancel)",

@@ -666,6 +666,7 @@ function prioritySortValue(finding: RenderFinding): number {
   return finding.priority ?? 4;
 }
 
+// Referenced by helper signatures above — fine: type alias declarations hoist across the module.
 export type HumanStyle = ReturnType<typeof createStyle>;
 
 export function createStyle(options: HumanReviewRenderOptions) {
