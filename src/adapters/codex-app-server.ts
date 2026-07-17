@@ -287,8 +287,11 @@ function codexEffectiveTransport(reviewer: ReviewReviewerConfig): "cli" | "app-s
  * `supportedReasoningEfforts` — extract `reasoningEffort` (a naive string filter would narrow
  * every model to nothing) — then keep exactly what diffwarden can deliver:
  *
- * - drop `ultra` (no diffwarden equivalent) and `max` (both delivery paths collapse
- *   diffwarden max → native xhigh, so offering max would silently downgrade);
+ * - keep native `xhigh` as-is: "xhigh" is a first-class diffwarden effort value (see the
+ *   config effort enum) delivered verbatim to codex — it needs no translation to "max";
+ * - drop `ultra` (no diffwarden equivalent) and `max` (diffwarden "max" is the redundant
+ *   alias here — both delivery paths collapse it to native xhigh, so offering both would
+ *   duplicate the same setting);
  * - drop native `none` and `minimal` from the passthrough — diffwarden translates its own
  *   vocabulary on delivery (off → none, minimal → low), so exposing the raw values would
  *   commit params the translation layer never produces;
