@@ -93,7 +93,7 @@ describe("human review rendering", () => {
     expect(summary).toContain("x claude failed   missing auth");
     expect(summary).toContain("| P2  [P2] Human finding");
     // Meta line: repo-relative path, single-line range, per-finding confidence.
-    expect(summary).toContain("src/client.ts:10 · confidence 0.80");
+    expect(summary).toContain("src/client.ts:10 - confidence 0.80");
     // Two reviewers ran (one failed): the failed one stays in the denominator.
     expect(summary).toContain("1 of 2 reviewers agree, 1 failed");
   });

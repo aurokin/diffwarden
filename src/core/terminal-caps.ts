@@ -40,15 +40,16 @@ export const asciiGlyphs: Glyphs = {
   pending: "-",
   spine: "|",
   rule: "=",
-  dot: "·",
+  // Strictly 7-bit: U+00B7 encodes as two UTF-8 bytes, which is mojibake on exactly the
+  // non-UTF-8 terminals this tier exists for.
+  dot: "-",
   ellipsis: "...",
   spinner: ["-", "\\", "|", "/"],
 };
 
 /**
  * Unicode opt-up allowlist: a UTF-8 locale in LC_ALL/LC_CTYPE/LANG and a TERM that is not a
- * known glyph-mangler. `·` stays in both sets — it is Latin-1-safe and every terminal in the
- * allowlist's complement that matters (linux console, dumb) still renders it.
+ * known glyph-mangler.
  */
 export function supportsUnicodeGlyphs(env: NodeJS.ProcessEnv): boolean {
   const locale = env.LC_ALL ?? env.LC_CTYPE ?? env.LANG ?? "";

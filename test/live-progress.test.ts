@@ -112,8 +112,8 @@ describe("createLiveReviewProgress", () => {
     expect(text).toContain("diffwarden");
     expect(text).toContain("base:main");
     expect(text).toContain("2 reviewers");
-    expect(text).toContain("+ codex        correct   11s · 0 findings · conf 0.94");
-    expect(text).toContain("x claude       flagged   12s · 0 findings · conf 0.97");
+    expect(text).toContain("+ codex        correct   11s - 0 findings - conf 0.94");
+    expect(text).toContain("x claude       flagged   12s - 0 findings - conf 0.97");
   });
 
   it("commits a failed reviewer with the first error line only", () => {
@@ -135,7 +135,7 @@ describe("createLiveReviewProgress", () => {
     });
     progress.finish();
 
-    expect(output()).toContain("x cursor       failed   8.2s · not authenticated");
+    expect(output()).toContain("x cursor       failed   8.2s - not authenticated");
     expect(output()).not.toContain("stack");
   });
 

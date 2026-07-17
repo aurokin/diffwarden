@@ -264,6 +264,9 @@ export function createLiveReviewProgress(options: LiveProgressOptions): LiveRevi
         );
         break;
       }
+      // reviewer_debug_output is intentionally dropped here for parity: human mode has
+      // never rendered debug chunks (renderHumanReviewEvent returns undefined for them too);
+      // they are an ndjson-only surface.
       case "reviewer_debug_output":
       case "final_result":
       case "error":
