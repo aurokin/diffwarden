@@ -1854,7 +1854,9 @@ function codexAppServerEffort(effort: string): string {
   }
   // "max" passes through verbatim: codex accepts it as a distinct native level above xhigh
   // (verified codex-cli 0.144.5; models that don't advertise it reject with the platform's
-  // own 400, and the catalog only offers max where the model declares it).
+  // own 400, and the catalog only offers max where the model declares it). Requiring
+  // codex-cli >= 0.144 is deliberate — older binaries reject the value with codex's own
+  // config error rather than diffwarden silently downgrading an explicit max to xhigh.
   return effort;
 }
 
