@@ -8,11 +8,13 @@ import {
   addReviewersToUserConfig,
   createDiscoveredUserConfig,
   editReviewerInUserConfig,
+  listUserConfigReviewerSets,
   listUserConfigReviewers,
   loadDiffwardenConfig,
   loadUserConfigReviewerEntries,
   removeReviewerFromSetInUserConfig,
   removeReviewerFromUserConfig,
+  replaceReviewerSetInUserConfig,
   setReviewerInUserConfig,
   userConfigPath,
 } from "../src/core/config.js";
@@ -479,6 +481,137 @@ describe("reviewer set membership", () => {
       env,
     });
     expect((readRaw(configPath).reviewerSets as Record<string, string[]>).fast).toEqual([]);
+  });
+});
+
+describe("replaceReviewerSetInUserConfig", () => {
+  const twoReviewers = [
+    { id: "codex", engine: "codex" },
+    { id: "claude", engine: "claude" },
+  ];
+
+  it("replaces membership wholesale, creating the set and deduplicating", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: twoReviewers });
+
+    const result = await replaceReviewerSetInUserConfig({
+      setName: "fast",
+      members: ["codex", "claude", "codex"],
+      env,
+    });
+
+    expect(result.members).toEqual(["codex", "claude"]);
+    expect((readRaw(configPath).reviewerSets as Record<string, string[]>).fast).toEqual([
+      "codex",
+      "claude",
+    ]);
+  });
+
+  it("persists a set literally named __proto__ as an own property", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: twoReviewers });
+
+    const result = await replaceReviewerSetInUserConfig({
+      setName: "__proto__",
+      members: ["codex"],
+      env,
+    });
+
+    expect(result.members).toEqual(["codex"]);
+    const sets = readRaw(configPath).reviewerSets as Record<string, string[]>;
+    expect(Object.hasOwn(sets, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(sets, "__proto__")?.value).toEqual(["codex"]);
+  });
+
+  it("makes the set the default when asked", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      defaultReviewerSet: "old",
+      reviewerSets: { old: ["codex"] },
+      reviewers: twoReviewers,
+    });
+
+    await replaceReviewerSetInUserConfig({
+      setName: "fast",
+      members: ["claude"],
+      makeDefault: true,
+      env,
+    });
+    expect(readRaw(configPath).defaultReviewerSet).toBe("fast");
+  });
+
+  it("refuses unconfigured member ids and writes nothing", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: twoReviewers });
+
+    await expect(
+      replaceReviewerSetInUserConfig({ setName: "fast", members: ["ghost"], env }),
+    ).rejects.toThrow(/No reviewer with id "ghost"/);
+    expect(readRaw(configPath)).not.toHaveProperty("reviewerSets");
+  });
+
+  it("refuses to empty the default set without force", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      defaultReviewerSet: "fast",
+      reviewerSets: { fast: ["codex"] },
+      reviewers: twoReviewers,
+    });
+
+    await expect(
+      replaceReviewerSetInUserConfig({ setName: "fast", members: [], env }),
+    ).rejects.toThrow(/default reviewer set "fast" empty/);
+  });
+
+  it("aborts on a sha256 mismatch instead of clobbering concurrent edits", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, { reviewers: twoReviewers });
+
+    await expect(
+      replaceReviewerSetInUserConfig({
+        setName: "fast",
+        members: ["codex"],
+        expectedSha256: "stale",
+        env,
+      }),
+    ).rejects.toThrow(/changed on disk/);
+  });
+});
+
+describe("listUserConfigReviewerSets", () => {
+  it("returns sets, the default set, and a read-time sha", async () => {
+    const { env, configPath } = setup();
+    writeExisting(configPath, {
+      defaultReviewerSet: "1",
+      reviewerSets: { "1": ["codex"], fast: ["codex", "claude"] },
+      reviewers: [{ id: "codex", engine: "codex" }],
+    });
+
+    const result = await listUserConfigReviewerSets({ env });
+    expect(result.sets).toEqual({ "1": ["codex"], fast: ["codex", "claude"] });
+    expect(result.defaultReviewerSet).toBe("1");
+    expect(result.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("lists a set literally named __proto__ instead of dropping it", async () => {
+    const { env, configPath } = setup();
+    // Raw JSON: a JS object literal with a "__proto__" key would set the prototype instead.
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        reviewers: [{ id: "codex", engine: "codex" }],
+      }).replace('"reviewers"', '"reviewerSets":{"__proto__":["codex"]},"reviewers"'),
+    );
+
+    const result = await listUserConfigReviewerSets({ env });
+    expect(Object.hasOwn(result.sets, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(result.sets, "__proto__")?.value).toEqual(["codex"]);
+  });
+
+  it("throws when no user config exists", async () => {
+    const { env } = setup();
+    await expect(listUserConfigReviewerSets({ env })).rejects.toThrow(/No diffwarden user config/);
   });
 });
 

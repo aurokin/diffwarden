@@ -178,9 +178,11 @@ describe("createModelCatalogSession", () => {
 describe("buildModelSelectOptions", () => {
   it("renders default, catalog entries, and the custom escape hatch in order", () => {
     expect(buildModelSelectOptions(sampleModels(), "claude")).toEqual([
-      { value: "", label: "default", hint: "engine default (sonnet)" },
-      { value: "default", label: "Default (recommended)", hint: "" },
-      { value: "sonnet", label: "Sonnet", hint: "balanced · default" },
+      { value: "", label: "engine default", hint: "let claude choose (sonnet)" },
+      // A committable value of literally "default" always carries its ⟨value⟩ tag, so it can
+      // never be misread as the engine-default row above it.
+      { value: "default", label: "Default (recommended) ⟨default⟩", hint: "" },
+      { value: "sonnet", label: "Sonnet", hint: "balanced · ★ recommended" },
       { value: CUSTOM_MODEL_CHOICE, label: "custom…", hint: "enter a model id" },
     ]);
   });
@@ -188,7 +190,12 @@ describe("buildModelSelectOptions", () => {
   it("falls back to the model value when the catalog omits a display name", () => {
     const options = buildModelSelectOptions([{ value: "sonnet[1m]" }], "pi");
     expect(options[1]).toEqual({ value: "sonnet[1m]", label: "sonnet[1m]", hint: "" });
-    expect(options[0]?.hint).toBe("engine default");
+    expect(options[0]?.hint).toBe("let pi choose");
+  });
+
+  it("tags a bare-value default entry so it cannot mirror the engine-default row", () => {
+    const options = buildModelSelectOptions([{ value: "default" }], "pi");
+    expect(options[1]?.label).toBe("default ⟨default⟩");
   });
 
   it("keeps an out-of-catalog current model selectable instead of dropping it", () => {
@@ -229,12 +236,57 @@ describe("buildModelAutocompleteOptions", () => {
     });
   });
 
-  it("keeps the creatable row above substring-matching catalog rows", () => {
-    // "gpt-5" is a prefix of two catalog ids but an exact match of none: Enter must commit
-    // "gpt-5", not "gpt-5-fast".
-    const rows = buildModelAutocompleteOptions(gptModels, "codex", undefined, "gpt-5");
-    expect(rows[0]?.value).toBe("gpt-5");
-    expect(rows.map((row) => row.value)).toContain("gpt-5-fast");
+  it("ranks a word-boundary catalog match above the creatable row, demoted not dropped", () => {
+    // The audit's #1 footgun: typing "fast" then Enter must commit the catalog row the query
+    // plainly names, not fork the fragment into an off-catalog id. The creatable row stays
+    // reachable just above custom….
+    const rows = buildModelAutocompleteOptions(gptModels, "codex", undefined, "fast");
+    expect(rows[0]?.value).toBe("gpt-5-fast");
+    expect(rows.map((row) => row.value)).toEqual(["gpt-5-fast", "fast", CUSTOM_MODEL_CHOICE]);
+  });
+
+  it("matches a separator-containing query at a non-leading word boundary", () => {
+    // "5.6-sol" spans a "-" separator, so token-splitting the haystack can never match it;
+    // the positional scan must still rank the catalog row above the creatable fragment.
+    const models: ModelCatalogEntry[] = [{ value: "gpt-5.6-sol", displayName: "GPT-5.6 Sol" }];
+    const rows = buildModelAutocompleteOptions(models, "codex", undefined, "5.6-sol");
+    expect(rows[0]?.value).toBe("gpt-5.6-sol");
+  });
+
+  it("keeps index 0 committable across an incremental keystroke sequence", () => {
+    // clack keeps focus on a surviving row and only refocuses to index 0 when it drops out,
+    // so each intermediate query's index 0 is a potential Enter target — assert the whole
+    // sequence, not just the final query.
+    const byQuery = (query: string) =>
+      buildModelAutocompleteOptions(gptModels, "codex", undefined, query).map((row) => row.value);
+    expect(byQuery("s")[0]).toBe("sonnet");
+    expect(byQuery("so")[0]).toBe("sonnet");
+    expect(byQuery("son")[0]).toBe("sonnet");
+    expect(byQuery("sonnet")[0]).toBe("sonnet");
+  });
+
+  it("breaks word-boundary ties deterministically: recommended, then shortest, then order", () => {
+    const family: ModelCatalogEntry[] = [
+      { value: "gpt-5.6-terra", displayName: "GPT-5.6-Terra" },
+      { value: "gpt-5.6-sol", displayName: "GPT-5.6-Sol", default: true },
+      { value: "gpt-5.6-luna", displayName: "GPT-5.6-Luna" },
+    ];
+    // Recommended entry wins the shared "gpt" prefix.
+    expect(buildModelAutocompleteOptions(family, "codex", undefined, "gpt")[0]?.value).toBe(
+      "gpt-5.6-sol",
+    );
+    // Without a recommended entry, the shortest id wins; equal lengths fall to catalog order.
+    const noDefault: ModelCatalogEntry[] = [
+      { value: "gpt-5.6-terra", displayName: "GPT-5.6-Terra" },
+      { value: "gpt-5.6-sol", displayName: "GPT-5.6-Sol" },
+      { value: "gpt-5.6-luna", displayName: "GPT-5.6-Luna" },
+    ];
+    expect(buildModelAutocompleteOptions(noDefault, "codex", undefined, "gpt")[0]?.value).toBe(
+      "gpt-5.6-sol",
+    );
+    // A pure mid-string fragment never outranks the creatable row.
+    const mid = buildModelAutocompleteOptions(family, "codex", undefined, "erra");
+    expect(mid[0]?.value).toBe("erra");
   });
 
   it("hoists an exact value match above earlier substring survivors", () => {
@@ -274,13 +326,13 @@ describe("buildModelAutocompleteOptions", () => {
 
   it("filters catalog rows by fragments of value, label, or description", () => {
     const byValue = buildModelAutocompleteOptions(gptModels, "codex", undefined, "sonn");
-    expect(byValue.map((row) => row.value)).toEqual(["sonn", "sonnet", CUSTOM_MODEL_CHOICE]);
+    expect(byValue.map((row) => row.value)).toEqual(["sonnet", "sonn", CUSTOM_MODEL_CHOICE]);
     const byHint = buildModelAutocompleteOptions(gptModels, "codex", undefined, "balanced");
     expect(byHint.map((row) => row.value)).toContain("sonnet");
   });
 
   it("matches the default row only against its literal label, never its hint", () => {
-    // Claude's default row hints "engine default (sonnet)": a "sonnet" query must not
+    // Claude's default row hints "let claude choose (sonnet)": a "sonnet" query must not
     // resurface it, or Enter on a model-name query could clear the override.
     const modelQuery = buildModelAutocompleteOptions(sampleModels(), "claude", undefined, "sonnet");
     expect(modelQuery.map((row) => row.value)).not.toContain("");
@@ -291,6 +343,10 @@ describe("buildModelAutocompleteOptions", () => {
       "defau",
     );
     expect(defaultQuery.map((row) => row.value)).toContain("");
+    // "engine" is a model-name-shaped query, not a request for the clear row — if the clear
+    // row survived it while focused, Enter would clear the override instead of committing.
+    const engineQuery = buildModelAutocompleteOptions(sampleModels(), "claude", undefined, "eng");
+    expect(engineQuery.map((row) => row.value)).not.toContain("");
   });
 
   it("never creates a row whose value collides with a control sentinel", () => {

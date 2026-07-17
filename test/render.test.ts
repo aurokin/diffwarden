@@ -85,14 +85,84 @@ describe("human review rendering", () => {
       },
     });
 
-    expect(summary).toContain("Result");
-    expect(summary).toContain("Verdict: patch is incorrect");
-    expect(summary).toContain("Findings: 1 (P2 1)");
-    expect(summary).toContain("Reviewers: 1 passed, 1 failed");
+    // ASCII glyph tier by default: rule of "=", fail glyph "x", priority bar "|".
+    expect(summary).toContain("CHANGES REQUESTED");
+    expect(summary).toContain("=".repeat(80));
+    expect(summary).toContain("1 P2");
     expect(summary).toContain("Warnings");
-    expect(summary).toContain("Failed reviewers");
-    expect(summary).toContain("- claude: missing auth");
-    expect(summary).toContain("[P2] Human finding");
+    expect(summary).toContain("x claude failed   missing auth");
+    expect(summary).toContain("| P2  [P2] Human finding");
+    // Meta line: repo-relative path, single-line range, per-finding confidence.
+    expect(summary).toContain("src/client.ts:10 - confidence 0.80");
+    // Two reviewers ran (one failed): the failed one stays in the denominator.
+    expect(summary).toContain("1 of 2 reviewers agree, 1 failed");
+  });
+
+  it("prints the consensus clause when several reviewers settled", () => {
+    const reviewer = {
+      engine: "fake",
+      transport: "native",
+      status: "success",
+      result: artifact.result,
+      validation: artifact.validation,
+    } as const;
+    const agree = renderHumanReviewSummary({
+      ...artifact,
+      reviewers: [
+        { ...reviewer, id: "fake" },
+        { ...reviewer, id: "codex" },
+      ],
+    });
+    expect(agree).toContain("CORRECT");
+    expect(agree).toContain("2 of 2 reviewers agree");
+
+    const flaggedResult = {
+      ...artifact.result,
+      overall_correctness: "patch is incorrect",
+    } as const;
+    const split = renderHumanReviewSummary({
+      ...artifact,
+      result: flaggedResult,
+      reviewers: [
+        { ...reviewer, id: "fake" },
+        { ...reviewer, id: "codex", result: flaggedResult },
+      ],
+    });
+    expect(split).toContain("CHANGES REQUESTED");
+    expect(split).toContain("1 of 2 reviewers flagged");
+
+    // A failed reviewer stays in the denominator: "2 of 2 agree" with one reviewer down
+    // would be a false consensus.
+    const withFailure = renderHumanReviewSummary({
+      ...artifact,
+      reviewers: [
+        { ...reviewer, id: "fake" },
+        { ...reviewer, id: "codex" },
+        {
+          id: "claude",
+          engine: "claude",
+          transport: "native",
+          status: "failed",
+          error: { code: "missing_auth", message: "missing auth", exit_code: 3 },
+        },
+      ],
+    });
+    expect(withFailure).toContain("2 of 3 reviewers agree, 1 failed");
+
+    // Mixed correct/unknown verdicts are never "agreement".
+    const withUnsure = renderHumanReviewSummary({
+      ...artifact,
+      reviewers: [
+        { ...reviewer, id: "fake" },
+        {
+          ...reviewer,
+          id: "codex",
+          result: { ...artifact.result, overall_correctness: "unknown" },
+        },
+      ],
+    });
+    expect(withUnsure).toContain("1 of 2 reviewers unsure");
+    expect(withUnsure).not.toContain("reviewers agree");
   });
 
   it("renders a complete saved artifact view", () => {
@@ -101,8 +171,7 @@ describe("human review rendering", () => {
     expect(output).toContain("diffwarden review");
     expect(output).toContain("Target: uncommitted");
     expect(output).toContain("Reviewers: fake");
-    expect(output).toContain("Result");
-    expect(output).toContain("Verdict: patch is correct");
+    expect(output).toContain("CORRECT");
   });
 
   it("renders plain agent output without ANSI", () => {

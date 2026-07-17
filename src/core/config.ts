@@ -781,6 +781,98 @@ export type ReviewerSetMembershipResult = {
   sha256: string;
 };
 
+/**
+ * Read the reviewer sets from the user config for the interactive set editor. Read-only;
+ * throws the same missing-config error as the mutators when no user config exists.
+ */
+export async function listUserConfigReviewerSets(options: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): Promise<{
+  path: string;
+  sets: Record<string, string[]>;
+  defaultReviewerSet: string | undefined;
+  sha256: string;
+}> {
+  const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
+  const existingRaw = await readFileIfExists(configPath);
+  if (existingRaw === undefined) {
+    throw invalidConfig(
+      `No diffwarden user config at ${configPath}. Run diffwarden init or diffwarden reviewers add <engine> first.`,
+    );
+  }
+  const rawConfig = parseRawConfigObject(existingRaw, configPath);
+  // Null prototype: set names are unrestricted, and copying a set named "__proto__" into a
+  // plain object would hit the inherited setter and vanish from the returned map.
+  const sets: Record<string, string[]> = Object.create(null);
+  if (isRecord(rawConfig.reviewerSets)) {
+    for (const [name, members] of Object.entries(rawConfig.reviewerSets)) {
+      if (Array.isArray(members)) {
+        sets[name] = members.filter((member): member is string => typeof member === "string");
+      }
+    }
+  }
+  return {
+    path: configPath,
+    sets,
+    defaultReviewerSet:
+      typeof rawConfig.defaultReviewerSet === "string" ? rawConfig.defaultReviewerSet : undefined,
+    sha256: sha256(existingRaw),
+  };
+}
+
+export type ReviewerSetReplaceOptions = {
+  setName: string;
+  /** Full replacement membership, order preserved (deduplicated). */
+  members: string[];
+  makeDefault?: boolean;
+  force?: boolean;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  expectedSha256?: string;
+};
+
+/**
+ * Replace a reviewer set's membership wholesale (creating the set if needed) and optionally
+ * make it the default set — one atomic write backing the interactive set editor, instead of
+ * a fragile sequence of add/remove calls. Every member must be a configured reviewer id;
+ * leaving the default set empty still requires `force`.
+ */
+export async function replaceReviewerSetInUserConfig(
+  options: ReviewerSetReplaceOptions,
+): Promise<ReviewerSetMembershipResult> {
+  const {
+    path,
+    sha256: digest,
+    result,
+  } = await mutateUserConfig(options, (rawConfig, configPath) => {
+    const reviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
+    for (const member of options.members) {
+      if (findReviewerIndexById(reviewers, member) < 0) {
+        throw invalidConfig(
+          `No reviewer with id "${member}" in ${configPath}; add it before adding it to a set`,
+        );
+      }
+    }
+    const sets = isRecord(rawConfig.reviewerSets) ? rawConfig.reviewerSets : {};
+    // defineProperty, not assignment: set names are unrestricted, and assigning a name like
+    // "__proto__" would hit the inherited setter — reporting success while never persisting.
+    Object.defineProperty(sets, options.setName, {
+      value: [...new Set(options.members)],
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    rawConfig.reviewerSets = sets;
+    if (options.makeDefault === true) {
+      rawConfig.defaultReviewerSet = options.setName;
+    }
+    guardDefaultReviewerSet(rawConfig, configPath, options.force === true);
+    return { members: (sets[options.setName] as string[]).slice() };
+  });
+  return { path, set: options.setName, members: result.members, sha256: digest };
+}
+
 /** Add a configured reviewer id to a reviewer set (creating the set if needed). */
 export async function addReviewerToSetInUserConfig(
   options: ReviewerSetMembershipOptions,

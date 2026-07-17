@@ -184,10 +184,45 @@ async function runCatalogFetch(
 export const CUSTOM_MODEL_CHOICE = "__custom__" as const;
 
 /**
- * Rows for the model select: "default" (clears the override), one row per catalog entry, then
- * "custom…" for ids the catalog does not list. A configured model the catalog omits (a pinned id,
- * a previous custom entry) gets its own row so it stays visible and an accidental Enter keeps it
- * instead of silently clearing the override. Pure so tests can cover it without a TTY.
+ * A catalog row's display label, tagged with `⟨value⟩` exactly when the label alone would
+ * misstate what Enter commits: the value is not the label's own slug (aliases like
+ * `Opus` → `opus[1m]`), or the value is literally `default` — which would otherwise sit next to
+ * the engine-default row as a second, differently-meaning "default".
+ */
+function catalogRowLabel(model: ModelCatalogEntry): string {
+  const label = model.displayName ?? model.value;
+  const value = model.value.toLowerCase();
+  // The "default" collision is checked before the label===value shortcut: a bare
+  // { value: "default" } entry must still be tagged, or it sits next to the engine-default
+  // row reading identically while committing a different thing.
+  if (value === "default") {
+    return `${label} ⟨${model.value}⟩`;
+  }
+  if (label === model.value || slugify(label) === value) {
+    return label;
+  }
+  return `${label} ⟨${model.value}⟩`;
+}
+
+function slugify(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Rows for the model select: "engine default" (clears the override), one row per catalog entry,
+ * then "custom…" for ids the catalog does not list. A configured model the catalog omits (a pinned
+ * id, a previous custom entry) gets its own row so it stays visible and an accidental Enter keeps
+ * it instead of silently clearing the override. Pure so tests can cover it without a TTY.
+ *
+ * Three colliding meanings of "default" are kept visibly apart (F2/F3):
+ * - the clear-the-override row is labeled `engine default` (never bare "default");
+ * - an engine-recommended catalog entry is marked `★ recommended`, not "default";
+ * - a catalog label whose committable VALUE diverges from it (aliases like `opus[1m]`, or a
+ *   provider entry literally valued `default`) carries a `⟨value⟩` tag so what Enter commits is
+ *   visible at pick time.
  */
 export function buildModelSelectOptions(
   models: ModelCatalogEntry[],
@@ -198,13 +233,16 @@ export function buildModelSelectOptions(
   return [
     {
       value: "",
-      label: "default",
-      hint: engineDefault !== undefined ? `engine default (${engineDefault})` : "engine default",
+      label: "engine default",
+      hint:
+        engineDefault !== undefined
+          ? `let ${engine} choose (${engineDefault})`
+          : `let ${engine} choose`,
     },
     ...models.map((model) => ({
       value: model.value,
-      label: model.displayName ?? model.value,
-      hint: [model.description, model.default === true ? "default" : undefined]
+      label: catalogRowLabel(model),
+      hint: [model.description, model.default === true ? "★ recommended" : undefined]
         .filter((piece): piece is string => piece !== undefined)
         .join(" · "),
     })),
@@ -223,10 +261,13 @@ export function buildModelSelectOptions(
  *
  * 1. What the query names, first: on a non-empty query, index 0 is the row whose value EXACTLY
  *    matches it (case-insensitive — a case variant of a catalog id should commit the catalog
- *    row, not fork a new slug), hoisted above earlier substring survivors; when NO row matches
- *    exactly, a creatable `use "<typed slug>"` row whose value IS the typed slug. First position
- *    is what makes "one Enter commits what you typed" true, even when the typed id is a
- *    substring of other catalog ids (`gpt-5` amid `gpt-5-fast`) or vice versa.
+ *    row, not fork a new slug); otherwise the catalog row the query plainly names at a word
+ *    boundary (`sol` → GPT-5.6-Sol), so Enter commits the obvious match instead of forking the
+ *    typed fragment into an off-catalog id — with a deterministic tiebreak when several ids
+ *    share the prefix: the engine-recommended entry wins, then the shortest value, then catalog
+ *    order. The creatable `use "<typed slug>"` row leads only when nothing in the catalog
+ *    matches the query at a word boundary (pure mid-string fragments); when demoted it stays
+ *    reachable just above custom…, so off-catalog ids remain one arrow away, never lost.
  * 2. The "default" row, matched ONLY against its literal label: its hint embeds the
  *    engine-default model id, and hint-matching would resurface it — focused first — on exactly
  *    the model-name queries users type, turning Enter into an accidental clear.
@@ -245,7 +286,6 @@ export function buildModelAutocompleteOptions(
   const base = buildModelSelectOptions(models, engine, currentModel);
   const typed = query.trim();
   const needle = typed.toLowerCase();
-  const rows: { value: string; label: string; hint?: string }[] = [];
 
   const isSelectable = (row: { value: string }) =>
     row.value !== "" && row.value !== CUSTOM_MODEL_CHOICE;
@@ -254,15 +294,21 @@ export function buildModelAutocompleteOptions(
   // row) would trigger that action instead of committing the id — such ids stay enterable
   // through the custom… free-text path.
   const reserved = typed === CUSTOM_MODEL_CHOICE || reservedValues.includes(typed);
-  if (typed !== "" && !exactMatch && !reserved) {
-    rows.push({ value: typed, label: `use "${typed}"`, hint: "off-catalog model id" });
-  }
+  const creatable =
+    typed !== "" && !exactMatch && !reserved
+      ? { value: typed, label: `use "${typed}"`, hint: "off-catalog model id" }
+      : undefined;
 
+  const rows: { value: string; label: string; hint?: string }[] = [];
   for (const row of base) {
     if (row.value === CUSTOM_MODEL_CHOICE) {
       rows.push(row);
     } else if (row.value === "") {
-      if (needle === "" || row.label.toLowerCase().includes(needle)) {
+      // The clear-override row answers only to "default" prefixes. Matching its full
+      // "engine default" label would keep it alive — and, worse, FOCUSED when it started
+      // focused — for queries like "engine", where Enter would clear the override instead
+      // of committing what the user typed.
+      if (needle === "" || "default".startsWith(needle)) {
         rows.push(row);
       }
     } else if (
@@ -282,8 +328,88 @@ export function buildModelAutocompleteOptions(
     if (exactIndex > 0) {
       rows.unshift(...rows.splice(exactIndex, 1));
     }
+    return rows;
   }
-  return rows;
+
+  if (creatable === undefined) {
+    return rows;
+  }
+
+  // A catalog row the query plainly names (word-boundary prefix) outranks the creatable row:
+  // Enter after typing "sol" must commit GPT-5.6-Sol, not fork the fragment into an
+  // off-catalog id. The creatable row is demoted just above custom… — reachable, never lost.
+  const bestIndex = bestWordBoundaryMatchIndex(rows, models, needle);
+  if (bestIndex >= 0) {
+    const [best] = rows.splice(bestIndex, 1);
+    if (best !== undefined) {
+      const customIndex = rows.findIndex((row) => row.value === CUSTOM_MODEL_CHOICE);
+      rows.splice(customIndex < 0 ? rows.length : customIndex, 0, creatable);
+      return [best, ...rows];
+    }
+  }
+  return [creatable, ...rows];
+}
+
+/**
+ * Index of the filtered row a query names at a word boundary, or -1. Deterministic tiebreak
+ * when several ids share the prefix (`gpt` names many): the engine-recommended catalog entry
+ * wins, then the shortest value, then catalog order — never an arbitrary survivor, because
+ * whatever sits at index 0 is what Enter commits.
+ */
+function bestWordBoundaryMatchIndex(
+  rows: readonly { value: string; label: string }[],
+  models: ModelCatalogEntry[],
+  needle: string,
+): number {
+  const recommended = new Set(
+    models.filter((model) => model.default === true).map((model) => model.value),
+  );
+  let best = -1;
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index];
+    if (row === undefined || row.value === "" || row.value === CUSTOM_MODEL_CHOICE) {
+      continue;
+    }
+    if (!wordBoundaryMatches(row, needle)) {
+      continue;
+    }
+    if (best === -1) {
+      best = index;
+      continue;
+    }
+    const current = rows[best];
+    if (current === undefined) {
+      best = index;
+      continue;
+    }
+    const rowRecommended = recommended.has(row.value);
+    const currentRecommended = recommended.has(current.value);
+    if (rowRecommended !== currentRecommended) {
+      if (rowRecommended) {
+        best = index;
+      }
+      continue;
+    }
+    if (row.value.length < current.value.length) {
+      best = index;
+    }
+  }
+  return best;
+}
+
+function wordBoundaryMatches(row: { value: string; label: string }, needle: string): boolean {
+  const haystack = `${row.value} ${row.label}`.toLowerCase();
+  // Positional scan rather than tokenizing: a needle containing separators ("5.6-sol")
+  // still matches when it starts at a word boundary of the haystack.
+  let index = haystack.indexOf(needle);
+  while (index !== -1) {
+    const before = index === 0 ? "" : (haystack[index - 1] ?? "");
+    if (before === "" || !/[a-z0-9.]/.test(before)) {
+      return true;
+    }
+    index = haystack.indexOf(needle, index + 1);
+  }
+  return false;
 }
 
 /**

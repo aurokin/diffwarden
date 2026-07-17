@@ -610,15 +610,15 @@ describe("diffwarden CLI e2e", () => {
       outputPath,
     ]);
 
-    expect(result.stdout).toContain("diffwarden review");
-    expect(result.stdout).toContain("Target: uncommitted");
-    expect(result.stdout).toContain("Reviewers: fake");
-    expect(result.stdout).toContain("fake preflight");
-    expect(result.stdout).toContain("fake reviewing");
-    expect(result.stdout).toContain("Result");
-    expect(result.stdout).toContain("Verdict: patch is correct");
-    expect(result.stdout).toContain("No findings.");
-    expect(result.stderr).toBe("");
+    // Decision S1: stdout carries only the final summary; live/append progress is stderr's.
+    expect(result.stdout).toContain("CORRECT");
+    expect(result.stdout).toContain("0 findings");
+    expect(result.stdout).not.toContain("fake preflight");
+    expect(result.stderr).toContain("diffwarden review");
+    expect(result.stderr).toContain("Target: uncommitted");
+    expect(result.stderr).toContain("Reviewers: fake");
+    expect(result.stderr).toContain("fake preflight");
+    expect(result.stderr).toContain("fake reviewing");
 
     const artifact = JSON.parse(readFileSync(outputPath, "utf8"));
     expect(artifact).toMatchObject({
@@ -651,8 +651,8 @@ describe("diffwarden CLI e2e", () => {
     expect(result.stdout).toContain("diffwarden review");
     expect(result.stdout).toContain("Target: uncommitted");
     expect(result.stdout).toContain("Reviewers: fake");
-    expect(result.stdout).toContain("Verdict: patch is correct");
-    expect(result.stdout).toContain("No findings.");
+    expect(result.stdout).toContain("CORRECT");
+    expect(result.stdout).toContain("0 findings");
     expect(result.stderr).toBe("");
 
     const parentJsonResult = await runDiffwarden(repo, ["review", "--json", "show", outputPath]);
@@ -767,15 +767,12 @@ describe("diffwarden CLI e2e", () => {
       repo,
     ]);
 
-    expect(result.stdout).toContain("diffwarden review");
-    expect(result.stdout).toContain("Target: uncommitted");
-    expect(result.stdout).toContain("Reviewers: fake");
-    expect(result.stdout).toContain("fake preflight");
-    expect(result.stdout).toContain("fake reviewing");
-    expect(result.stdout).toContain("Result");
-    expect(result.stdout).toContain("Verdict: patch is correct");
-    expect(result.stdout).toContain("No findings.");
-    expect(result.stderr).toBe("");
+    // S1 split: summary on stdout, progress on stderr.
+    expect(result.stdout).toContain("CORRECT");
+    expect(result.stdout).toContain("0 findings");
+    expect(result.stderr).toContain("diffwarden review");
+    expect(result.stderr).toContain("fake preflight");
+    expect(result.stderr).toContain("fake reviewing");
   });
 
   it("runs doctor preflight checks without requiring a target", async () => {

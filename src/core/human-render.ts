@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   ReviewArtifact,
   ReviewArtifactFinding,
@@ -6,10 +7,17 @@ import type {
   ReviewRunArtifact,
   ReviewTargetResolved,
 } from "./schema.js";
+import { asciiGlyphs, unicodeGlyphs, wrapText } from "./terminal-caps.js";
 
 export type HumanReviewRenderOptions = {
   color?: boolean;
+  /** Unicode glyph opt-up (terminal-caps allowlist). ASCII is the default. */
+  unicode?: boolean;
+  /** Wrap/rule width, pre-clamped by the caller. */
+  width?: number;
 };
+
+const defaultSummaryWidth = 80;
 
 type FindingCounts = {
   p0: number;
@@ -88,20 +96,13 @@ export function renderHumanReviewSummary(
   }
 
   const style = createStyle(options);
-  const counts = findingCounts(artifact.result.findings);
+  const glyphs = options.unicode === true ? unicodeGlyphs : asciiGlyphs;
+  const width = options.width ?? defaultSummaryWidth;
   const failedReviewers =
     artifact.reviewers?.filter((reviewer) => reviewer.status === "failed") ?? [];
-  const successfulReviewers =
-    artifact.reviewers?.filter((reviewer) => reviewer.status !== "failed") ?? [];
   const findingTotal = artifact.result.findings.length;
-  const lines = [
-    "",
-    style.heading("Result"),
-    `Verdict: ${formatVerdict(artifact.result.overall_correctness, style)}`,
-    `Confidence: ${formatConfidence(artifact.result.overall_confidence_score)}`,
-    `Findings: ${formatFindingCount(findingTotal, counts, style)}`,
-    `Reviewers: ${successfulReviewers.length} passed, ${failedReviewers.length} failed`,
-  ];
+
+  const lines = ["", ...renderVerdictBanner(artifact, style, glyphs, width)];
 
   if (artifact.warnings !== undefined && artifact.warnings.length > 0) {
     lines.push("", style.warning("Warnings"));
@@ -111,27 +112,166 @@ export function renderHumanReviewSummary(
   }
 
   if (failedReviewers.length > 0) {
-    lines.push("", style.danger("Failed reviewers"));
+    lines.push("");
     for (const reviewer of failedReviewers) {
-      lines.push(`- ${reviewer.id}: ${reviewer.error?.message ?? "Unknown error"}`);
+      lines.push(
+        `${style.danger(`${glyphs.fail} ${reviewer.id} failed`)}   ${style.muted(
+          reviewer.error?.message ?? "Unknown error",
+        )}`,
+      );
     }
   }
 
-  if (findingTotal === 0) {
-    lines.push("", "No findings.");
-  } else {
-    lines.push("", style.warning("Findings"));
+  if (findingTotal > 0) {
     for (const finding of [...artifact.result.findings].sort(compareFindings)) {
-      lines.push(...renderFindingCard(finding, style));
+      lines.push("", ...renderFindingCard(finding, style, glyphs, width, artifact.cwd));
     }
   }
 
   const explanation = artifact.result.overall_explanation.trim();
   if (explanation !== "") {
-    lines.push("", style.muted("Overall explanation"), explanation);
+    lines.push("", style.muted("overall explanation"), ...wrapText(explanation, width, ""));
+  }
+
+  const footer = renderSummaryFooter(artifact, glyphs);
+  if (footer !== undefined) {
+    lines.push("", style.muted(footer));
   }
 
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * The verdict banner: a rule-pair whose color IS the verdict, a verdict word in caps, and —
+ * when several reviewers ran — the consensus clause ("2 of 3 reviewers flagged"), which no
+ * single-reviewer tool can print. Per-reviewer confidence lives on the reviewer rows / cards;
+ * the banner never shows an aggregated confidence float.
+ */
+function renderVerdictBanner(
+  artifact: ReviewRunArtifact,
+  style: HumanStyle,
+  glyphs: typeof asciiGlyphs,
+  width: number,
+): string[] {
+  const verdict = artifact.result.overall_correctness;
+  const [word, paint, glyph] =
+    verdict === "patch is correct"
+      ? (["CORRECT", style.success, glyphs.pass] as const)
+      : verdict === "patch is incorrect"
+        ? (["CHANGES REQUESTED", style.danger, glyphs.fail] as const)
+        : (["UNCERTAIN", style.warning, glyphs.uncertain] as const);
+  const rule = paint(glyphs.rule.repeat(width));
+
+  const clauses = [`${paint(glyph)} ${style.bold(paint(word))}`];
+  const consensus = consensusClause(artifact);
+  if (consensus !== undefined) {
+    clauses.push(style.bold(consensus));
+  }
+  clauses.push(style.muted(bannerMeta(artifact, glyphs)));
+  return [rule, clauses.join("   "), rule];
+}
+
+function consensusClause(artifact: ReviewRunArtifact): string | undefined {
+  if (isBatchArtifact(artifact)) {
+    const total = artifact.lanes.length;
+    if (total < 2) {
+      return undefined;
+    }
+    // A lane that failed to run did not flag anything — it is reported as failed, exactly
+    // like reviewer failures in the single-run path.
+    const succeeded = artifact.lanes.filter((lane) => lane.status === "success");
+    const flagged = succeeded.filter(
+      (lane) => lane.artifact.result.overall_correctness === "patch is incorrect",
+    ).length;
+    const unsure = succeeded.filter(
+      (lane) =>
+        lane.artifact.result.overall_correctness !== "patch is incorrect" &&
+        lane.artifact.result.overall_correctness !== "patch is correct",
+    ).length;
+    const failed = total - succeeded.length;
+    if (flagged > 0) {
+      return `${flagged} of ${total} lanes flagged`;
+    }
+    // "agree" is reserved for unanimous correct verdicts — an unsure lane is not agreement.
+    if (unsure > 0) {
+      return `${unsure} of ${total} lanes unsure`;
+    }
+    return failed > 0
+      ? `${total - failed} of ${total} lanes agree, ${failed} failed`
+      : `${total} of ${total} lanes agree`;
+  }
+  // The denominator counts every reviewer that RAN, failures included — "2 of 2 agree" with
+  // a third reviewer down would be a false consensus. Failures also surface as their own
+  // lines below the banner.
+  const reviewers = artifact.reviewers ?? [];
+  const total = reviewers.length;
+  if (total < 2) {
+    return undefined;
+  }
+  const settled = reviewers.filter(
+    (reviewer) => reviewer.status !== "failed" && reviewer.result !== undefined,
+  );
+  const flagged = settled.filter(
+    (reviewer) => reviewer.result?.overall_correctness === "patch is incorrect",
+  ).length;
+  const unsure = settled.filter(
+    (reviewer) =>
+      reviewer.result?.overall_correctness !== "patch is incorrect" &&
+      reviewer.result?.overall_correctness !== "patch is correct",
+  ).length;
+  const failed = total - settled.length;
+  if (flagged > 0) {
+    return `${flagged} of ${total} reviewers flagged`;
+  }
+  // "agree" is reserved for unanimous correct verdicts — an unsure reviewer is not agreement.
+  if (unsure > 0) {
+    return `${unsure} of ${total} reviewers unsure`;
+  }
+  return failed > 0
+    ? `${settled.length} of ${total} reviewers agree, ${failed} failed`
+    : `${total} of ${total} reviewers agree`;
+}
+
+function bannerMeta(artifact: ReviewRunArtifact, glyphs: typeof asciiGlyphs): string {
+  const counts = findingCounts(artifact.result.findings);
+  const total = artifact.result.findings.length;
+  const parts =
+    total === 0
+      ? ["0 findings"]
+      : [
+          counts.p0 > 0 ? `${counts.p0} P0` : undefined,
+          counts.p1 > 0 ? `${counts.p1} P1` : undefined,
+          counts.p2 > 0 ? `${counts.p2} P2` : undefined,
+          counts.p3 > 0 ? `${counts.p3} P3` : undefined,
+          counts.unspecified > 0 ? `${counts.unspecified} unprioritized` : undefined,
+        ].filter((part): part is string => part !== undefined);
+  if (artifact.timing_ms !== undefined) {
+    parts.push(`${(artifact.timing_ms / 1000).toFixed(0)}s`);
+  }
+  return parts.join(` ${glyphs.dot} `);
+}
+
+function renderSummaryFooter(
+  artifact: ReviewRunArtifact,
+  glyphs: typeof asciiGlyphs,
+): string | undefined {
+  const parts: string[] = [];
+  if (artifact.timing_ms !== undefined) {
+    parts.push(`review finished in ${(artifact.timing_ms / 1000).toFixed(1)}s`);
+  }
+  if (!isBatchArtifact(artifact)) {
+    const timed = (artifact.reviewers ?? []).filter(
+      (reviewer): reviewer is typeof reviewer & { timing_ms: number } =>
+        reviewer.timing_ms !== undefined,
+    );
+    if (timed.length > 1) {
+      const slowest = timed.reduce((left, right) =>
+        right.timing_ms > left.timing_ms ? right : left,
+      );
+      parts.push(`slowest ${slowest.id} ${(slowest.timing_ms / 1000).toFixed(1)}s`);
+    }
+  }
+  return parts.length > 0 ? parts.join(` ${glyphs.dot} `) : undefined;
 }
 
 export function renderHumanReviewArtifact(
@@ -223,18 +363,11 @@ function renderHumanBatchReviewSummary(
   options: HumanReviewRenderOptions,
 ): string {
   const style = createStyle(options);
-  const counts = findingCounts(artifact.result.findings);
+  const glyphs = options.unicode === true ? unicodeGlyphs : asciiGlyphs;
+  const width = options.width ?? defaultSummaryWidth;
   const findingTotal = artifact.result.findings.length;
-  const successfulLanes = artifact.lanes.filter((lane) => lane.status === "success");
-  const failedLanes = artifact.lanes.filter((lane) => lane.status === "failed");
-  const lines = [
-    "",
-    style.heading("Batch Result"),
-    `Verdict: ${formatVerdict(artifact.result.overall_correctness, style)}`,
-    `Confidence: ${formatConfidence(artifact.result.overall_confidence_score)}`,
-    `Findings: ${formatFindingCount(findingTotal, counts, style)}`,
-    `Lanes: ${successfulLanes.length} passed, ${failedLanes.length} failed`,
-  ];
+
+  const lines = ["", ...renderVerdictBanner(artifact, style, glyphs, width)];
 
   if (artifact.warnings !== undefined && artifact.warnings.length > 0) {
     lines.push("", style.warning("Warnings"));
@@ -243,12 +376,9 @@ function renderHumanBatchReviewSummary(
     }
   }
 
-  if (findingTotal === 0) {
-    lines.push("", "No findings.");
-  } else {
-    lines.push("", style.warning("Merged findings"));
+  if (findingTotal > 0) {
     for (const finding of [...artifact.result.findings].sort(compareFindings)) {
-      lines.push(...renderFindingCard(finding, style));
+      lines.push("", ...renderFindingCard(finding, style, glyphs, width, artifact.cwd));
     }
   }
 
@@ -265,18 +395,16 @@ function renderHumanBatchReviewSummary(
       `Findings: ${lane.artifact.result.findings.length}`,
       `Reviewers: ${formatReviewers(lane.artifact)}`,
     );
-    if (lane.artifact.result.findings.length === 0) {
-      lines.push("No lane findings.");
-    } else {
-      for (const finding of [...lane.artifact.result.findings].sort(compareFindings)) {
-        lines.push(...renderFindingCard(finding, style));
-      }
-    }
   }
 
   const explanation = artifact.result.overall_explanation.trim();
   if (explanation !== "") {
-    lines.push("", style.muted("Overall explanation"), explanation);
+    lines.push("", style.muted("overall explanation"), ...wrapText(explanation, width, ""));
+  }
+
+  const footer = renderSummaryFooter(artifact, glyphs);
+  if (footer !== undefined) {
+    lines.push("", style.muted(footer));
   }
 
   return `${lines.join("\n")}\n`;
@@ -348,44 +476,51 @@ export function shouldUseHumanColor(options: {
   );
 }
 
+/**
+ * Finding card: a priority-colored bar anchors line 1 (bar + P-label + title), then meta and
+ * body share one hanging indent so the eye tracks a single left rail.
+ */
 function renderFindingCard(
   finding: RenderFinding,
-  style: ReturnType<typeof createStyle>,
+  style: HumanStyle,
+  glyphs: typeof asciiGlyphs,
+  width: number,
+  cwd: string,
 ): string[] {
+  const paint =
+    finding.priority !== undefined && finding.priority <= 1
+      ? style.danger
+      : finding.priority === 2
+        ? style.warning
+        : style.muted;
+  const label = finding.priority === undefined ? "P?" : `P${finding.priority}`;
   const location = finding.code_location;
-  const reviewers =
-    finding.reviewer_ids === undefined || finding.reviewer_ids.length === 0
-      ? ""
-      : ` · ${finding.reviewer_ids.join(", ")}`;
-  const lanes =
-    finding.lane_ids === undefined || finding.lane_ids.length === 0
-      ? ""
-      : ` · lanes ${finding.lane_ids.join(", ")}`;
+  const file = shortenPath(location.absolute_file_path, cwd);
+  const range =
+    location.line_range.start === location.line_range.end
+      ? `${location.line_range.start}`
+      : `${location.line_range.start}-${location.line_range.end}`;
+  const metaParts = [
+    `${file}:${range}`,
+    ...(finding.reviewer_ids !== undefined && finding.reviewer_ids.length > 0
+      ? [finding.reviewer_ids.join(", ")]
+      : []),
+    ...(finding.lane_ids !== undefined && finding.lane_ids.length > 0
+      ? [`lanes ${finding.lane_ids.join(", ")}`]
+      : []),
+    `confidence ${formatConfidence(finding.confidence_score)}`,
+  ];
   return [
-    `- ${style.priority(finding.priority)} ${finding.title}`,
-    `  ${location.absolute_file_path}:${location.line_range.start}-${location.line_range.end}${reviewers}${lanes}`,
-    `  ${finding.body.replaceAll("\n", "\n  ")}`,
+    `${paint(glyphs.spine)} ${style.bold(paint(label))}  ${style.bold(finding.title)}`,
+    style.muted(`   ${metaParts.join(` ${glyphs.dot} `)}`),
+    ...wrapText(finding.body, width, "   "),
   ];
 }
 
-function formatFindingCount(
-  total: number,
-  counts: FindingCounts,
-  style: ReturnType<typeof createStyle>,
-): string {
-  if (total === 0) {
-    return style.success("0");
-  }
-
-  const parts = [
-    counts.p0 > 0 ? `${style.danger("P0")} ${counts.p0}` : undefined,
-    counts.p1 > 0 ? `${style.danger("P1")} ${counts.p1}` : undefined,
-    counts.p2 > 0 ? `${style.warning("P2")} ${counts.p2}` : undefined,
-    counts.p3 > 0 ? `${style.accent("P3")} ${counts.p3}` : undefined,
-    counts.unspecified > 0 ? `Unspecified ${counts.unspecified}` : undefined,
-  ].filter((part): part is string => part !== undefined);
-
-  return `${total} (${parts.join(", ")})`;
+/** Repo-relative when the file sits under the run's cwd — absolute paths bloat every card. */
+function shortenPath(absolutePath: string, cwd: string): string {
+  const relative = path.relative(cwd, absolutePath);
+  return relative !== "" && !relative.startsWith("..") ? relative : absolutePath;
 }
 
 function formatAgentFindingCount(total: number, counts: FindingCounts): string {
@@ -531,12 +666,14 @@ function prioritySortValue(finding: RenderFinding): number {
   return finding.priority ?? 4;
 }
 
+// Referenced by helper signatures above — fine: type alias declarations hoist across the module.
 export type HumanStyle = ReturnType<typeof createStyle>;
 
 export function createStyle(options: HumanReviewRenderOptions) {
   const enabled = options.color === true;
   return {
     accent: (value: string) => color(value, 36, enabled),
+    bold: (value: string) => color(value, 1, enabled),
     danger: (value: string) => color(value, 31, enabled),
     heading: (value: string) => color(value, 35, enabled),
     muted: (value: string) => color(value, 90, enabled),

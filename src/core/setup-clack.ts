@@ -36,8 +36,8 @@ import {
  * never construct a raw-mode prompt (clack's setRawMode would otherwise hang on a non-TTY pipe). All
  * prompts render to stderr via `io`, keeping stdout clean for the machine-readable result.
  *
- * Exposes per-reviewer transport / model / effort / id; reviewer sets and the default set stay
- * locked (no write-path or discovery change). For multi-transport engines the transport field lists
+ * Exposes per-reviewer transport / model / effort / id / enabled, plus a reviewer-set editor
+ * (membership + default-set designation). For multi-transport engines the transport field lists
  * each option with its discovered readiness, so switching surfaces auth gaps (e.g. cursor-sdk needs
  * CURSOR_API_KEY) instead of hiding them. Reviewers that are not `available` are shown as disabled
  * context rows with the reason they are not ready — surfaced, not silently dropped.
@@ -140,6 +140,9 @@ export function reviewerHint(draft: Draft): string {
   }
   if (supports.effort && draft.effort !== undefined) {
     parts.push(`effort ${draft.effort}`);
+  }
+  if (draft.enabled === false) {
+    parts.push("disabled");
   }
   return parts.length > 0 ? parts.join(" · ") : "defaults";
 }
@@ -262,6 +265,10 @@ async function runReviewerConfigureFlow(options: {
   // by the stable discovery id so per-reviewer edits survive stepping back to re-pick reviewers.
   const draftsById = new Map<string, Draft>();
 
+  // F4: an accidental Enter on an empty selection used to hard-abort the whole flow. Warn and
+  // re-prompt once; only a second consecutive empty confirm quits.
+  let warnedEmptySelection = false;
+
   while (true) {
     const readyOptions = options.ready.map((entry) => {
       const draft = draftsById.get(entry.id) ?? toDraft(entry);
@@ -304,9 +311,15 @@ async function runReviewerConfigureFlow(options: {
       .map((entry) => draftsById.get(entry.id))
       .filter((entry): entry is Draft => entry !== undefined);
     if (draft.length === 0) {
+      if (!warnedEmptySelection) {
+        warnedEmptySelection = true;
+        log.warn("Nothing selected — space toggles a reviewer. Enter again to quit.", io);
+        continue;
+      }
       cancel("No reviewers selected — nothing written.", io);
       return undefined;
     }
+    warnedEmptySelection = false;
 
     const outcome = await configureLoop(
       draft,
@@ -669,6 +682,10 @@ async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promi
         ...io,
       });
       if (isCancel(value)) {
+        // F8: clack commits the cancelled prompt's typed query to scrollback (strikethrough is
+        // unreliable, e.g. under tmux), where it reads like a committed model. State the truth
+        // right below it so the ghost cannot be misread.
+        log.info(modelUnchangedNote(entry), io);
         return "continue";
       }
       if (value === QUIT) {
@@ -692,11 +709,17 @@ async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promi
     ...io,
   });
   if (isCancel(value)) {
+    log.info(modelUnchangedNote(entry), io);
     return "continue";
   }
   const trimmed = value.trim();
   entry.model = trimmed === "" ? undefined : trimmed;
   return "continue";
+}
+
+/** F8 cancel note: names the value actually kept, so a cancelled prompt's ghost cannot mislead. */
+function modelUnchangedNote(entry: Draft): string {
+  return `model unchanged — kept ${entry.model ?? "engine default"}`;
 }
 
 /**
@@ -830,6 +853,9 @@ async function editReviewer(
         modelFieldRow(entry),
         effortFieldRow(entry),
         { value: "id", label: "id", hint: entry.id },
+        // Present at add time too: some users configure reviewers disabled up front and only
+        // enable them later (often via an agent) when they are ready to spend that budget.
+        enabledFieldRow(entry),
         { value: "back", label: "← back" },
         quitOption,
       ],
@@ -851,9 +877,141 @@ async function editReviewer(
       outcome = await editEffortField(entry, catalog);
     } else if (field === "id") {
       outcome = await editIdField(entry, draft, reservedIds);
+    } else if (field === "enabled") {
+      outcome = await editEnabledField(entry);
     }
     if (outcome === "quit") {
       return "quit";
     }
   }
+}
+
+/**
+ * Interactive reviewer-set editor (the bare `reviewers set` flow): pick a set (or create
+ * one), toggle membership with current members pre-checked, and optionally make it the
+ * default set. Returns the full replacement to persist, or undefined when the user cancels.
+ * The caller does the atomic write (replaceReviewerSetInUserConfig) with the read-time sha.
+ */
+export async function runClackReviewerSetEdit(options: {
+  reviewers: ConfiguredReviewerSummary[];
+  sets: Record<string, string[]>;
+  defaultReviewerSet: string | undefined;
+  configPath: string;
+}): Promise<{ setName: string; members: string[]; makeDefault: boolean } | undefined> {
+  intro("diffwarden · reviewer sets", io);
+
+  // Set names are unrestricted strings, so option values are index-keyed (`set:<i>`) rather
+  // than the names themselves — no set name can collide with the new-set control row.
+  const NEW_SET = "new";
+  const setNames = Object.keys(options.sets);
+  const picked = await select({
+    message: "Select a reviewer set to edit (Esc to cancel)",
+    options: [
+      ...setNames.map((name, index) => ({
+        value: `set:${index}`,
+        label: name,
+        hint: `${(options.sets[name] ?? []).join(", ") || "empty"}${
+          name === options.defaultReviewerSet ? " · default" : ""
+        }`,
+      })),
+      { value: NEW_SET, label: "＋ new set…", hint: "create a reviewer set" },
+    ],
+    ...io,
+  });
+  if (isCancel(picked)) {
+    cancel("Cancelled — nothing written.", io);
+    return undefined;
+  }
+
+  let setName = picked.startsWith("set:")
+    ? (setNames[Number.parseInt(picked.slice(4), 10)] ?? "")
+    : picked;
+  if (picked === NEW_SET) {
+    const typed = await text({
+      message: "Name for the new set (Esc to cancel)",
+      validate(value) {
+        const trimmed = (value ?? "").trim();
+        if (trimmed === "") {
+          return "Set name cannot be empty";
+        }
+        if (setNames.includes(trimmed)) {
+          return `Set "${trimmed}" already exists — pick it from the list instead`;
+        }
+        return undefined;
+      },
+      ...io,
+    });
+    if (isCancel(typed)) {
+      cancel("Cancelled — nothing written.", io);
+      return undefined;
+    }
+    setName = typed.trim();
+  }
+
+  const currentMembers = options.sets[setName] ?? [];
+  const isDefault = setName === options.defaultReviewerSet;
+
+  // Same warn-then-abort shape as the reviewer multiselect (F4): an accidental empty Enter
+  // must not commit. Emptying the DEFAULT set is refused outright — the write-path guard
+  // would reject it anyway; failing here keeps the refusal interactive instead of terminal.
+  let warnedEmptySelection = false;
+  let members: string[];
+  // Re-prompts (the empty-selection warning) must reopen with the user's LAST selection, not
+  // the original membership — otherwise "Enter again to save an empty set" would silently
+  // restore and save the members the user just deselected.
+  let initialMembers = currentMembers.filter((member) =>
+    options.reviewers.some((reviewer) => reviewer.id === member),
+  );
+  while (true) {
+    const pickedMembers = await multiselect({
+      message: `Members of "${setName}"  (space toggles · enter confirms · Esc cancels)`,
+      options: options.reviewers.map((reviewer) => ({
+        value: reviewer.id,
+        label: reviewer.id,
+        hint: `${reviewer.engine}${reviewer.enabled ? "" : " · disabled"}`,
+      })),
+      initialValues: initialMembers,
+      required: false,
+      ...io,
+    });
+    if (isCancel(pickedMembers)) {
+      cancel("Cancelled — nothing written.", io);
+      return undefined;
+    }
+    if (pickedMembers.length === 0) {
+      if (isDefault) {
+        cancel(`"${setName}" is the default reviewer set and cannot be emptied.`, io);
+        return undefined;
+      }
+      if (!warnedEmptySelection) {
+        warnedEmptySelection = true;
+        initialMembers = [];
+        log.warn(
+          "Nothing selected — space toggles a reviewer. Enter again to save an empty set.",
+          io,
+        );
+        continue;
+      }
+    }
+    members = pickedMembers;
+    break;
+  }
+
+  let makeDefault = false;
+  if (!isDefault && members.length > 0) {
+    const answer = await confirm({
+      message: `Make "${setName}" the default reviewer set?${
+        options.defaultReviewerSet !== undefined
+          ? `  (currently "${options.defaultReviewerSet}")`
+          : ""
+      }`,
+      initialValue: options.defaultReviewerSet === undefined,
+      ...io,
+    });
+    // Esc on the default question is a "no", not a flow cancel: the membership edit stands.
+    makeDefault = answer === true;
+  }
+
+  outro(`Updating reviewer set "${setName}" in ${options.configPath}`, io);
+  return { setName, members, makeDefault };
 }
