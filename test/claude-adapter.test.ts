@@ -1345,14 +1345,17 @@ describe("claudeAdapter", () => {
     });
 
     expect(models).toEqual([
+      // Unknown effort support (no supportsEffort flag) stays un-narrowed.
       { value: "default", displayName: "Default (recommended)" },
+      // Native levels plus always-deliverable "off" and low-backed "minimal".
       {
         value: "sonnet",
         displayName: "Sonnet",
-        supportedEffortLevels: ["low", "medium", "high", "max"],
+        supportedEffortLevels: ["off", "minimal", "low", "medium", "high", "max"],
         default: true,
       },
-      { value: "haiku", displayName: "Haiku" },
+      // Declared no effort support narrows to off-only.
+      { value: "haiku", displayName: "Haiku", supportedEffortLevels: ["off"] },
     ]);
     // Same locked-down query options as model preflight; the query is closed after use.
     expect(calls[0]?.options).toMatchObject({
@@ -1363,6 +1366,30 @@ describe("claudeAdapter", () => {
       persistSession: false,
     });
     expect(closeCalls()).toBe(1);
+  });
+
+  it("classifies a listModels auth failure into one actionable sentence", async () => {
+    const { adapter, closeCalls } = createThrowingClaudeListAdapter(
+      new Error("Request failed with status 401 Unauthorized"),
+    );
+    await expect(
+      adapter.listModels?.({
+        reviewer: { id: "claude", sdk: "claude", readonly: true },
+        env: { ANTHROPIC_API_KEY: "test-key" },
+      }),
+    ).rejects.toThrow('claude is not authenticated — run "claude /login" or set ANTHROPIC_API_KEY');
+    // The query is still closed when the fetch fails.
+    expect(closeCalls()).toBe(1);
+  });
+
+  it("passes non-auth listModels failures through unclassified", async () => {
+    const { adapter } = createThrowingClaudeListAdapter(new Error("connect ECONNREFUSED"));
+    await expect(
+      adapter.listModels?.({
+        reviewer: { id: "claude", sdk: "claude", readonly: true },
+        env: { ANTHROPIC_API_KEY: "test-key" },
+      }),
+    ).rejects.toThrow("connect ECONNREFUSED");
   });
 
   it.skipIf(isIntegrationDisabled("claude"))(
@@ -1608,6 +1635,29 @@ function createMockClaudeStreamAdapter(messages: MockClaudeStreamMessage[]) {
   });
 
   return { adapter, calls };
+}
+
+function createThrowingClaudeListAdapter(error: Error) {
+  let closed = 0;
+  const adapter = createClaudeAdapter({
+    async loadSdk() {
+      return {
+        query: () => ({
+          async *[Symbol.asyncIterator]() {},
+          async supportedModels() {
+            throw error;
+          },
+          close() {
+            closed += 1;
+          },
+        }),
+      };
+    },
+    async resolveRuntime() {
+      return { authMode: "api-key", authPreference: "auto" };
+    },
+  });
+  return { adapter, closeCalls: () => closed };
 }
 
 function createMockClaudePreflightAdapter(

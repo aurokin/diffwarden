@@ -33,12 +33,23 @@ export type ModelCatalogFetch = (
 
 const defaultCatalogTimeoutMs = 10_000;
 
-/** Engines with a listModels implementation; gate with reviewerSupportsModelCatalog per transport. */
+/**
+ * Engine → listing adapter. Deliberately decoupled from the draft's configured transport
+ * (e.g. codex will always list via app-server regardless of the review transport); the
+ * per-transport `reviewerSupportsModelCatalog` gate stays the caller-side guard.
+ */
+const catalogListers: Partial<
+  Record<ReviewerSdk, (input: ListModelsInput) => Promise<ModelCatalogEntry[]>>
+> = {
+  ...(claudeAdapter.listModels !== undefined ? { claude: claudeAdapter.listModels } : {}),
+};
+
 const catalogFetch: ModelCatalogFetch = (engine, input) => {
-  if (engine === "claude" && claudeAdapter.listModels !== undefined) {
-    return claudeAdapter.listModels(input);
+  const list = catalogListers[engine];
+  if (list === undefined) {
+    return Promise.reject(new Error(`No model catalog for engine: ${engine}`));
   }
-  return Promise.reject(new Error(`No model catalog for engine: ${engine}`));
+  return list(input);
 };
 
 export type ModelCatalogSession = {
@@ -82,7 +93,11 @@ export function createModelCatalogSession(
         return inFlight;
       }
       const attempt = runCatalogFetch(fetch, draft, env, timeoutMs).then((result) => {
-        cache.set(cacheKey, result);
+        // Cache successes only: the dominant failure mode is "go log in and come back",
+        // and a session-long negative cache would defeat exactly that recovery.
+        if (result.status === "ok") {
+          cache.set(cacheKey, result);
+        }
         pending.delete(cacheKey);
         return result;
       });
@@ -112,6 +127,8 @@ async function runCatalogFetch(
       readonly: true,
     },
     env,
+    // Some listing surfaces (copilot's staged workspace) need a directory to run from.
+    cwd: process.cwd(),
   };
 
   // Abort the underlying fetch on timeout so a hung auth probe/SDK query does not
@@ -178,11 +195,11 @@ export function buildModelSelectOptions(
 }
 
 /**
- * Effort choices narrowed by the catalog: when the draft's effective model carries
- * supportedEffortLevels, keep only those, plus "off" (disables reasoning rather than selecting a
- * level) and "minimal" whenever "low" is supported (diffwarden maps minimal to native low, so it
- * is valid exactly when low is). Returns undefined when the catalog cannot narrow — caller keeps
- * the full menu.
+ * Effort choices narrowed by the catalog: pure intersection with the effective model's
+ * supportedEffortLevels, in menu order. Adapters are authoritative — each catalog entry lists
+ * exactly the diffwarden levels deliverable to that model over the effective transport (including
+ * "off"/"minimal" when applicable), so no shared re-add rules belong here. Returns undefined when
+ * the catalog cannot narrow — caller keeps the full menu.
  */
 export function catalogEffortChoices(
   result: ModelCatalogResult | undefined,
@@ -198,10 +215,5 @@ export function catalogEffortChoices(
   if (levels === undefined || levels.length === 0) {
     return undefined;
   }
-  return allChoices.filter(
-    (choice) =>
-      choice === "off" ||
-      levels.includes(choice) ||
-      (choice === "minimal" && levels.includes("low")),
-  );
+  return allChoices.filter((choice) => levels.includes(choice));
 }
