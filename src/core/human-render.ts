@@ -173,17 +173,23 @@ function renderVerdictBanner(
 
 function consensusClause(artifact: ReviewRunArtifact): string | undefined {
   if (isBatchArtifact(artifact)) {
-    const flagged = artifact.lanes.filter(
-      (lane) =>
-        lane.status === "failed" ||
-        lane.artifact.result.overall_correctness === "patch is incorrect",
-    ).length;
     const total = artifact.lanes.length;
     if (total < 2) {
       return undefined;
     }
-    return flagged > 0
-      ? `${flagged} of ${total} lanes flagged`
+    // A lane that failed to run did not flag anything — it is reported as failed, exactly
+    // like reviewer failures in the single-run path.
+    const flagged = artifact.lanes.filter(
+      (lane) =>
+        lane.status === "success" &&
+        lane.artifact.result.overall_correctness === "patch is incorrect",
+    ).length;
+    const failed = artifact.lanes.filter((lane) => lane.status === "failed").length;
+    if (flagged > 0) {
+      return `${flagged} of ${total} lanes flagged`;
+    }
+    return failed > 0
+      ? `${total - failed} of ${total} lanes agree, ${failed} failed`
       : `${total} of ${total} lanes agree`;
   }
   // The denominator counts every reviewer that RAN, failures included — "2 of 2 agree" with

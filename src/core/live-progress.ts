@@ -112,7 +112,13 @@ export function createLiveReviewProgress(options: LiveProgressOptions): LiveRevi
       }
     }
     const pending = [...rows.values()];
-    const shown = pending.slice(0, maxVolatileRows);
+    // Also bounded by the live pane height: a block taller than the screen clamps cursor-up
+    // at the top and later redraws can no longer erase what scrolled — leave headroom for
+    // the committed line being written above plus the shell prompt.
+    const paneCap =
+      typeof stream.rows === "number" ? Math.max(stream.rows - 4, 1) : maxVolatileRows;
+    const cap = Math.min(maxVolatileRows, paneCap);
+    const shown = pending.slice(0, cap);
     const hidden = pending.length - shown.length;
     const lines = shown.map(renderVolatileRow);
     if (hidden > 0) {

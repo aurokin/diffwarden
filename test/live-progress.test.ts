@@ -223,6 +223,42 @@ describe("createLiveReviewProgress", () => {
     expect(afterResize).not.toContain("[1A");
   });
 
+  it("caps the volatile block to the pane height so cursor-up can always erase it", () => {
+    let buffer = "";
+    const stream = {
+      columns: 100,
+      rows: 6, // tiny pane: cap = rows - 4 = 2 volatile rows max
+      write(chunk: string) {
+        buffer += chunk;
+        return true;
+      },
+    };
+    const progress = createLiveReviewProgress({
+      stream: stream as never,
+      color: false,
+      glyphs: asciiGlyphs,
+      now: () => 0,
+      intervalMs: 60_000,
+    });
+    progress.handleEvent({
+      schema_version: 2,
+      type: "run_started",
+      cwd: "/repo",
+      target,
+      reviewers: Array.from({ length: 5 }, (_, index) => ({
+        id: `r${index}`,
+        engine: "fake" as const,
+      })),
+    });
+    // First paint: header committed, then at most 2 rows + the "+N more" line.
+    const volatile = buffer
+      .split("\n")
+      .filter((line) => line.includes("waiting") || line.includes("more"));
+    expect(volatile.filter((line) => line.includes("waiting"))).toHaveLength(2);
+    expect(volatile.some((line) => line.includes("+3 more"))).toBe(true);
+    progress.finish();
+  });
+
   it("stays quiet after finish and never throws on late events", () => {
     const { output, stream } = fakeStream();
     const progress = makeProgress(stream, () => 0);
