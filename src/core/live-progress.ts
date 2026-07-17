@@ -38,7 +38,9 @@ type Row = {
   startedAt: number | undefined;
 };
 
-const runStates = ["live", "correct", "flagged", "uncertain", "failed"] as const;
+// Ordered by severity: escalate() only ever moves rightward, so a flagged (red) run can never
+// be softened back to uncertain (yellow) by a later uncertain reviewer.
+const runStates = ["live", "correct", "uncertain", "flagged", "failed"] as const;
 type RunState = (typeof runStates)[number];
 
 /** Cap the volatile block so a huge reviewer set cannot outgrow a small pane. */

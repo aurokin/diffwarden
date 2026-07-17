@@ -186,19 +186,27 @@ function consensusClause(artifact: ReviewRunArtifact): string | undefined {
       ? `${flagged} of ${total} lanes flagged`
       : `${total} of ${total} lanes agree`;
   }
-  const settled =
-    artifact.reviewers?.filter(
-      (reviewer) => reviewer.status !== "failed" && reviewer.result !== undefined,
-    ) ?? [];
-  if (settled.length < 2) {
+  // The denominator counts every reviewer that RAN, failures included — "2 of 2 agree" with
+  // a third reviewer down would be a false consensus. Failures also surface as their own
+  // lines below the banner.
+  const reviewers = artifact.reviewers ?? [];
+  const total = reviewers.length;
+  if (total < 2) {
     return undefined;
   }
+  const settled = reviewers.filter(
+    (reviewer) => reviewer.status !== "failed" && reviewer.result !== undefined,
+  );
   const flagged = settled.filter(
     (reviewer) => reviewer.result?.overall_correctness === "patch is incorrect",
   ).length;
-  return flagged > 0
-    ? `${flagged} of ${settled.length} reviewers flagged`
-    : `${settled.length} of ${settled.length} reviewers agree`;
+  const failed = total - settled.length;
+  if (flagged > 0) {
+    return `${flagged} of ${total} reviewers flagged`;
+  }
+  return failed > 0
+    ? `${settled.length} of ${total} reviewers agree, ${failed} failed`
+    : `${total} of ${total} reviewers agree`;
 }
 
 function bannerMeta(artifact: ReviewRunArtifact, glyphs: typeof asciiGlyphs): string {
@@ -490,26 +498,6 @@ function renderFindingCard(
 function shortenPath(absolutePath: string, cwd: string): string {
   const relative = path.relative(cwd, absolutePath);
   return relative !== "" && !relative.startsWith("..") ? relative : absolutePath;
-}
-
-function formatFindingCount(
-  total: number,
-  counts: FindingCounts,
-  style: ReturnType<typeof createStyle>,
-): string {
-  if (total === 0) {
-    return style.success("0");
-  }
-
-  const parts = [
-    counts.p0 > 0 ? `${style.danger("P0")} ${counts.p0}` : undefined,
-    counts.p1 > 0 ? `${style.danger("P1")} ${counts.p1}` : undefined,
-    counts.p2 > 0 ? `${style.warning("P2")} ${counts.p2}` : undefined,
-    counts.p3 > 0 ? `${style.accent("P3")} ${counts.p3}` : undefined,
-    counts.unspecified > 0 ? `Unspecified ${counts.unspecified}` : undefined,
-  ].filter((part): part is string => part !== undefined);
-
-  return `${total} (${parts.join(", ")})`;
 }
 
 function formatAgentFindingCount(total: number, counts: FindingCounts): string {
