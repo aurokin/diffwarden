@@ -22,11 +22,13 @@ import {
   createDiscoveredUserConfig,
   editReviewerInUserConfig,
   initDiffwardenConfig,
+  listUserConfigReviewerSets,
   listUserConfigReviewers,
   loadDiffwardenConfig,
   loadUserConfigReviewerEntries,
   removeReviewerFromSetInUserConfig,
   removeReviewerFromUserConfig,
+  replaceReviewerSetInUserConfig,
   setReviewerInUserConfig,
   userConfigPath,
 } from "./core/config.js";
@@ -81,6 +83,7 @@ import {
   runClackReviewerAdd,
   runClackReviewerEdit,
   runClackReviewerRemove,
+  runClackReviewerSetEdit,
   runClackReviewerSetup,
 } from "./core/setup-clack.js";
 import { parseTargetSpec } from "./core/target.js";
@@ -603,7 +606,57 @@ reviewers
 
 const reviewerSet = reviewers
   .command("set")
-  .description("Manage reviewer set membership in the user config.");
+  .description(
+    "Manage reviewer sets in the user config. Bare `reviewers set` opens the interactive editor in a TTY.",
+  )
+  .action(async () => {
+    // Bare `reviewers set`: interactive editor (membership + default-set designation) in a
+    // TTY; non-TTY callers must use the declarative add/remove subcommands.
+    if (!isInteractiveAvailable(process.stdin)) {
+      throw invalidCli(
+        "reviewers set is interactive and requires a TTY. Use `reviewers set add <set> <reviewer>` / `reviewers set remove <set> <reviewer>` instead.",
+      );
+    }
+    await runClackSetFlow();
+  });
+
+async function runClackSetFlow(): Promise<void> {
+  const { path: configPath, reviewers: configured } = await listUserConfigReviewers({
+    env: process.env,
+  });
+  if (configured.length === 0) {
+    process.stdout.write("No configured reviewers — add reviewers before editing sets.\n");
+    return;
+  }
+  const { sets, defaultReviewerSet, sha256 } = await listUserConfigReviewerSets({
+    env: process.env,
+  });
+
+  const edited = await runClackReviewerSetEdit({
+    reviewers: configured,
+    sets,
+    defaultReviewerSet,
+    configPath,
+  });
+  if (edited === undefined) {
+    process.stdout.write("Aborted.\n");
+    return;
+  }
+
+  const result = await replaceReviewerSetInUserConfig({
+    setName: edited.setName,
+    members: edited.members,
+    ...(edited.makeDefault ? { makeDefault: true } : {}),
+    env: process.env,
+    // Abort instead of clobbering a concurrent config change made while the prompts were open.
+    expectedSha256: sha256,
+  });
+  process.stdout.write(
+    `Updated reviewer set ${edited.setName} (${
+      result.members.length === 0 ? "empty" : result.members.join(", ")
+    })${edited.makeDefault ? " · now the default set" : ""} in ${result.path}\n`,
+  );
+}
 
 reviewerSet
   .command("add <set> <reviewer>")

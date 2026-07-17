@@ -36,8 +36,8 @@ import {
  * never construct a raw-mode prompt (clack's setRawMode would otherwise hang on a non-TTY pipe). All
  * prompts render to stderr via `io`, keeping stdout clean for the machine-readable result.
  *
- * Exposes per-reviewer transport / model / effort / id; reviewer sets and the default set stay
- * locked (no write-path or discovery change). For multi-transport engines the transport field lists
+ * Exposes per-reviewer transport / model / effort / id / enabled, plus a reviewer-set editor
+ * (membership + default-set designation). For multi-transport engines the transport field lists
  * each option with its discovered readiness, so switching surfaces auth gaps (e.g. cursor-sdk needs
  * CURSOR_API_KEY) instead of hiding them. Reviewers that are not `available` are shown as disabled
  * context rows with the reason they are not ready — surfaced, not silently dropped.
@@ -140,6 +140,9 @@ export function reviewerHint(draft: Draft): string {
   }
   if (supports.effort && draft.effort !== undefined) {
     parts.push(`effort ${draft.effort}`);
+  }
+  if (draft.enabled === false) {
+    parts.push("disabled");
   }
   return parts.length > 0 ? parts.join(" · ") : "defaults";
 }
@@ -850,6 +853,9 @@ async function editReviewer(
         modelFieldRow(entry),
         effortFieldRow(entry),
         { value: "id", label: "id", hint: entry.id },
+        // Present at add time too: some users configure reviewers disabled up front and only
+        // enable them later (often via an agent) when they are ready to spend that budget.
+        enabledFieldRow(entry),
         { value: "back", label: "← back" },
         quitOption,
       ],
@@ -871,9 +877,132 @@ async function editReviewer(
       outcome = await editEffortField(entry, catalog);
     } else if (field === "id") {
       outcome = await editIdField(entry, draft, reservedIds);
+    } else if (field === "enabled") {
+      outcome = await editEnabledField(entry);
     }
     if (outcome === "quit") {
       return "quit";
     }
   }
+}
+
+/**
+ * Interactive reviewer-set editor (the bare `reviewers set` flow): pick a set (or create
+ * one), toggle membership with current members pre-checked, and optionally make it the
+ * default set. Returns the full replacement to persist, or undefined when the user cancels.
+ * The caller does the atomic write (replaceReviewerSetInUserConfig) with the read-time sha.
+ */
+export async function runClackReviewerSetEdit(options: {
+  reviewers: ConfiguredReviewerSummary[];
+  sets: Record<string, string[]>;
+  defaultReviewerSet: string | undefined;
+  configPath: string;
+}): Promise<{ setName: string; members: string[]; makeDefault: boolean } | undefined> {
+  intro("diffwarden · reviewer sets", io);
+
+  const NEW_SET = "__new_set__";
+  const setNames = Object.keys(options.sets);
+  const picked = await select({
+    message: "Select a reviewer set to edit (Esc to cancel)",
+    options: [
+      ...setNames.map((name) => ({
+        value: name,
+        label: name,
+        hint: `${(options.sets[name] ?? []).join(", ") || "empty"}${
+          name === options.defaultReviewerSet ? " · default" : ""
+        }`,
+      })),
+      { value: NEW_SET, label: "＋ new set…", hint: "create a reviewer set" },
+    ],
+    ...io,
+  });
+  if (isCancel(picked)) {
+    cancel("Cancelled — nothing written.", io);
+    return undefined;
+  }
+
+  let setName = picked;
+  if (picked === NEW_SET) {
+    const typed = await text({
+      message: "Name for the new set (Esc to cancel)",
+      validate(value) {
+        const trimmed = (value ?? "").trim();
+        if (trimmed === "") {
+          return "Set name cannot be empty";
+        }
+        if (setNames.includes(trimmed)) {
+          return `Set "${trimmed}" already exists — pick it from the list instead`;
+        }
+        return undefined;
+      },
+      ...io,
+    });
+    if (isCancel(typed)) {
+      cancel("Cancelled — nothing written.", io);
+      return undefined;
+    }
+    setName = typed.trim();
+  }
+
+  const currentMembers = options.sets[setName] ?? [];
+  const isDefault = setName === options.defaultReviewerSet;
+
+  // Same warn-then-abort shape as the reviewer multiselect (F4): an accidental empty Enter
+  // must not commit. Emptying the DEFAULT set is refused outright — the write-path guard
+  // would reject it anyway; failing here keeps the refusal interactive instead of terminal.
+  let warnedEmptySelection = false;
+  let members: string[];
+  while (true) {
+    const pickedMembers = await multiselect({
+      message: `Members of "${setName}"  (space toggles · enter confirms · Esc cancels)`,
+      options: options.reviewers.map((reviewer) => ({
+        value: reviewer.id,
+        label: reviewer.id,
+        hint: `${reviewer.engine}${reviewer.enabled ? "" : " · disabled"}`,
+      })),
+      initialValues: currentMembers.filter((member) =>
+        options.reviewers.some((reviewer) => reviewer.id === member),
+      ),
+      required: false,
+      ...io,
+    });
+    if (isCancel(pickedMembers)) {
+      cancel("Cancelled — nothing written.", io);
+      return undefined;
+    }
+    if (pickedMembers.length === 0) {
+      if (isDefault) {
+        cancel(`"${setName}" is the default reviewer set and cannot be emptied.`, io);
+        return undefined;
+      }
+      if (!warnedEmptySelection) {
+        warnedEmptySelection = true;
+        log.warn(
+          "Nothing selected — space toggles a reviewer. Enter again to save an empty set.",
+          io,
+        );
+        continue;
+      }
+    }
+    members = pickedMembers;
+    break;
+  }
+
+  let makeDefault = false;
+  if (!isDefault && members.length > 0) {
+    const answer = await confirm({
+      message: `Make "${setName}" the default reviewer set?${
+        options.defaultReviewerSet !== undefined
+          ? `  (currently "${options.defaultReviewerSet}")`
+          : ""
+      }`,
+      initialValue: options.defaultReviewerSet === undefined,
+      ...io,
+    });
+    // Esc on the default question is a "no", not a flow cancel: the membership edit stands.
+    makeDefault = answer === true;
+  }
+
+  outro(`Updating reviewer set "${setName}" in ${options.configPath}`, io);
+  return { setName, members, makeDefault };
 }
