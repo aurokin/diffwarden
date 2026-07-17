@@ -250,12 +250,14 @@ describe("createLiveReviewProgress", () => {
         engine: "fake" as const,
       })),
     });
-    // First paint: header committed, then at most 2 rows + the "+N more" line.
+    // First paint: header committed, then the volatile block — including the "+N more"
+    // indicator — must fit inside the 2-line cap, or cursor-up cannot erase it.
     const volatile = buffer
       .split("\n")
       .filter((line) => line.includes("waiting") || line.includes("more"));
-    expect(volatile.filter((line) => line.includes("waiting"))).toHaveLength(2);
-    expect(volatile.some((line) => line.includes("+3 more"))).toBe(true);
+    expect(volatile).toHaveLength(2);
+    expect(volatile.filter((line) => line.includes("waiting"))).toHaveLength(1);
+    expect(volatile.some((line) => line.includes("+4 more"))).toBe(true);
     progress.finish();
   });
 

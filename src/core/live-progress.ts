@@ -118,7 +118,9 @@ export function createLiveReviewProgress(options: LiveProgressOptions): LiveRevi
     const paneCap =
       typeof stream.rows === "number" ? Math.max(stream.rows - 4, 1) : maxVolatileRows;
     const cap = Math.min(maxVolatileRows, paneCap);
-    const shown = pending.slice(0, cap);
+    // The "+N more" indicator occupies a volatile line too: when rows overflow, show one
+    // fewer so the whole block never exceeds cap and stays erasable by cursor-up.
+    const shown = pending.length > cap ? pending.slice(0, Math.max(cap - 1, 0)) : pending;
     const hidden = pending.length - shown.length;
     const lines = shown.map(renderVolatileRow);
     if (hidden > 0) {
