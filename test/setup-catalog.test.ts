@@ -31,7 +31,7 @@ function sampleModels(): ModelCatalogEntry[] {
       value: "sonnet",
       displayName: "Sonnet",
       description: "balanced",
-      supportedEffortLevels: ["low", "medium", "high", "max"],
+      supportedEffortLevels: ["off", "minimal", "low", "medium", "high", "max"],
       default: true,
     },
   ];
@@ -79,6 +79,7 @@ describe("createModelCatalogSession", () => {
     expect(inputs[0]).toMatchObject({
       reviewer: { id: "claude-main", sdk: "claude", model: "sonnet", readonly: true },
       env,
+      cwd: process.cwd(),
     });
     expect((inputs[0] as { signal?: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
   });
@@ -94,8 +95,27 @@ describe("createModelCatalogSession", () => {
       status: "unavailable",
       reason: "Claude model preflight authentication failed",
     });
-    // Failures cache too: never re-run auth probes inside a prompt loop.
-    expect(session.peek(claudeDraft())?.status).toBe("unavailable");
+  });
+
+  it("does not cache unavailable results, so re-entering a field re-probes", async () => {
+    let calls = 0;
+    const session = createModelCatalogSession({
+      fetch: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("not authenticated");
+        }
+        return sampleModels();
+      },
+    });
+
+    expect((await session.fetch(claudeDraft())).status).toBe("unavailable");
+    // The failure is not pinned for the session: logging in and re-entering recovers.
+    expect(session.peek(claudeDraft())).toBeUndefined();
+    expect((await session.fetch(claudeDraft())).status).toBe("ok");
+    expect(calls).toBe(2);
+    // The success is cached as usual.
+    expect(session.peek(claudeDraft())?.status).toBe("ok");
   });
 
   it("degrades an empty catalog to unavailable", async () => {
@@ -178,17 +198,21 @@ describe("buildModelSelectOptions", () => {
 describe("catalogEffortChoices", () => {
   const okResult: ModelCatalogResult = { status: "ok", models: sampleModels() };
 
-  it("narrows to the catalog's levels plus off and low-backed minimal", () => {
-    // minimal maps to native low, so it stays whenever low is supported.
+  it("intersects the menu with the entry's levels, preserving menu order", () => {
     expect(catalogEffortChoices(okResult, claudeDraft({ model: "sonnet" }), effortChoices)).toEqual(
       ["off", "minimal", "low", "medium", "high", "max"],
     );
-    const noLow: ModelCatalogResult = {
+  });
+
+  it("never re-adds levels the adapter did not advertise (mappers are authoritative)", () => {
+    // e.g. copilot's SDK cannot disable reasoning, so its entries omit "off"; the shared
+    // narrowing must not resurrect it — and "minimal" only appears when the adapter emits it.
+    const narrow: ModelCatalogResult = {
       status: "ok",
-      models: [{ value: "sonnet", supportedEffortLevels: ["medium", "high"] }],
+      models: [{ value: "sonnet", supportedEffortLevels: ["low", "medium", "high"] }],
     };
-    expect(catalogEffortChoices(noLow, claudeDraft({ model: "sonnet" }), effortChoices)).toEqual([
-      "off",
+    expect(catalogEffortChoices(narrow, claudeDraft({ model: "sonnet" }), effortChoices)).toEqual([
+      "low",
       "medium",
       "high",
     ]);

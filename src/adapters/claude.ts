@@ -243,6 +243,17 @@ export function createClaudeAdapter(
           throw missingRequirement("Claude SDK query does not expose supportedModels()");
         }
         return (await query.supportedModels()).map(claudeCatalogEntry);
+      } catch (error) {
+        if (error instanceof DiffwardenError) {
+          throw error;
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        if (isClaudeAuthenticationErrorDetail(detail)) {
+          throw missingAuth(
+            'claude is not authenticated — run "claude /login" or set ANTHROPIC_API_KEY',
+          );
+        }
+        throw error;
       } finally {
         abortBridge.dispose();
         query.close?.();
@@ -252,15 +263,35 @@ export function createClaudeAdapter(
 }
 
 function claudeCatalogEntry(model: ClaudeModelInfo): ModelCatalogEntry {
+  const effortLevels = claudeCatalogEffortLevels(model);
   return {
     value: model.value,
     ...(model.displayName !== undefined ? { displayName: model.displayName } : {}),
     ...(model.description !== undefined ? { description: model.description } : {}),
-    ...(model.supportsEffort === true && model.supportedEffortLevels !== undefined
-      ? { supportedEffortLevels: model.supportedEffortLevels }
-      : {}),
+    ...(effortLevels !== undefined ? { supportedEffortLevels: effortLevels } : {}),
     ...(model.value === defaultClaudeModel ? { default: true } : {}),
   };
+}
+
+/**
+ * Catalog entries list exactly the diffwarden levels deliverable to the model: the SDK's native
+ * levels, plus "off" (delivered as thinking disabled — always available) and "minimal" whenever
+ * "low" is advertised (diffwarden maps minimal to native low). Models that declare no effort
+ * support narrow to off-only; models with unknown support (no supportsEffort flag) stay
+ * un-narrowed.
+ */
+function claudeCatalogEffortLevels(model: ClaudeModelInfo): string[] | undefined {
+  if (model.supportsEffort === true && model.supportedEffortLevels !== undefined) {
+    return [
+      "off",
+      ...(model.supportedEffortLevels.includes("low") ? ["minimal"] : []),
+      ...model.supportedEffortLevels,
+    ];
+  }
+  if (model.supportsEffort === false) {
+    return ["off"];
+  }
+  return undefined;
 }
 
 async function prepareClaudeAdapter(

@@ -673,11 +673,15 @@ async function editModelField(entry: Draft, catalog: ModelCatalogSession): Promi
 
 /**
  * Effort leaf editor: pick from the effort enum, or "default" to clear the override. When the
- * model field already fetched a catalog whose effective-model entry lists supportedEffortLevels,
- * the menu narrows to those levels (peek only — the effort field never triggers a network fetch).
+ * engine supports a catalog whose effective-model entry lists supportedEffortLevels, the menu
+ * narrows to those levels — fetching on demand (cached across fields), so it narrows identically
+ * whether the user opens the effort field or the model field first.
  */
 async function editEffortField(entry: Draft, catalog: ModelCatalogSession): Promise<FieldOutcome> {
-  const narrowed = catalogEffortChoices(catalog.peek(entry), entry, effortChoices);
+  const result = catalog.supports(entry.engine, entry.transport)
+    ? await fetchCatalogWithSpinner(entry, catalog)
+    : undefined;
+  const narrowed = catalogEffortChoices(result, entry, effortChoices);
   const choices = narrowed !== undefined ? [...narrowed] : [...effortChoices];
   // Keep a previously-set effort selectable even if the catalog would hide it,
   // so the menu always reflects what is currently configured.
