@@ -131,6 +131,26 @@ describe("human review rendering", () => {
     expect(split).toContain("CHANGES REQUESTED");
     expect(split).toContain("1 of 2 reviewers flagged");
 
+    // At narrow widths the banner clause line must not exceed the rule width — the meta
+    // (and, when needed, the consensus clause) stack onto their own lines instead of
+    // letting the terminal hard-wrap mid-word under an intact rule.
+    const narrow = renderHumanReviewSummary(
+      {
+        ...artifact,
+        result: flaggedResult,
+        timing_ms: 122_000,
+        reviewers: [
+          { ...reviewer, id: "fake" },
+          { ...reviewer, id: "codex", result: flaggedResult },
+        ],
+      },
+      { width: 40 },
+    );
+    for (const line of narrow.split("\n")) {
+      expect(line.length).toBeLessThanOrEqual(40);
+    }
+    expect(narrow).toContain("1 of 2 reviewers flagged");
+
     // A failed reviewer stays in the denominator: "2 of 2 agree" with one reviewer down
     // would be a false consensus.
     const withFailure = renderHumanReviewSummary({

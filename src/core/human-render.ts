@@ -7,7 +7,7 @@ import type {
   ReviewRunArtifact,
   ReviewTargetResolved,
 } from "./schema.js";
-import { asciiGlyphs, unicodeGlyphs, wrapText } from "./terminal-caps.js";
+import { asciiGlyphs, unicodeGlyphs, visibleLength, wrapText } from "./terminal-caps.js";
 
 export type HumanReviewRenderOptions = {
   color?: boolean;
@@ -167,8 +167,19 @@ function renderVerdictBanner(
   if (consensus !== undefined) {
     clauses.push(style.bold(consensus));
   }
-  clauses.push(style.muted(bannerMeta(artifact, glyphs)));
-  return [rule, clauses.join("   "), rule];
+  const meta = style.muted(bannerMeta(artifact, glyphs));
+  // The rules clamp to `width`, so the clause line must too — at narrow widths a single
+  // joined line would terminal-wrap mid-word underneath an intact rule. Drop the meta (and
+  // then the consensus) to their own lines instead of letting the terminal pick the break.
+  const joined = [...clauses, meta].join("   ");
+  if (visibleLength(joined) <= width) {
+    return [rule, joined, rule];
+  }
+  const head = clauses.join("   ");
+  if (visibleLength(head) <= width) {
+    return [rule, head, meta, rule];
+  }
+  return [rule, ...clauses, meta, rule];
 }
 
 function consensusClause(artifact: ReviewRunArtifact): string | undefined {
