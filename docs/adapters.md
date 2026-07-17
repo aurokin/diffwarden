@@ -413,7 +413,10 @@ The Claude SDK transport declares `supportsModelCatalog`: `claudeAdapter.listMod
 live model catalog via the same locked-down `query.supportedModels()` pattern model preflight
 uses, mapped to `ModelCatalogEntry` (value, display name, description, supported effort levels,
 and a `default` mark on diffwarden's default model). Interactive setup uses it for the model
-picker. The Cursor SDK is the next candidate; no other engine lists models yet.
+picker. Cursor lists on both transports (`Cursor.models.list` with `CURSOR_API_KEY` on sdk;
+`cursor-agent models` under the CLI's delegated login on cli), and codex lists via a forced
+stdio-isolated app-server `model/list` for both of its transports; each transport with a
+listing surface declares `supportsModelCatalog`.
 
 Live smoke test:
 

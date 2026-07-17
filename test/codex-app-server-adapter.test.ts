@@ -778,6 +778,22 @@ describe("codexModelCatalogEntries", () => {
       "minimal",
       "low",
     ]);
+
+    // A none-ONLY model narrows to its sole deliverable setting on app-server, and stays
+    // un-narrowed on cli where off cannot be delivered.
+    const noneOnly = {
+      data: [
+        {
+          id: "no-reasoning",
+          model: "no-reasoning",
+          supportedReasoningEfforts: [{ reasoningEffort: "none" }],
+        },
+      ],
+    };
+    expect(codexModelCatalogEntries(noneOnly, "app-server")[0]?.supportedEffortLevels).toEqual([
+      "off",
+    ]);
+    expect(codexModelCatalogEntries(noneOnly, "cli")[0]).toEqual({ value: "no-reasoning" });
   });
 
   it('never passes native "minimal" through alongside the synthesized alias', () => {

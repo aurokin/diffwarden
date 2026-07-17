@@ -11,7 +11,7 @@ import {
 } from "../core/errors.js";
 import { defaultReviewerTransport } from "./capabilities.js";
 import { cliExecutable } from "./cli-helpers.js";
-import { execCliFile } from "./cli-process.js";
+import { execCliFile, resolveExecutable } from "./cli-process.js";
 import {
   cursorReviewAutoReview,
   cursorReviewMcpServers,
@@ -309,7 +309,12 @@ function cursorCatalogEntry(model: CursorModel): ModelCatalogEntry {
 }
 
 async function listCursorCliModels(input: ListModelsInput): Promise<ModelCatalogEntry[]> {
-  const executable = cliExecutable(input.reviewer, "cursor-agent");
+  // Resolve like every other CLI probe: execCliFile spawns without a shell, so a bare name
+  // would miss Windows .cmd/.bat shims that PATHEXT resolution finds.
+  const executable = await resolveExecutable(
+    cliExecutable(input.reviewer, "cursor-agent"),
+    input.env,
+  );
   try {
     const { stdout } = await execCliFile(executable, ["models"], {
       ...(input.env !== undefined ? { env: input.env } : {}),

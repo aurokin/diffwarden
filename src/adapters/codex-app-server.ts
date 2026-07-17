@@ -322,10 +322,13 @@ export function codexModelCatalogEntries(
     const efforts = native.filter(
       (level) => level !== "ultra" && level !== "max" && level !== "none" && level !== "minimal",
     );
+    // Independent of efforts: a none-only model narrows to ["off"] on app-server — its sole
+    // deliverable setting — rather than being treated as unrestricted.
+    const offEligible = effectiveTransport === "app-server" && native.includes("none");
     const levels =
-      efforts.length > 0
+      efforts.length > 0 || offEligible
         ? [
-            ...(effectiveTransport === "app-server" && native.includes("none") ? ["off"] : []),
+            ...(offEligible ? ["off"] : []),
             ...(efforts.includes("low") ? ["minimal"] : []),
             ...efforts,
           ]
