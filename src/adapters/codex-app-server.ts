@@ -168,6 +168,10 @@ export function createCodexAppServerAdapter(): ReviewAdapter {
  * under the user's real CODEX_HOME whose close() only drops the socket; a catalog fetch would
  * leak that daemon and mutate shared state. Isolated close() kills the child group and removes
  * the temporary CODEX_HOME, so aborting the fetch (timeout, Esc) actively tears down.
+ *
+ * Isolation does not lose custom catalogs: the temp home's config (isolatedCodexConfig)
+ * carries the source home's `model_providers` tables and auth.json — the same inheritance
+ * every stdio-isolated review run uses — so a custom provider's models list identically here.
  */
 export async function codexAppServerListModels(
   input: ListModelsInput,
