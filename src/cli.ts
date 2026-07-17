@@ -621,6 +621,11 @@ const reviewerSet = reviewers
   });
 
 async function runClackSetFlow(): Promise<void> {
+  // Read the sets/digest snapshot before the reviewer list: any config change after the
+  // digest read then fails the save-time sha guard instead of silently becoming baseline.
+  const { sets, defaultReviewerSet, sha256 } = await listUserConfigReviewerSets({
+    env: process.env,
+  });
   const { path: configPath, reviewers: configured } = await listUserConfigReviewers({
     env: process.env,
   });
@@ -628,9 +633,6 @@ async function runClackSetFlow(): Promise<void> {
     process.stdout.write("No configured reviewers — add reviewers before editing sets.\n");
     return;
   }
-  const { sets, defaultReviewerSet, sha256 } = await listUserConfigReviewerSets({
-    env: process.env,
-  });
 
   const edited = await runClackReviewerSetEdit({
     reviewers: configured,
