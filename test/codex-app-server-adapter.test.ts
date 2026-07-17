@@ -651,8 +651,9 @@ describe("codexAppServerListModels", () => {
 
     const models = await codexAppServerListModels({ reviewer, env: harness.env });
 
-    // Default (cli) transport: no "off" (the CLI omits the flag, which runs the model
-    // default effort — not off), no max/ultra (both delivery paths collapse max→xhigh).
+    // Both pages arrive in order. Default (cli) transport: no "off" (the CLI omits the flag,
+    // which runs the model default effort — not off), no max/ultra (both delivery paths
+    // collapse max→xhigh).
     expect(models).toEqual([
       {
         value: "gpt-5.6-sol",
@@ -669,12 +670,15 @@ describe("codexAppServerListModels", () => {
     ]);
 
     const invocation = harness.readInvocation();
-    // initialize → initialized → model/list, and never a thread or turn.
+    // initialize → initialized → model/list (following nextCursor), never a thread or turn.
     expect(invocation.messages?.map((message) => message.method)).toEqual([
       "initialize",
       "initialized",
       "model/list",
+      "model/list",
     ]);
+    // The second page was requested with the cursor the first page returned.
+    expect(invocation.modelList).toEqual({ cursor: "page-2" });
     // The connection ran isolated: a temp CODEX_HOME, not the user's shared one.
     expect(invocation.env.CODEX_HOME).not.toBe(harness.authHome);
     expect(invocation.env.CODEX_HOME).toContain("diffwarden-codex-home-");
@@ -747,6 +751,9 @@ describe("codexModelCatalogEntries", () => {
     const entries = codexModelCatalogEntries(result, "app-server");
     expect(entries[0]?.supportedEffortLevels).toEqual(["off", "low", "high"]);
     expect(codexModelCatalogEntries(result, "cli")[0]?.supportedEffortLevels).not.toContain("off");
+    // A model advertising NO efforts stays un-narrowed on app-server too: an off-only entry
+    // would collapse the effort menu to one row for a model whose effort surface is unknown.
+    expect(entries[1]).toEqual({ value: "gpt-5.2", displayName: "GPT-5.2" });
   });
 
   it("uses `model` as the committed value and expects it to equal `id`", () => {
@@ -1568,6 +1575,28 @@ rl.on("line", (line) => {
   if (message.method === "model/list") {
     invocation.modelList = message.params;
     writeInvocation();
+    // Two pages: the fetch must follow nextCursor or the picker silently truncates.
+    if (message.params && message.params.cursor === "page-2") {
+      send({
+        id: message.id,
+        result: {
+          data: [
+            {
+              id: "gpt-5.6-luna",
+              model: "gpt-5.6-luna",
+              displayName: "GPT-5.6-Luna",
+              isDefault: false,
+              supportedReasoningEfforts: [
+                { reasoningEffort: "low", description: "Fast" },
+                { reasoningEffort: "medium", description: "Balanced" }
+              ]
+            }
+          ],
+          nextCursor: null
+        }
+      });
+      return;
+    }
     send({
       id: message.id,
       result: {
@@ -1586,18 +1615,9 @@ rl.on("line", (line) => {
               { reasoningEffort: "max", description: "Maximum" },
               { reasoningEffort: "ultra", description: "Delegating" }
             ]
-          },
-          {
-            id: "gpt-5.6-luna",
-            model: "gpt-5.6-luna",
-            displayName: "GPT-5.6-Luna",
-            isDefault: false,
-            supportedReasoningEfforts: [
-              { reasoningEffort: "low", description: "Fast" },
-              { reasoningEffort: "medium", description: "Balanced" }
-            ]
           }
-        ]
+        ],
+        nextCursor: "page-2"
       }
     });
     return;

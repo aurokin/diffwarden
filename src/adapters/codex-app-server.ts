@@ -238,8 +238,25 @@ export async function codexAppServerListModels(
       capabilities: { experimentalApi: true },
     });
     connection.write({ method: "initialized" });
-    const result = await call("model/list", {});
-    return codexModelCatalogEntries(result, codexEffectiveTransport(input.reviewer));
+    // model/list paginates: follow nextCursor so large catalogs are not silently truncated.
+    // The page cap is a defensive bound against a server that never terminates the cursor.
+    const data: unknown[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 32; page++) {
+      const result = await call("model/list", cursor === undefined ? {} : { cursor });
+      if (isRecord(result) && Array.isArray(result.data)) {
+        data.push(...result.data);
+      }
+      const next =
+        isRecord(result) && typeof result.nextCursor === "string" && result.nextCursor !== ""
+          ? result.nextCursor
+          : undefined;
+      if (next === undefined || next === cursor) {
+        break;
+      }
+      cursor = next;
+    }
+    return codexModelCatalogEntries({ data }, codexEffectiveTransport(input.reviewer));
   } finally {
     removeAbortListener();
     await connection.close();
@@ -269,6 +286,10 @@ function codexEffectiveTransport(reviewer: ReviewReviewerConfig): "cli" | "app-s
  *   diffwarden max → native xhigh, so offering max would silently downgrade);
  * - include "off" iff the effective transport is app-server: it maps off → native `none`,
  *   while the CLI path omits the flag entirely, which runs the model DEFAULT effort — not off.
+ *
+ * Entries that advertise no reasoning efforts stay un-narrowed on BOTH transports (no
+ * supportedEffortLevels at all) — prepending "off" there would collapse the effort menu to a
+ * single row for a model whose effort surface is simply unknown.
  */
 export function codexModelCatalogEntries(
   result: unknown,
@@ -288,7 +309,8 @@ export function codexModelCatalogEntries(
           .filter((level): level is string => typeof level === "string")
           .filter((level) => level !== "ultra" && level !== "max")
       : [];
-    const levels = [...(effectiveTransport === "app-server" ? ["off"] : []), ...efforts];
+    const levels =
+      efforts.length > 0 && effectiveTransport === "app-server" ? ["off", ...efforts] : efforts;
     entries.push({
       value: item.model,
       ...(typeof item.displayName === "string" ? { displayName: item.displayName } : {}),
