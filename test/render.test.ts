@@ -250,6 +250,60 @@ describe("human review rendering", () => {
     expect(agent).not.toContain("\u001B[");
   });
 
+  it("surfaces per-reviewer failure counts across batch lanes", () => {
+    // A lane stays "success" while one reviewer survives, so a reviewer that failed in
+    // every lane must be called out at the top of the batch summary.
+    const lane = (id: string): ReviewBatchArtifact["lanes"][number] => ({
+      id,
+      kind: "focus",
+      focus: `focus ${id}`,
+      status: "success",
+      artifact: {
+        ...artifact,
+        reviewers: [
+          {
+            id: "fake",
+            engine: "fake",
+            status: "success",
+            result: artifact.result,
+            validation: artifact.validation,
+          },
+          {
+            id: "codex",
+            engine: "codex",
+            status: "failed",
+            error: { code: "reviewer_failed", message: "input_too_large", exit_code: 3 },
+          },
+        ],
+      },
+    });
+    const batch: ReviewBatchArtifact = {
+      schema_version: 2,
+      kind: "batch",
+      cwd: "/repo",
+      target: artifact.target,
+      plan: {
+        include_overview: false,
+        focus: ["focus focus-1", "focus focus-2"],
+        lanes: [
+          { id: "focus-1", kind: "focus", focus: "focus focus-1" },
+          { id: "focus-2", kind: "focus", focus: "focus focus-2" },
+        ],
+      },
+      result: artifact.result,
+      validation: artifact.validation,
+      lanes: [lane("focus-1"), lane("focus-2")],
+    };
+
+    const agent = renderAgentReviewSummary(batch);
+    expect(agent).toContain("Reviewer failures: codex failed in 2 of 2 lanes");
+    expect(agent).toContain("Reviewers: fake, codex (failed)");
+
+    const human = renderHumanReviewSummary(batch);
+    expect(human).toContain("codex failed in 2 of 2 lanes");
+    expect(human).toContain("input_too_large");
+  });
+
   it("disables human color outside capable TTYs", () => {
     expect(shouldUseHumanColor({ env: {}, stream: { isTTY: false } })).toBe(false);
     expect(shouldUseHumanColor({ env: { TERM: "dumb" }, stream: { isTTY: true } })).toBe(false);

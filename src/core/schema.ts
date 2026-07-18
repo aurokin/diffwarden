@@ -392,6 +392,18 @@ export const reviewBatchArtifactSchema = z
 
 export const reviewRunArtifactSchema = z.union([reviewBatchArtifactSchema, reviewArtifactSchema]);
 
+// Written to --out when a run fails before producing a review artifact, so consumers polling
+// the path get a diagnosis instead of a missing file. Kept out of reviewRunArtifactSchema:
+// it is a failure record, not a review result; `review show` recognizes it separately.
+export const reviewFailureArtifactSchema = z
+  .object({
+    schema_version: z.literal(2),
+    kind: z.literal("failure"),
+    status: z.literal("failed"),
+    error: reviewerErrorSchema,
+  })
+  .strict();
+
 export type ReviewPriority = z.infer<typeof reviewPrioritySchema>;
 export type OverallCorrectness = z.infer<typeof overallCorrectnessSchema>;
 export type ArtifactOverallCorrectness = z.infer<typeof artifactOverallCorrectnessSchema>;
@@ -415,6 +427,7 @@ export type ReviewLane = z.infer<typeof reviewLaneSchema>;
 export type ReviewPlan = z.infer<typeof reviewPlanSchema>;
 export type ReviewBatchLaneArtifact = z.infer<typeof reviewBatchLaneArtifactSchema>;
 export type ReviewBatchArtifact = z.infer<typeof reviewBatchArtifactSchema>;
+export type ReviewFailureArtifact = z.infer<typeof reviewFailureArtifactSchema>;
 export type ReviewRunArtifact = z.infer<typeof reviewRunArtifactSchema>;
 
 /**
