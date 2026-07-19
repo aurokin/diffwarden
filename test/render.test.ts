@@ -151,6 +151,37 @@ describe("human review rendering", () => {
     }
     expect(narrow).toContain("1 of 2 reviewers flagged");
 
+    // Degenerate width: a finding-heavy meta clause (five count buckets plus timing) is
+    // wider than the 40-column floor on its own, so the meta itself must pack across lines
+    // rather than pass through over-width.
+    const heavyFindings = [
+      finding("[P0] a", 0, "/repo/a.ts", 1),
+      finding("[P1] b", 1, "/repo/b.ts", 1),
+      finding("[P2] c", 2, "/repo/c.ts", 1),
+      finding("[P3] d", 3, "/repo/d.ts", 1),
+      finding("[P?] e", undefined, "/repo/e.ts", 1),
+    ];
+    const heavy = renderHumanReviewSummary(
+      {
+        ...artifact,
+        result: {
+          ...artifact.result,
+          findings: heavyFindings,
+          overall_correctness: "patch is incorrect",
+        },
+        timing_ms: 3_600_000,
+        reviewers: [
+          { ...reviewer, id: "fake" },
+          { ...reviewer, id: "codex", result: flaggedResult },
+        ],
+      },
+      { width: 40 },
+    );
+    for (const line of heavy.split("\n")) {
+      expect(line.length).toBeLessThanOrEqual(40);
+    }
+    expect(heavy).toContain("1 unprioritized");
+
     // A failed reviewer stays in the denominator: "2 of 2 agree" with one reviewer down
     // would be a false consensus.
     const withFailure = renderHumanReviewSummary({

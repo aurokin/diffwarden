@@ -167,7 +167,9 @@ function renderVerdictBanner(
   if (consensus !== undefined) {
     clauses.push(style.bold(consensus));
   }
-  const meta = style.muted(bannerMeta(artifact, glyphs));
+  const metaParts = bannerMeta(artifact);
+  const metaSeparator = ` ${glyphs.dot} `;
+  const meta = style.muted(metaParts.join(metaSeparator));
   // The rules clamp to `width`, so the clause line must too — at narrow widths a single
   // joined line would terminal-wrap mid-word underneath an intact rule. Drop the meta (and
   // then the consensus) to their own lines instead of letting the terminal pick the break.
@@ -177,9 +179,38 @@ function renderVerdictBanner(
   }
   const head = clauses.join("   ");
   if (visibleLength(head) <= width) {
-    return [rule, head, meta, rule];
+    return [rule, head, ...packedMetaLines(metaParts, metaSeparator, style, width), rule];
   }
-  return [rule, ...clauses, meta, rule];
+  return [rule, ...clauses, ...packedMetaLines(metaParts, metaSeparator, style, width), rule];
+}
+
+/**
+ * The meta clause is the only banner clause that can outgrow the 40-column summary floor
+ * (finding-heavy runs list up to five count buckets plus timing), and its styled string
+ * cannot go through wrapText, which measures raw length. Pack its parts into
+ * width-fitting lines instead, styling each line after measuring.
+ */
+function packedMetaLines(
+  parts: string[],
+  separator: string,
+  style: HumanStyle,
+  width: number,
+): string[] {
+  const lines: string[] = [];
+  let current = "";
+  for (const part of parts) {
+    const candidate = current === "" ? part : `${current}${separator}${part}`;
+    if (current !== "" && visibleLength(candidate) > width) {
+      lines.push(current);
+      current = part;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current !== "") {
+    lines.push(current);
+  }
+  return lines.map((line) => style.muted(line));
 }
 
 function consensusClause(artifact: ReviewRunArtifact): string | undefined {
@@ -243,7 +274,7 @@ function consensusClause(artifact: ReviewRunArtifact): string | undefined {
     : `${total} of ${total} reviewers agree`;
 }
 
-function bannerMeta(artifact: ReviewRunArtifact, glyphs: typeof asciiGlyphs): string {
+function bannerMeta(artifact: ReviewRunArtifact): string[] {
   const counts = findingCounts(artifact.result.findings);
   const total = artifact.result.findings.length;
   const parts =
@@ -259,7 +290,7 @@ function bannerMeta(artifact: ReviewRunArtifact, glyphs: typeof asciiGlyphs): st
   if (artifact.timing_ms !== undefined) {
     parts.push(`${(artifact.timing_ms / 1000).toFixed(0)}s`);
   }
-  return parts.join(` ${glyphs.dot} `);
+  return parts;
 }
 
 function renderSummaryFooter(
