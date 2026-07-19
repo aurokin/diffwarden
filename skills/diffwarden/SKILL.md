@@ -106,9 +106,10 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
 - After every focus batch, read the artifact warnings before trusting coverage: without
   `--strict`, a reviewer or lane that failed degrades to a warning while siblings
   succeed, so findings may come from fewer reviewers than requested.
-- A failed run writes no `--out` file; wait for process completion instead of polling for
-  the file. Diff-backed targets need at least one commit — on a brand-new repository,
-  create an initial commit first.
+- A failed run writes a failure record to `--out` (`kind: "failure"` with the error) rather
+  than a review artifact; `review show` reports it as a failed run. Still wait for process
+  completion instead of polling for the file. Diff-backed targets need at least one
+  commit — on a brand-new repository, create an initial commit first.
 
 ## Commands
 
