@@ -74,9 +74,11 @@ import {
 } from "./core/runner.js";
 import {
   type ReviewEvent,
+  type ReviewFailureArtifact,
   type ReviewPlan,
   type ReviewRunArtifact,
   type ReviewerError,
+  reviewFailureArtifactSchema,
   reviewRunArtifactSchema,
 } from "./core/schema.js";
 import {
@@ -893,6 +895,17 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
   }
 
   if (terminalError !== undefined) {
+    if (options.out) {
+      // A failed run still writes --out: consumers polling the path need the recorded
+      // failure, not ENOENT.
+      const failureArtifact: ReviewFailureArtifact = {
+        schema_version: 2,
+        kind: "failure",
+        status: "failed",
+        error: terminalError,
+      };
+      await writeFile(options.out, renderJson(failureArtifact));
+    }
     // The terminal `error` frame already conveyed the failure. In NDJSON mode we
     // set the exit code without throwing so the stream stays a clean sequence of
     // frames; otherwise we throw to reuse the standard stderr error path.
@@ -1707,6 +1720,13 @@ async function readReviewArtifact(artifactPath: string, cwd: string): Promise<Re
   } catch (error) {
     const message = error instanceof Error ? error.message : "invalid JSON";
     throw invalidCli(`Invalid ReviewArtifact JSON: ${message}`);
+  }
+
+  const failure = reviewFailureArtifactSchema.safeParse(parsedJson);
+  if (failure.success) {
+    throw invalidCli(
+      `Artifact records a failed run, not a review result: ${failure.data.error.message}`,
+    );
   }
 
   const result = reviewRunArtifactSchema.safeParse(parsedJson);

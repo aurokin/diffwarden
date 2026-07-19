@@ -369,6 +369,47 @@ function renderHumanBatchReviewArtifact(
   return `${lines.join("\n")}\n${renderHumanBatchReviewSummary(artifact, options)}`;
 }
 
+type BatchReviewerFailure = {
+  id: string;
+  failed: number;
+  lanes: number;
+  lastError: string | undefined;
+};
+
+/**
+ * Per-reviewer failure counts across the batch's successful lanes. A lane counts as
+ * "success" as long as one reviewer survived, so a reviewer that failed in every lane is
+ * otherwise invisible in the batch summary — findings silently come from fewer reviewers
+ * than requested. (Failed lanes report their own error and are excluded here.)
+ *
+ * The per-reviewer `lanes` denominator counts lanes the reviewer appears in; the runner
+ * resolves one roster and runs it in every lane, so in runner-produced artifacts this
+ * equals the successful-lane count.
+ */
+function batchReviewerFailures(artifact: ReviewBatchArtifact): BatchReviewerFailure[] {
+  const byReviewer = new Map<string, BatchReviewerFailure>();
+  for (const lane of artifact.lanes) {
+    if (lane.status !== "success") {
+      continue;
+    }
+    for (const reviewer of lane.artifact.reviewers ?? []) {
+      const entry = byReviewer.get(reviewer.id) ?? {
+        id: reviewer.id,
+        failed: 0,
+        lanes: 0,
+        lastError: undefined,
+      };
+      entry.lanes += 1;
+      if (reviewer.status === "failed") {
+        entry.failed += 1;
+        entry.lastError = reviewer.error?.message ?? entry.lastError;
+      }
+      byReviewer.set(reviewer.id, entry);
+    }
+  }
+  return [...byReviewer.values()].filter((entry) => entry.failed > 0);
+}
+
 function renderHumanBatchReviewSummary(
   artifact: ReviewBatchArtifact,
   options: HumanReviewRenderOptions,
@@ -384,6 +425,18 @@ function renderHumanBatchReviewSummary(
     lines.push("", style.warning("Warnings"));
     for (const warning of artifact.warnings) {
       lines.push(`- ${warning}`);
+    }
+  }
+
+  const reviewerFailures = batchReviewerFailures(artifact);
+  if (reviewerFailures.length > 0) {
+    lines.push("");
+    for (const failure of reviewerFailures) {
+      lines.push(
+        `${style.danger(
+          `${glyphs.fail} ${failure.id} failed in ${failure.failed} of ${failure.lanes} lanes`,
+        )}   ${style.muted(failure.lastError ?? "Unknown error")}`,
+      );
     }
   }
 
@@ -434,6 +487,14 @@ function renderAgentBatchReviewSummary(artifact: ReviewBatchArtifact): string {
     `Findings: ${formatAgentFindingCount(findingTotal, counts)}`,
     `Lanes: ${successfulLanes.length} passed, ${failedLanes.length} failed`,
   ];
+  const reviewerFailures = batchReviewerFailures(artifact);
+  if (reviewerFailures.length > 0) {
+    lines.push(
+      `Reviewer failures: ${reviewerFailures
+        .map((failure) => `${failure.id} failed in ${failure.failed} of ${failure.lanes} lanes`)
+        .join("; ")}`,
+    );
+  }
 
   if (artifact.warnings !== undefined && artifact.warnings.length > 0) {
     lines.push("", "Warnings:");
@@ -577,9 +638,13 @@ function formatPlainPriority(priority: ReviewArtifactFinding["priority"]): strin
   return priority === undefined ? "P?" : `P${priority}`;
 }
 
+// Scoped to the artifact it is handed: batch call sites pass each lane's own artifact, so
+// the (failed) marker always describes that lane, never a representative lane.
 function formatReviewers(artifact: ReviewArtifact): string {
   if (artifact.reviewers !== undefined && artifact.reviewers.length > 0) {
-    return artifact.reviewers.map((reviewer) => reviewer.id).join(", ");
+    return artifact.reviewers
+      .map((reviewer) => (reviewer.status === "failed" ? `${reviewer.id} (failed)` : reviewer.id))
+      .join(", ");
   }
 
   if (artifact.engine !== undefined) {

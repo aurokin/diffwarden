@@ -32,7 +32,8 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
    Use repeatable `--focus <text>` when the user wants scoped passes over one diff-backed
    target, such as state management, storage, localization, or migration risk. Focus lanes
    work with `uncommitted`, `base:<branch>`, and `commit:<sha>` targets. They remain
-   diff-backed and changed-line validated; do not use them with `custom:<text>`.
+   diff-backed and changed-line validated; do not use them with `custom:<text>`. See
+   "Choosing lanes and overview" below for when lanes and the overview lane pay off.
 
 2. Pick reviewers:
    - Use `diffwarden reviewers list` when you need to see configured reviewer IDs or reviewer
@@ -75,6 +76,40 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
 
 6. Read warnings before deciding whether output is complete. Multi-reviewer runs can return
    partial results when one reviewer fails unless `--strict` is used.
+
+## Choosing lanes and overview
+
+- Every lane, including the overview lane, carries the full resolved diff. `--focus`
+  narrows the reviewer's attention, not the payload; never add lanes to work around diff
+  size or provider input limits.
+- Reach for `--focus` when the change spans distinct domains (one lane per domain), when
+  iterating a fix-and-re-review loop, when a clean overview deserves adversarial depth in
+  historically buggy areas, or to reassess one specific prior finding (single lane,
+  `--no-overview`, cite the exact code path in the lane text).
+- In fix-and-re-review loops, keep lane texts verbatim across rounds so a clean result is
+  comparable rather than achieved by quietly narrowing scope. As sections go clean, rerun
+  only the still-dirty lanes.
+- With `--focus` present, the overview lane runs by default (an overview is a full
+  unscoped pass, identical to a default run, not a summary). Suppress it with
+  `--no-overview` for partition rounds, section re-reviews, and single-finding rebuttals;
+  keep the default for fix-verification rounds, where lanes confirm the fixes and the
+  overview watches for regressions the fixes introduced.
+- Lane-clean is not done: overview and focus lanes reliably find disjoint defects, and a
+  clean overview does not override lane findings. Finish a review campaign with an
+  unscoped pass, and on long campaigns interleave one every few fix rounds rather than
+  only at the end. Expect a closing overview to reopen a fix cycle or two.
+- If the diff is too large for a reviewer's transport input limit, diff-backed lanes and
+  the overview fail identically. Fall back to `--target commit:<sha>` reviews of each
+  change, or a `custom:<text>` repository-exploring pass (which embeds instructions
+  rather than the patch); remember `custom:` findings lose changed-line validation, so
+  verify them before fixing.
+- After every focus batch, read the artifact warnings before trusting coverage: without
+  `--strict`, a reviewer or lane that failed degrades to a warning while siblings
+  succeed, so findings may come from fewer reviewers than requested.
+- A failed run writes a failure record to `--out` (`kind: "failure"` with the error) rather
+  than a review artifact; `review show` reports it as a failed run. Still wait for process
+  completion instead of polling for the file. Diff-backed targets need at least one
+  commit — on a brand-new repository, create an initial commit first.
 
 ## Commands
 
