@@ -370,6 +370,10 @@ type BatchReviewerFailure = {
  * "success" as long as one reviewer survived, so a reviewer that failed in every lane is
  * otherwise invisible in the batch summary — findings silently come from fewer reviewers
  * than requested. (Failed lanes report their own error and are excluded here.)
+ *
+ * The per-reviewer `lanes` denominator counts lanes the reviewer appears in; the runner
+ * resolves one roster and runs it in every lane, so in runner-produced artifacts this
+ * equals the successful-lane count.
  */
 function batchReviewerFailures(artifact: ReviewBatchArtifact): BatchReviewerFailure[] {
   const byReviewer = new Map<string, BatchReviewerFailure>();
@@ -623,6 +627,8 @@ function formatPlainPriority(priority: ReviewArtifactFinding["priority"]): strin
   return priority === undefined ? "P?" : `P${priority}`;
 }
 
+// Scoped to the artifact it is handed: batch call sites pass each lane's own artifact, so
+// the (failed) marker always describes that lane, never a representative lane.
 function formatReviewers(artifact: ReviewArtifact): string {
   if (artifact.reviewers !== undefined && artifact.reviewers.length > 0) {
     return artifact.reviewers
