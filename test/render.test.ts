@@ -290,7 +290,7 @@ describe("human review rendering", () => {
           { id: "focus-2", kind: "focus", focus: "focus focus-2" },
         ],
       },
-      result: artifact.result,
+      result: { ...artifact.result, findings: [] },
       validation: artifact.validation,
       lanes: [lane("focus-1"), lane("focus-2")],
     };

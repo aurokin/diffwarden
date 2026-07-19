@@ -126,6 +126,25 @@ type AppServerConnection = {
   close(): Promise<void>;
 };
 
+// Observed server-side turn input cap: requests over this fail with JSON-RPC -32602
+// {input_error_code: "input_too_large", max_chars: 1048576}.
+export const codexAppServerMaxPromptChars = 1_048_576;
+
+/**
+ * The server's cap counts characters, not UTF-16 code units. UTF-16 length is always >= the
+ * code-point count, so the exact (O(n)) count only runs when the cheap length check trips.
+ */
+function promptCharCount(prompt: string): number {
+  if (prompt.length <= codexAppServerMaxPromptChars) {
+    return prompt.length;
+  }
+  let count = 0;
+  for (const _ of prompt) {
+    count += 1;
+  }
+  return count;
+}
+
 const appServerKillGraceMs = 1_000;
 const appServerConnectRetryMs = 100;
 const appServerLaunchTimeoutMs = 5_000;
@@ -495,6 +514,24 @@ class CodexAppServerSession {
 
   async run(): Promise<ReviewAdapterOutput> {
     throwIfAborted(this.input.signal, "codex app-server reviewer aborted before start");
+    const promptChars = promptCharCount(this.input.prompt);
+    if (promptChars > codexAppServerMaxPromptChars) {
+      // The app server rejects oversized turn input with -32602 input_too_large; failing
+      // here, before the server is even spawned, turns L×R doomed lane calls on a large
+      // diff into instant actionable errors.
+      throw new DiffwardenError(
+        "reviewer_failed",
+        `codex app-server rejects prompts over ${codexAppServerMaxPromptChars} characters and the assembled review prompt is ${promptChars} characters`,
+        3,
+        {
+          recovery: [
+            "Review smaller units with --target commit:<sha> per change",
+            "Use a custom:<text> target, which embeds instructions instead of the patch",
+            "Use a reviewer whose transport has no prompt size cap",
+          ],
+        },
+      );
+    }
     const onStderrChunk = this.stderrDebugTee();
     const connection = await openCodexAppServerConnection({
       executable: this.executable,

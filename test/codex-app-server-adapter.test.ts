@@ -15,6 +15,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   codexAppServerListModels,
+  codexAppServerMaxPromptChars,
   codexModelCatalogEntries,
   createCodexAppServerAdapter,
 } from "../src/adapters/codex-app-server.js";
@@ -241,6 +242,21 @@ describe("createCodexAppServerAdapter", () => {
     expect(invocation.turnStart?.outputSchema).toEqual(reviewResultStrictJsonSchema);
     expect(invocation.turnStart?.input[0]?.text).toBe("review prompt");
     expect(existsSync(invocation.env.CODEX_HOME)).toBe(false);
+  });
+
+  it("rejects prompts over the app-server input cap before spawning the server", async () => {
+    const harness = createHarness();
+    const adapter = createCodexAppServerAdapter();
+    const reviewer = createReviewer(harness.executable);
+
+    await expect(
+      adapter.run({
+        ...createInput(reviewer, harness),
+        prompt: "x".repeat(codexAppServerMaxPromptChars + 1),
+      }),
+    ).rejects.toThrow(/rejects prompts over 1048576 characters/);
+    // Failing fast means the fake server was never launched.
+    expect(existsSync(harness.invocationPath)).toBe(false);
   });
 
   it("sends provider and app-server effort values through native protocol fields", async () => {
