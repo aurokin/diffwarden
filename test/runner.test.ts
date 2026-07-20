@@ -12,7 +12,7 @@ import type {
 import { reviewerEnvironmentFailed } from "../src/core/errors.js";
 import type { ResolvedDiff } from "../src/core/git.js";
 import { repairResponseJsonSchema } from "../src/core/repair.js";
-import { runReview, runReviewerPreflightReport } from "../src/core/runner.js";
+import { runReview, runReviewerPreflightReport, windowsDoctorCaveat } from "../src/core/runner.js";
 import { reviewArtifactSchema } from "../src/core/schema.js";
 
 let repo: string | undefined;
@@ -1246,6 +1246,19 @@ describe("runReview", () => {
       code: "missing_auth",
       exitCode: 3,
     });
+  });
+});
+
+describe("windowsDoctorCaveat", () => {
+  it("returns the caveat line on win32", () => {
+    expect(windowsDoctorCaveat("win32")).toBe(
+      "Windows is untested: diffwarden contains Windows-specific handling but it has not been validated on this platform.",
+    );
+  });
+
+  it("returns undefined on darwin and linux", () => {
+    expect(windowsDoctorCaveat("darwin")).toBeUndefined();
+    expect(windowsDoctorCaveat("linux")).toBeUndefined();
   });
 });
 

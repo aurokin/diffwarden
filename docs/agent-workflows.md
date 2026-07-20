@@ -127,3 +127,25 @@ disclosure:
 - Put broader tradeoffs in `docs/comparisons.md` or `SPEC.md`.
 - Keep version-sensitive SDK discoveries near the adapter docs or code that depends
   on them, and link upstream references instead of copying large upstream sections.
+
+## NDJSON Event-Stream Guarantees
+
+`diffwarden review --ndjson` streams typed review events for incremental consumers.
+For no-focus runs:
+
+- Once `run_started` is emitted, the stream always ends with **exactly one** terminal
+  frame: `final_result` (authoritative aggregated `ReviewArtifact`) or `error` (an expected
+  terminal failure such as all reviewers failing or a strict-mode violation).
+- `reviewer_result` events are **provisional** (`provisional: true`): their findings are
+  pre-aggregation and are not yet deduplicated or merged across reviewers. Only
+  `final_result.artifact` is authoritative; treat it as the equivalent of `--json`.
+- Under concurrency, `reviewer_result`/`reviewer_failed` arrive in completion order, but
+  the `reviewers` array in `final_result.artifact` always follows selection order.
+- `--out`, `--report`, and `--fail-on-findings` operate on the final artifact and behave
+  identically across formats. In `ndjson` mode a terminal `error` frame is emitted and the
+  process exits non-zero without throwing, so the stream stays a clean sequence of frames.
+
+For focus runs, stdout carries a `ReviewBatchArtifact` instead. Batch NDJSON starts with
+`batch_started`, emits lane-scoped lifecycle events with `lane_id`, emits `lane_finished` or
+`lane_failed`, and still terminates with exactly one `final_result` carrying the full batch
+artifact or one `error`. Normal no-focus NDJSON remains unchanged.

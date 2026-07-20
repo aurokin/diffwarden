@@ -114,7 +114,8 @@ npx skills add aurokin/diffwarden --global --skill diffwarden --agent codex clau
 ## Commands
 
 Use real built-in reviewers or configured profile names in `--reviewer`; do not pass the
-literal placeholder `<reviewer>`.
+literal placeholder `<reviewer>`. `claude` and `codex` are the flagship fully supported
+engines; the other engines shown below (`cursor`, `pi`, `droid-cli`, …) are experimental.
 
 ```bash
 diffwarden review --target base:main --agent

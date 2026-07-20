@@ -150,3 +150,53 @@ that backs this matrix owns the discovery probe targets and auth signals. See
 [`adapters.md`](./adapters.md#reviewer-discovery) for per-engine probe behavior and
 [`configuration.md`](./configuration.md#discovery--setup) for the discover/list/doctor split
 and the `reviewers add` / `edit` / `remove` / `set` / `init --discover` setup flow.
+
+## Debugging Reviewer Output
+
+`--debug-reviewer-output` opts a review into capturing raw transport transcripts alongside
+the normal artifact:
+
+- Each CLI-transport reviewer artifact gains a bounded `debug_output` field with separate
+  `stdout`/`stderr` transcripts, total byte counts, and per-stream truncation flags. Budget:
+  256 KiB per stream per reviewer (retried runs share the budget, so the failing first
+  attempt is preserved). Transports that cannot expose raw output simply omit the field.
+- With `--ndjson`, bounded `reviewer_debug_output` events additionally stream while the
+  reviewer runs (up to 8 KiB of text per event; a final event with `truncated: true` marks
+  an exhausted stream budget). These events are non-authoritative and never affect results,
+  validation, gating, exit codes, or the terminal-frame guarantee. Consumers must ignore
+  unknown fields on NDJSON events; new optional fields are additive within a schema version.
+- When both `--ndjson` and `--debug-reviewer-output` are set, adapters with a native stream
+  output mode switch to it so debug events arrive live instead of at process exit: Claude
+  CLI runs with `--output-format stream-json --verbose`, and Cursor and Droid with
+  `--output-format stream-json` (support is probed first; CLIs without the mode silently
+  stay on `json`, recorded as `debugStreamModeDropped` in reviewer metadata). Stream events
+  are rendered as compact one-line summaries — assistant text verbatim, tool activity as
+  `[tool_use ...]`-style markers, reasoning/thinking content excluded — and the final
+  review result is extracted from the stream so the artifact parses identically to
+  non-stream runs. In stream mode the artifact's `debug_output.stdout` records those same
+  summaries rather than the raw JSONL (which embeds reasoning content and would waste the
+  bounded budget), so the artifact transcript matches the streamed events. Unparseable stream output degrades to raw passthrough; stream problems
+  never fail the review. Without `--ndjson`, invocations are unchanged even when
+  `--debug-reviewer-output` is set.
+- Codex app-server reviewers capture debug output only in `stdio-isolated` mode:
+  notification summaries in the same one-line format feed `debug_output.stdout` (completed
+  agent-message deltas coalesced into live text blocks and reconciled with the authoritative
+  completed text without duplication, other items as `[item:<type>]` markers, and server
+  requests as `[request <method> -> <decision>]` notes; token usage and reasoning remain
+  excluded), and the isolated child's stderr is teed raw into `debug_output.stderr`. The shared-server modes
+  (`attach`/`auto`/`launch`) are asymmetric: they talk to a daemon over a socket, so there
+  is no child stderr to tee, and event capture is withheld entirely — recorded as
+  `debugOutputDropped: "shared-server-unverified"` in reviewer metadata — until thread
+  scoping of shared-daemon notifications is verified against a live attach-mode capture.
+- Antigravity reviewers have no machine-readable stdout mode, so with
+  `--debug-reviewer-output` the adapter instead tails the transcript JSONL the CLI
+  live-appends under the review's isolated home directory and renders the same one-line
+  summaries (planner prose verbatim, tool activity as `[tool_use ...]` markers, the prompt
+  echo and checkpoints as size markers, chain-of-thought excluded). This is a filesystem
+  poll only — the invocation never changes — and it degrades silently if the transcript
+  never appears (recorded as `debugOutputDropped: "transcript-unavailable"` in reviewer
+  metadata). The raw stdout passthrough (the review text) is captured either way.
+- Without the flag, artifacts and event streams are byte-identical to a run without it.
+
+`--report-mode full` reports embed the artifact (including `debug_output` when opted in);
+`--report-mode metadata` reports never do.

@@ -71,6 +71,7 @@ import {
   runReviewBatchEvents,
   runReviewEvents,
   runReviewerPreflightReport,
+  windowsDoctorCaveat,
 } from "./core/runner.js";
 import {
   type ReviewEvent,
@@ -1072,6 +1073,11 @@ function resolveReviewPlan(options: {
 
 function renderPreflightText(report: ReviewerPreflightReport): string {
   const lines = ["# Diffwarden Doctor", "", `CWD: ${report.cwd}`, ""];
+
+  const caveat = windowsDoctorCaveat();
+  if (caveat !== undefined) {
+    lines.push(caveat, "");
+  }
 
   for (const reviewer of report.reviewers) {
     lines.push(`## ${reviewer.id}`, "");

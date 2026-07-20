@@ -20,7 +20,8 @@ Node 24 and updates npm before publishing.
 
 ## Release Steps
 
-1. Bump `package.json` and `src/version.ts` to the same version.
+1. Bump `package.json` and `src/version.ts` to the same version. If the release includes a
+   breaking output-shape change, bump `schema_version` and call it out in the release notes.
 2. Run the local gate:
 
    ```bash
