@@ -926,7 +926,9 @@ async function createConfigFileExclusive(configPath: string, content: string): P
     await writeFile(configPath, content, { flag: "wx" });
   } catch (error) {
     if (isNodeErrorWithCode(error, "EEXIST")) {
-      throw invalidConfig(`Config already exists: ${configPath}`);
+      throw invalidConfig(
+        `Config already exists: ${configPath}. Edit it directly, run "diffwarden reviewers add" or "diffwarden reviewers edit" to change reviewers, or delete the file and re-run "diffwarden init".`,
+      );
     }
     throw invalidConfig(`Unable to create config at ${configPath}: ${errorMessage(error)}`);
   }
