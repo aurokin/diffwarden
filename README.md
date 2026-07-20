@@ -10,7 +10,12 @@ Diffwarden gives any coding agent one stable review command: it fans a diff out 
 multiple reviewer engines, cross-checks their findings, and returns a single
 machine-readable JSON artifact — without holding any API keys of its own.
 
-<!-- demo GIF: seeded claude+codex review -->
+<p align="center">
+  <img src="https://raw.githubusercontent.com/aurokin/diffwarden/main/assets/readme-demo.gif" alt="diffwarden demo: a claude+codex review flags a P1, the fix lands, the re-run comes back clean with exit 0" width="518">
+</p>
+
+*A real session: two reviewers flag a planted P1, the fix lands, and the same command
+comes back green with `exit 0`.*
 
 ## Quick Start
 
