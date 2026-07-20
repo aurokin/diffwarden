@@ -71,6 +71,7 @@ import {
   runReviewBatchEvents,
   runReviewEvents,
   runReviewerPreflightReport,
+  windowsDoctorCaveat,
 } from "./core/runner.js";
 import {
   type ReviewEvent,
@@ -226,8 +227,10 @@ const reviewCommand = program
       reportMode?: string;
     }) => {
       if (!options.target) {
-        reviewCommand.help();
-        return;
+        // No implicit default: a silently assumed target could trigger unexpected model spend.
+        throw invalidCli(
+          "Missing required option --target. Pass --target uncommitted for working-tree changes or --target base:<branch> for a branch diff.",
+        );
       }
 
       await runReviewCli({
@@ -1072,6 +1075,11 @@ function resolveReviewPlan(options: {
 
 function renderPreflightText(report: ReviewerPreflightReport): string {
   const lines = ["# Diffwarden Doctor", "", `CWD: ${report.cwd}`, ""];
+
+  const caveat = windowsDoctorCaveat();
+  if (caveat !== undefined) {
+    lines.push(caveat, "");
+  }
 
   for (const reviewer of report.reviewers) {
     lines.push(`## ${reviewer.id}`, "");

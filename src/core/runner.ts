@@ -662,6 +662,21 @@ async function* settleInCompletionOrder<T>(
   }
 }
 
+/**
+ * One-line doctor caveat for Windows hosts, or undefined elsewhere. The
+ * platform parameter exists so tests can exercise both branches without
+ * patching process.platform.
+ */
+export function windowsDoctorCaveat(
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  if (platform !== "win32") {
+    return undefined;
+  }
+
+  return "Windows is untested: diffwarden contains Windows-specific handling but it has not been validated on this platform.";
+}
+
 export async function runReviewerPreflightReport(
   options: Omit<RunReviewOptions, "resolved" | "strict">,
 ): Promise<ReviewerPreflightReport> {

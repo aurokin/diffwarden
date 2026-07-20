@@ -189,6 +189,26 @@ export function contextOptions(
   return rows;
 }
 
+/**
+ * Ids to pre-check on the FIRST pass through the selection multiselect: the ready reviewers whose
+ * discovered (engine, transport) candidate is `available` — so a plain Enter through the wizard
+ * accepts a working default config instead of aborting with "No reviewers selected". Entries with
+ * no available candidate stay unchecked; when nothing is available the list is empty and the
+ * existing empty-selection warn/abort behavior applies unchanged.
+ */
+export function defaultSelectedReviewerIds(
+  ready: PublicReviewerEntry[],
+  candidates: ReviewerDiscoveryCandidate[],
+): string[] {
+  const byTransport = buildCandidateMap(candidates);
+  return ready
+    .filter((entry) => {
+      const transport = effectiveTransport(toDraft(entry));
+      return byTransport.get(`${entry.engine}::${transport}`)?.status === "available";
+    })
+    .map((entry) => entry.id);
+}
+
 function buildCandidateMap(
   candidates: ReviewerDiscoveryCandidate[],
 ): Map<string, ReviewerDiscoveryCandidate> {
@@ -269,6 +289,11 @@ async function runReviewerConfigureFlow(options: {
   // re-prompt once; only a second consecutive empty confirm quits.
   let warnedEmptySelection = false;
 
+  // Pre-check the available reviewers on the first pass so accepting every default (plain Enter)
+  // yields a working config. Cleared once the user deliberately submits an empty selection —
+  // re-checking them on the warn re-prompt would fight an intentional deselect-all.
+  let preselectIds = defaultSelectedReviewerIds(options.ready, options.candidates);
+
   while (true) {
     const readyOptions = options.ready.map((entry) => {
       const draft = draftsById.get(entry.id) ?? toDraft(entry);
@@ -282,9 +307,10 @@ async function runReviewerConfigureFlow(options: {
     const picked = await multiselect({
       message: "Select reviewers to include  (Esc to quit)",
       options: [...readyOptions, ...contextOptions(options.candidates, options.ready)],
-      initialValues: options.ready
-        .filter((entry) => draftsById.has(entry.id))
-        .map((entry) => entry.id),
+      initialValues:
+        draftsById.size > 0
+          ? options.ready.filter((entry) => draftsById.has(entry.id)).map((entry) => entry.id)
+          : preselectIds,
       required: false,
       ...io,
     });
@@ -313,6 +339,7 @@ async function runReviewerConfigureFlow(options: {
     if (draft.length === 0) {
       if (!warnedEmptySelection) {
         warnedEmptySelection = true;
+        preselectIds = [];
         log.warn("Nothing selected — space toggles a reviewer. Enter again to quit.", io);
         continue;
       }
@@ -373,6 +400,10 @@ async function configureLoop(
         },
         { value: QUIT, label: "✕ quit", hint: "exit without writing" },
       ],
+      // Highlight the write row by default: at least one reviewer is always selected here, so a
+      // plain Enter completes the wizard instead of opening the first reviewer's editor (which
+      // made uniform Enter presses loop forever without ever writing).
+      initialValue: "write",
       ...io,
     });
     if (isCancel(action)) {

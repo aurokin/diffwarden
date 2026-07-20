@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a problem with the diffwarden CLI.
+labels: ["bug"]
+body:
+  - type: input
+    id: diffwarden-version
+    attributes:
+      label: Diffwarden version
+      description: Output of `diffwarden --version`.
+      placeholder: 0.4.0
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      description: Output of `node --version`.
+      placeholder: v22.19.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 15.5 (arm64)
+    validations:
+      required: true
+  - type: textarea
+    id: doctor-output
+    attributes:
+      label: diffwarden doctor output
+      description: Paste the full output of `diffwarden doctor` (add `--reviewer` flags to match your setup).
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Command run + expected vs actual
+      description: The exact command you ran, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: json-output
+    attributes:
+      label: --json / --ndjson output snippet
+      description: Optional machine-readable output from the failing command, if available.
+      render: json
+    validations:
+      required: false

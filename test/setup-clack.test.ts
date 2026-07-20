@@ -5,6 +5,7 @@ import type { ReviewerCandidateStatus, ReviewerDiscoveryCandidate } from "../src
 import {
   availableTransports,
   contextOptions,
+  defaultSelectedReviewerIds,
   effectiveTransport,
   modelFieldHint,
   reviewerHint,
@@ -208,5 +209,58 @@ describe("contextOptions", () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ value: "__context_codex", hint: "first" });
+  });
+});
+
+describe("defaultSelectedReviewerIds", () => {
+  it("pre-selects ready reviewers whose discovered (engine, transport) candidate is available", () => {
+    const ids = defaultSelectedReviewerIds(
+      [
+        { id: "pi-a", engine: "pi", transport: "sdk" },
+        { id: "codex-a", engine: "codex", transport: "cli" },
+      ],
+      [
+        candidate({ engine: "pi", transport: "sdk", status: "available", detail: "ok" }),
+        candidate({ engine: "codex", transport: "cli", status: "available", detail: "ok" }),
+      ],
+    );
+    expect(ids).toEqual(["pi-a", "codex-a"]);
+  });
+
+  it("skips entries whose matching candidate is not available", () => {
+    const ids = defaultSelectedReviewerIds(
+      [
+        { id: "pi-a", engine: "pi", transport: "sdk" },
+        { id: "codex-a", engine: "codex", transport: "cli" },
+      ],
+      [
+        candidate({ engine: "pi", transport: "sdk", status: "available", detail: "ok" }),
+        candidate({ engine: "codex", transport: "cli", status: "missing_auth", detail: "no auth" }),
+      ],
+    );
+    expect(ids).toEqual(["pi-a"]);
+  });
+
+  it("matches on the entry's effective transport when the entry leaves transport unset", () => {
+    const ids = defaultSelectedReviewerIds(
+      [{ id: "gemini-a", engine: "gemini" }],
+      [
+        candidate({
+          engine: "gemini",
+          transport: effectiveTransport(toDraft({ id: "gemini-a", engine: "gemini" })),
+          status: "available",
+          detail: "ok",
+        }),
+      ],
+    );
+    expect(ids).toEqual(["gemini-a"]);
+  });
+
+  it("returns an empty list when no candidate is available", () => {
+    const ids = defaultSelectedReviewerIds(
+      [{ id: "codex-a", engine: "codex", transport: "cli" }],
+      [candidate({ engine: "codex", transport: "cli", status: "missing_auth", detail: "d" })],
+    );
+    expect(ids).toEqual([]);
   });
 });

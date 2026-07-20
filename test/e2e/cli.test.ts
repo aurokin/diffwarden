@@ -61,6 +61,24 @@ describe("diffwarden CLI e2e", () => {
     });
   });
 
+  it("rejects review without a --target", async () => {
+    await expect(runDiffwarden(process.cwd(), ["review"])).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining(
+        "Missing required option --target. Pass --target uncommitted for working-tree changes or --target base:<branch> for a branch diff.",
+      ),
+    });
+  });
+
+  it("rejects review with a reviewer but no --target", async () => {
+    await expect(
+      runDiffwarden(process.cwd(), ["review", "--reviewer", "fake"]),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("Missing required option --target"),
+    });
+  });
+
   it("reviews uncommitted changes with the fake reviewer in JSON mode", async () => {
     const repo = createRepo();
     writeFileSync(path.join(repo, "tracked.txt"), "changed\n");

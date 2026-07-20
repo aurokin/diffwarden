@@ -3,6 +3,29 @@
 Use this guide when deciding whether Diffwarden is the right review runner for a
 workflow, and when choosing SDK or CLI transports for a reviewer.
 
+## Why Not Your Agent's Built-In Review?
+
+Most coding agents now ship a built-in review mode, and it is the right default when the
+review only needs to serve that agent's own session. Diffwarden exists for the cases a
+built-in cannot cover:
+
+- **Independent second opinions.** A built-in review asks the model that wrote the code to
+  grade its own work, so it shares the author's blind spots. Diffwarden runs the same diff
+  through a different engine — or several — for a genuinely independent cross-check.
+  Claude and Codex are the flagship engines; the remaining adapters are experimental.
+- **One contract for every engine.** Every run produces the same machine-readable
+  artifact: a full JSON report through `--json` or `--out`, and an NDJSON event stream
+  with a versioned `schema_version`. Agents and CI can gate on findings uniformly without
+  parsing per-engine output.
+- **Read-only by enforced tool policy.** Reviewers run under the safest read-only posture
+  each adapter supports — sandbox flags, denied approvals, restricted tools — not just a
+  prompt asking the model to behave.
+- **No keys to hold.** Diffwarden carries no API credentials of its own. Reviews run
+  through the agent CLIs and SDK auth the user already has, and bill there.
+
+The [Codex comparison below](#diffwarden-vs-codex-review) is the worked example: what a
+strong built-in review path owns, and where Diffwarden picks up.
+
 ## Diffwarden vs Codex Review
 
 Codex has a first-class review path. This comparison was refreshed on June 6,

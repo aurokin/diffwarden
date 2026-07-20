@@ -6,65 +6,68 @@
 
 A small CLI for agent-callable code review.
 
-`diffwarden` lets coding agents request a review of local changes, a branch diff, or a
-single commit, then receive human display output, agent-readable text, or structured JSON
-findings. The CLI owns target resolution, review prompting, parsing, validation, and
-rendering; reviewer SDKs and CLIs stay behind adapters.
+Diffwarden gives any coding agent one stable review command: it fans a diff out to
+multiple reviewer engines, cross-checks their findings, and returns a single
+machine-readable JSON artifact — without holding any API keys of its own.
+
+<!-- demo GIF: seeded claude+codex review -->
 
 ## Quick Start
 
-Requires Node `>=22.19.0`.
+Requires Node `>=22.19.0`. Developed and tested on macOS and Linux; Windows is untested —
+the CLI contains Windows-specific handling but it has not been validated.
 
-Install the published CLI from npm:
+From any Git checkout, run guided setup. `init` probes installed executables, SDK
+packages, and auth signals to discover which reviewer engines this host can already run,
+then writes a user config — all without running a review or spending model budget:
+
+```bash
+npx --yes diffwarden@latest init
+```
+
+Then run a real review against your configured reviewers:
+
+```bash
+npx --yes diffwarden@latest review --target base:main
+```
+
+With a permanent install (below), the same command is just `diffwarden review --target base:main`.
+
+Reviews bill against your existing engine subscriptions or API keys; Diffwarden holds no
+keys of its own and never bills you directly. Duration and cost vary by engine, model, and
+diff size.
+
+For a permanent install, use npm:
 
 ```bash
 npm install --global diffwarden
 diffwarden --version
 ```
 
-For a one-off run without a global install:
+To verify a specific reviewer's runtime, auth, model, and effort settings, or to force the
+discovery scaffold:
 
 ```bash
-npx --yes diffwarden@latest --version
+diffwarden init --discover   # force the discovery scaffold
+diffwarden doctor --reviewer-set 1
+diffwarden doctor --reviewer claude
+diffwarden review --target base:main --reviewer claude
 ```
 
-From any Git checkout, run a credential-free smoke review:
+Agents should opt into direct text output with `--agent`:
+
+```bash
+diffwarden review --target base:main --agent
+```
+
+### Development and CI Smoke Tests
+
+The built-in `fake` reviewer runs a credential-free review, useful for smoke-testing the
+pipeline in CI or local development without any engine installed:
 
 ```bash
 diffwarden review --target uncommitted --reviewer fake
-```
-
-That command renders the human review display. Agents should opt into direct text output:
-
-```bash
 diffwarden review --target uncommitted --reviewer fake --agent
-```
-
-For real reviews, use an installed and authenticated reviewer. Replace `pi` with the
-reviewer you want to use:
-
-```bash
-diffwarden doctor --reviewer pi
-diffwarden review --target base:main --reviewer pi
-```
-
-On a fresh machine, find out which reviewers this host can already run before configuring
-anything. Discovery probes installed executables, SDK packages, and auth signals without
-running a review or spending model budget:
-
-```bash
-diffwarden reviewers discover
-```
-
-Then create a user config so you can run Diffwarden without passing reviewers on every
-command. In a terminal, a bare `diffwarden init` walks you through discovery; pass `--json` or
-run non-interactively for a static starter:
-
-```bash
-diffwarden init              # in a TTY: guided discovery; non-TTY or --json: static starter
-diffwarden init --discover   # force the discovery scaffold
-diffwarden doctor --reviewer-set 1
-diffwarden review --target base:main
 ```
 
 For local development from a source checkout:
@@ -76,6 +79,15 @@ pnpm install
 pnpm build
 pnpm dev -- review --target uncommitted --reviewer fake
 ```
+
+## Why Not Your Agent's Built-In Review?
+
+Built-in review commands ask the same model that wrote the code to judge it. Diffwarden
+provides an independent second opinion across engines: multiple reviewers see the same
+diff, and their findings are cross-checked and aggregated. The output is a stable
+machine-readable contract any agent or CI gate can consume, the review path is read-only
+by design, and Diffwarden never holds credentials — reviewers use the auth you already
+have. See [`docs/comparisons.md`](./docs/comparisons.md) for the full argument.
 
 ## Common Commands
 
@@ -95,6 +107,10 @@ diffwarden review --target base:main --reviewer-set 2 --report
 diffwarden review --target base:main --reviewer-set 2 --fail-on-findings P2
 diffwarden review show review.json
 ```
+
+Examples above mix flagship engines (`claude`, `codex` — fully supported and live-tested)
+with experimental engines (`cursor`, `pi`, `droid`, and others — functional, best-effort);
+see [Current Status](#current-status) for the tier breakdown.
 
 Verify reviewer runtime, auth, model, and effort settings without reviewing a diff:
 
@@ -176,13 +192,8 @@ focus-only runs or `--overview` to override config that disables the overview la
 
 When no `--reviewer` or `--reviewer-set` is provided, config must define
 `defaultReviewerSet`; otherwise the CLI exits with a config-required error. For local
-development and credential-free tests, pass `--reviewer fake` explicitly.
-
-Create a starter user config with:
-
-```bash
-diffwarden init
-```
+development and credential-free tests, pass `--reviewer fake` explicitly. Create a user
+config with `diffwarden init` (see [Quick Start](#quick-start)).
 
 ## Review Output Modes
 
@@ -215,24 +226,11 @@ diffwarden review --target base:main --reviewer-set 2 --ndjson
 {"schema_version":2,"type":"final_result","artifact":{…}}
 ```
 
-No-focus event-stream guarantees:
-
-- Once `run_started` is emitted, the stream always ends with **exactly one** terminal
-  frame: `final_result` (authoritative aggregated `ReviewArtifact`) or `error` (an expected
-  terminal failure such as all reviewers failing or a strict-mode violation).
-- `reviewer_result` events are **provisional** (`provisional: true`): their findings are
-  pre-aggregation and are not yet deduplicated or merged across reviewers. Only
-  `final_result.artifact` is authoritative; treat it as the equivalent of `--json`.
-- Under concurrency, `reviewer_result`/`reviewer_failed` arrive in completion order, but
-  the `reviewers` array in `final_result.artifact` always follows selection order.
-- `--out`, `--report`, and `--fail-on-findings` operate on the final artifact and behave
-  identically across formats. In `ndjson` mode a terminal `error` frame is emitted and the
-  process exits non-zero without throwing, so the stream stays a clean sequence of frames.
-
-For focus runs, stdout carries a `ReviewBatchArtifact` instead. Batch NDJSON starts with
-`batch_started`, emits lane-scoped lifecycle events with `lane_id`, emits `lane_finished` or
-`lane_failed`, and still terminates with exactly one `final_result` carrying the full batch
-artifact or one `error`. Normal no-focus NDJSON remains unchanged.
+The stream ends with exactly one terminal frame: `final_result` (the authoritative
+aggregated artifact, equivalent to `--json`) or `error`. `reviewer_result` events are
+provisional and pre-aggregation. Focus runs carry a `ReviewBatchArtifact` with lane-scoped
+events. Full event-stream guarantees, ordering rules, and batch NDJSON behavior are
+documented in [`docs/agent-workflows.md`](./docs/agent-workflows.md#ndjson-event-stream-guarantees).
 
 ### Debugging Reviewer Output (opt-in)
 
@@ -245,53 +243,20 @@ diffwarden review --target base:main --reviewer droid-cli --debug-reviewer-outpu
 diffwarden review --target base:main --reviewer droid-cli --ndjson --debug-reviewer-output
 ```
 
-- Each CLI-transport reviewer artifact gains a bounded `debug_output` field with separate
-  `stdout`/`stderr` transcripts, total byte counts, and per-stream truncation flags. Budget:
-  256 KiB per stream per reviewer (retried runs share the budget, so the failing first
-  attempt is preserved). Transports that cannot expose raw output simply omit the field.
-- With `--ndjson`, bounded `reviewer_debug_output` events additionally stream while the
-  reviewer runs (up to 8 KiB of text per event; a final event with `truncated: true` marks
-  an exhausted stream budget). These events are non-authoritative and never affect results,
-  validation, gating, exit codes, or the terminal-frame guarantee. Consumers must ignore
-  unknown fields on NDJSON events; new optional fields are additive within a schema version.
-- When both `--ndjson` and `--debug-reviewer-output` are set, adapters with a native stream
-  output mode switch to it so debug events arrive live instead of at process exit: Claude
-  CLI runs with `--output-format stream-json --verbose`, and Cursor and Droid with
-  `--output-format stream-json` (support is probed first; CLIs without the mode silently
-  stay on `json`, recorded as `debugStreamModeDropped` in reviewer metadata). Stream events
-  are rendered as compact one-line summaries — assistant text verbatim, tool activity as
-  `[tool_use ...]`-style markers, reasoning/thinking content excluded — and the final
-  review result is extracted from the stream so the artifact parses identically to
-  non-stream runs. In stream mode the artifact's `debug_output.stdout` records those same
-  summaries rather than the raw JSONL (which embeds reasoning content and would waste the
-  bounded budget), so the artifact transcript matches the streamed events. Unparseable stream output degrades to raw passthrough; stream problems
-  never fail the review. Without `--ndjson`, invocations are unchanged even when
-  `--debug-reviewer-output` is set.
-- Codex app-server reviewers capture debug output only in `stdio-isolated` mode:
-  notification summaries in the same one-line format feed `debug_output.stdout` (completed
-  agent-message deltas coalesced into live text blocks and reconciled with the authoritative
-  completed text without duplication, other items as `[item:<type>]` markers, and server
-  requests as `[request <method> -> <decision>]` notes; token usage and reasoning remain
-  excluded), and the isolated child's stderr is teed raw into `debug_output.stderr`. The shared-server modes
-  (`attach`/`auto`/`launch`) are asymmetric: they talk to a daemon over a socket, so there
-  is no child stderr to tee, and event capture is withheld entirely — recorded as
-  `debugOutputDropped: "shared-server-unverified"` in reviewer metadata — until thread
-  scoping of shared-daemon notifications is verified against a live attach-mode capture.
-- Antigravity reviewers have no machine-readable stdout mode, so with
-  `--debug-reviewer-output` the adapter instead tails the transcript JSONL the CLI
-  live-appends under the review's isolated home directory and renders the same one-line
-  summaries (planner prose verbatim, tool activity as `[tool_use ...]` markers, the prompt
-  echo and checkpoints as size markers, chain-of-thought excluded). This is a filesystem
-  poll only — the invocation never changes — and it degrades silently if the transcript
-  never appears (recorded as `debugOutputDropped: "transcript-unavailable"` in reviewer
-  metadata). The raw stdout passthrough (the review text) is captured either way.
-- Without the flag, artifacts and event streams are byte-identical to today.
+Reviewer artifacts gain a bounded `debug_output` field with stdout/stderr transcripts, and
+with `--ndjson` bounded debug events stream live while the reviewer runs. Debug output is
+the raw transport transcript and can echo prompt fragments and file contents, so treat it
+as a local debugging aid rather than something to ship to CI logs by default. Per-adapter
+capture behavior, stream modes, and budgets are documented in
+[`docs/features.md`](./docs/features.md#debugging-reviewer-output).
 
-Sensitivity: debug output is the raw transport transcript. It can contain more context than
-the normalized artifact — prompt fragments, file contents, provider diagnostics — so treat
-it as a local debugging aid, not something to commit or ship to CI logs by default.
-`--report-mode full` reports embed the artifact (including `debug_output` when opted in);
-`--report-mode metadata` reports never do.
+## Stability
+
+The `--json` artifact and NDJSON frames carry `schema_version`. Additive fields may appear
+at any time within a schema version; consumers must ignore unknown fields. Breaking shape
+changes bump `schema_version` and are called out in release notes. Exit codes and
+documented flags are stable. Human render output is explicitly not parseable or stable.
+Pre-1.0, a semver minor release may include a `schema_version` bump.
 
 Human progress (not a contract): in `--json` mode, when stderr is a TTY, diffwarden prints
 per-reviewer progress lines to **stderr** so long multi-reviewer runs are not silent. This
@@ -374,29 +339,24 @@ does not remove the manually linked development skill.
 
 ## Current Status
 
-Implemented:
+Diffwarden supports two tiers of reviewer engines:
 
-- TypeScript CLI scaffold.
-- Git target resolution for uncommitted, base branch, and single-commit reviews.
-- Custom instruction targets for repository-scoped reviews.
-- Fake reviewer for credential-free development.
-- Review parsing, rendering, validation, and aggregation.
-- Diff-backed focus lanes with optional overview and batch artifacts.
-- Opt-in review history reports.
-- Project/user `diffwarden.config.json` discovery.
-- Host-aware reviewer discovery and config setup (`reviewers discover`, `reviewers add`,
-  `init --discover`).
-- Reviewer sets and `engine[:profile]` reviewer specs.
-- Cursor, Claude, Pi, Droid, and GitHub Copilot SDK adapters.
-- Codex app-server transport with shared server reuse, structured review mode, and
-  ephemeral read-only threads.
-- Thin CLI transport adapters for Codex, Gemini, OpenCode, Grok, Antigravity, GitHub
-  Copilot, and CLI variants of Cursor, Claude, Pi, and Droid.
-- npm publishing for the `diffwarden` CLI package.
+- **Flagship (fully supported):** `claude` and `codex`. These engines are live-tested and
+  are the recommended defaults for real reviews.
+- **Experimental (functional, best-effort):** `cursor`, `pi`, `droid`, `copilot`,
+  `gemini`, `opencode`, `grok`, and `antigravity`. These adapters work through the same
+  review pipeline but receive less live testing; expect rougher edges.
 
-Not implemented:
+The built-in `fake` reviewer is a credential-free test engine for development and CI, not
+part of either tier.
 
-- Publishing review comments to external services.
+Every engine shares the same target resolution, review prompting, parsing, validation,
+aggregation, and output contract. Publishing review comments to external services is
+permanently out of scope.
+
+## Security
+
+See [`SECURITY.md`](./SECURITY.md) for the security policy and how to report vulnerabilities.
 
 ## Documentation
 
@@ -414,7 +374,7 @@ Read from top to bottom until you have enough detail:
    environment defaults.
 7. [`docs/adapters.md`](./docs/adapters.md) - SDK and CLI reviewer adapter behavior.
 8. [`docs/macos.md`](./docs/macos.md) - macOS executable trust and performance triage.
-9. [`docs/release.md`](./docs/release.md) - GitHub and npm release process.
+9. [`docs/release.md`](https://github.com/aurokin/diffwarden/blob/main/docs/release.md) - GitHub and npm release process (repository only; not shipped in the npm package).
 10. [`QUALITY.md`](./QUALITY.md) - lint, typecheck, test, coverage, complexity, and e2e
    commands.
 11. [`SPEC.md`](./SPEC.md) - full product and architecture specification.
