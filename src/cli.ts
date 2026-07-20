@@ -227,8 +227,10 @@ const reviewCommand = program
       reportMode?: string;
     }) => {
       if (!options.target) {
-        reviewCommand.help();
-        return;
+        // No implicit default: a silently assumed target could trigger unexpected model spend.
+        throw invalidCli(
+          "Missing required option --target. Pass --target uncommitted for working-tree changes or --target base:<branch> for a branch diff.",
+        );
       }
 
       await runReviewCli({
