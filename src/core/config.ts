@@ -1579,7 +1579,9 @@ export type ReviewerSetReplaceOptions = {
 export async function replaceReviewerSetInUserConfig(
   options: ReviewerSetReplaceOptions,
 ): Promise<ReviewerSetMembershipResult> {
-  // Membership may reference local-appended reviewers: validate ids against the MERGED view.
+  // Base sets are SYNCED: a member defined only in this host's overlay would break the set on
+  // every other host, so membership validates against the base alone — with a targeted error
+  // when the id does exist locally.
   const localIds = await readLocalReviewerIds(options.env ?? process.env, options.homeDir);
   const {
     path,
@@ -1588,9 +1590,11 @@ export async function replaceReviewerSetInUserConfig(
   } = await mutateUserConfig(options, (rawConfig, configPath) => {
     const reviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
     for (const member of options.members) {
-      if (findReviewerIndexById(reviewers, member) < 0 && !localIds.has(member)) {
+      if (findReviewerIndexById(reviewers, member) < 0) {
         throw invalidConfig(
-          `No reviewer with id "${member}" in ${configPath}; add it before adding it to a set`,
+          localIds.has(member)
+            ? `Reviewer "${member}" exists only in the local overlay; base reviewer sets are synced and must reference base reviewers. Add it to the base config first, or define a host-only set in the overlay file.`
+            : `No reviewer with id "${member}" in ${configPath}; add it before adding it to a set`,
         );
       }
     }
@@ -1617,7 +1621,8 @@ export async function replaceReviewerSetInUserConfig(
 export async function addReviewerToSetInUserConfig(
   options: ReviewerSetMembershipOptions,
 ): Promise<ReviewerSetMembershipResult> {
-  // Membership may reference local-appended reviewers: validate ids against the MERGED view.
+  // Base sets are SYNCED: reject a member defined only in this host's overlay (see the same
+  // check in replaceReviewerSetInUserConfig).
   const localIds = await readLocalReviewerIds(options.env ?? process.env, options.homeDir);
   const {
     path,
@@ -1625,12 +1630,11 @@ export async function addReviewerToSetInUserConfig(
     result,
   } = await mutateUserConfig(options, (rawConfig, configPath) => {
     const reviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
-    if (
-      findReviewerIndexById(reviewers, options.reviewerId) < 0 &&
-      !localIds.has(options.reviewerId)
-    ) {
+    if (findReviewerIndexById(reviewers, options.reviewerId) < 0) {
       throw invalidConfig(
-        `No reviewer with id "${options.reviewerId}" in ${configPath}; add it before adding it to a set`,
+        localIds.has(options.reviewerId)
+          ? `Reviewer "${options.reviewerId}" exists only in the local overlay; base reviewer sets are synced and must reference base reviewers. Add it to the base config first, or define a host-only set in the overlay file.`
+          : `No reviewer with id "${options.reviewerId}" in ${configPath}; add it before adding it to a set`,
       );
     }
     appendToReviewerSet(rawConfig, options.setName, options.reviewerId);

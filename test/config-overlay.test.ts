@@ -529,17 +529,27 @@ describe("base writes under an overlay", () => {
     ).rejects.toThrow(/remove droid --local/);
   });
 
-  it("set membership accepts local-appended reviewer ids (merged view)", async () => {
+  it("set membership rejects local-only reviewer ids (base sets are synced)", async () => {
     const { xdg } = setup(baseConfig, {
       reviewers: [{ id: "droid", engine: "droid", transport: "cli" }],
     });
 
-    const result = await addReviewerToSetInUserConfig({
+    // A base set referencing a host-local id would sync broken to every other host.
+    await expect(
+      addReviewerToSetInUserConfig({
+        setName: "night",
+        reviewerId: "droid",
+        env: { XDG_CONFIG_HOME: xdg },
+      }),
+    ).rejects.toThrow(/exists only in the local overlay/);
+
+    // Base reviewers are still fine, overridden or not.
+    const overridden = await addReviewerToSetInUserConfig({
       setName: "night",
-      reviewerId: "droid",
+      reviewerId: "codex",
       env: { XDG_CONFIG_HOME: xdg },
     });
-    expect(result.members).toEqual(["droid"]);
+    expect(overridden.members).toEqual(["codex"]);
   });
 
   it("preserves a symlinked base config when writing through it", async () => {

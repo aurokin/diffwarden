@@ -73,8 +73,10 @@ In the overlay, `--enabled` writes an explicit `enabled: true` (absence means "i
 base", so re-enabling must be explicit to beat a base `enabled: false`). Per-field override
 clearing is a hand edit; `remove <id> --local` clears a reviewer's whole overlay entry.
 Reviewer sets are base-owned: there is no `--local` for `reviewers set`, and
-`add --local --set <name>` is rejected. The interactive `reviewers add`, `edit`, and
-`remove` flows ask base-vs-local when an overlay file exists.
+`add --local --set <name>` is rejected. Base set membership must reference base reviewers —
+an id that exists only in this host's overlay is rejected, since the synced set would break
+on every other host (define a host-only set in the overlay file instead). The interactive
+`reviewers add`, `edit`, and `remove` flows ask base-vs-local when an overlay file exists.
 
 Base writes stay safe under an overlay: any base edit whose merged result would be invalid
 is refused naming both files, and a base write that an overlay key shadows prints a note
