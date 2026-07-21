@@ -32,7 +32,6 @@ import {
   loadDiffwardenConfig,
   loadLayeredUserConfigView,
   loadUserConfigReviewerEntries,
-  mergeConfigOverlay,
   removeReviewerFromLocalConfig,
   removeReviewerFromSetInUserConfig,
   removeReviewerFromUserConfig,
@@ -41,6 +40,7 @@ import {
   setReviewerInUserConfig,
   userConfigPath,
   userLocalConfigPath,
+  validateConfigLayers,
 } from "./core/config.js";
 import {
   type ReviewerCandidateRecommendation,
@@ -2057,30 +2057,21 @@ async function warnIfOrphanOverlayConflicts(basePath: string): Promise<void> {
   if (!existsSync(localPath)) {
     return;
   }
+  let baseContent: string;
+  let localContent: string;
   try {
-    const baseRaw = JSON.parse(await readFile(basePath, "utf8")) as unknown;
-    const localRaw = JSON.parse(await readFile(localPath, "utf8")) as unknown;
-    if (
-      typeof baseRaw !== "object" ||
-      baseRaw === null ||
-      Array.isArray(baseRaw) ||
-      typeof localRaw !== "object" ||
-      localRaw === null ||
-      Array.isArray(localRaw)
-    ) {
-      return;
-    }
-    const { merged } = mergeConfigOverlay(
-      baseRaw as Record<string, unknown>,
-      localRaw as Record<string, unknown>,
-    );
-    if (!diffwardenConfigSchema.safeParse(merged).success) {
-      process.stderr.write(
-        `Warning: the existing local overlay at ${localPath} does not merge cleanly with the new config at ${basePath}; diffwarden will fail to load until one of them is fixed. Run diffwarden doctor for a diagnosis.\n`,
-      );
-    }
+    baseContent = await readFile(basePath, "utf8");
+    localContent = await readFile(localPath, "utf8");
   } catch {
-    // Unreadable layer: the load path reports it; init's advisory must not fail the command.
+    // Unreadable layer: nothing to diagnose here; init's advisory must not fail the command.
+    return;
+  }
+  try {
+    validateConfigLayers(baseContent, localContent, basePath, localPath);
+  } catch {
+    process.stderr.write(
+      `Warning: the existing local overlay at ${localPath} does not merge cleanly with the new config at ${basePath}; diffwarden will fail to load until one of them is fixed. Run diffwarden doctor for a diagnosis.\n`,
+    );
   }
 }
 

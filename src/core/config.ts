@@ -230,8 +230,30 @@ export async function loadDiffwardenConfig(
     };
   }
 
-  const baseObject = parseRawConfigObject(raw, configPath);
-  const localObject = parseRawConfigObject(localRaw, localPath);
+  const { config, provenance } = validateConfigLayers(raw, localRaw, configPath, localPath);
+
+  return {
+    path: configPath,
+    sha256: sha256(raw),
+    config,
+    overlay: { path: localPath, sha256: sha256(localRaw), ...provenance },
+  };
+}
+
+/**
+ * Run the LOAD path's full base+local validation on raw file contents without touching disk:
+ * parse both layers, check the overlay shape, merge, check appended-reviewer completeness, and
+ * schema-validate the merged view. Throws exactly what loadDiffwardenConfig would, so callers
+ * (init's orphan-overlay advisory) cannot drift from the real loader.
+ */
+export function validateConfigLayers(
+  baseContent: string,
+  localContent: string,
+  basePath: string,
+  localPath: string,
+): { config: DiffwardenConfig; provenance: ConfigOverlayProvenance } {
+  const baseObject = parseRawConfigObject(baseContent, basePath);
+  const localObject = parseRawConfigObject(localContent, localPath);
   assertLocalOverlayShape(localObject, localPath);
 
   const { merged, provenance } = mergeConfigOverlay(baseObject, localObject);
@@ -240,16 +262,10 @@ export async function loadDiffwardenConfig(
   const parsed = diffwardenConfigSchema.safeParse(merged);
   if (!parsed.success) {
     throw invalidConfig(
-      `Invalid merged config (base ${configPath} + local ${localPath}): ${z.prettifyError(parsed.error)}`,
+      `Invalid merged config (base ${basePath} + local ${localPath}): ${z.prettifyError(parsed.error)}`,
     );
   }
-
-  return {
-    path: configPath,
-    sha256: sha256(raw),
-    config: parsed.data,
-    overlay: { path: localPath, sha256: sha256(localRaw), ...provenance },
-  };
+  return { config: parsed.data, provenance };
 }
 
 /**
@@ -971,7 +987,7 @@ function omitManagedReviewerKeys(raw: Record<string, unknown>): Record<string, u
 async function mutateLocalConfig<T>(
   options: { env?: NodeJS.ProcessEnv; homeDir?: string; expectedSha256?: string },
   mutate: (localRaw: Record<string, unknown>, localPath: string) => T,
-): Promise<{ path: string; sha256: string; result: T }> {
+): Promise<{ path: string; sha256: string; created: boolean; result: T }> {
   const env = options.env ?? process.env;
   const basePath = userConfigPath(env, options.homeDir);
   const baseContent = await readFileIfExists(basePath);
@@ -1010,7 +1026,12 @@ async function mutateLocalConfig<T>(
     serialized,
     existingRaw === undefined ? { expectAbsent: true } : { expectedSha256: sha256(existingRaw) },
   );
-  return { path: localPath, sha256: sha256(serialized), result };
+  return {
+    path: localPath,
+    sha256: sha256(serialized),
+    created: existingRaw === undefined,
+    result,
+  };
 }
 
 /**
@@ -1024,13 +1045,12 @@ export async function addReviewersToLocalConfig(options: {
   homeDir?: string;
   expectedSha256?: string;
 }): Promise<AddReviewersToUserConfigResult> {
-  const created = { value: false };
   const {
     path: localPath,
     sha256: digest,
+    created,
     result,
   } = await mutateLocalConfig(options, (localRaw, configPath) => {
-    created.value = Object.keys(localRaw).length === 0;
     const reviewers = Array.isArray(localRaw.reviewers) ? [...localRaw.reviewers] : [];
     const actions: ("added" | "updated")[] = [];
     for (const entry of options.entries) {
@@ -1039,7 +1059,7 @@ export async function addReviewersToLocalConfig(options: {
     localRaw.reviewers = reviewers;
     return actions;
   });
-  return { path: localPath, created: created.value, actions: result, sha256: digest };
+  return { path: localPath, created, actions: result, sha256: digest };
 }
 
 /**

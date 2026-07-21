@@ -15,6 +15,7 @@ import {
   removeReviewerFromLocalConfig,
   removeReviewerFromUserConfig,
   replaceReviewerLocalOverride,
+  validateConfigLayers,
 } from "../src/core/config.js";
 
 let root: string | undefined;
@@ -317,6 +318,18 @@ describe("local overlay write path", () => {
     expect(written.reviewers).toEqual([{ id: "droid", engine: "droid", transport: "cli" }]);
   });
 
+  it("reports created: false when the overlay file already exists, even empty", async () => {
+    const { xdg } = setup(baseConfig, {});
+
+    const result = await addReviewersToLocalConfig({
+      entries: [{ id: "droid", engine: "droid", transport: "cli" }],
+      env: { XDG_CONFIG_HOME: xdg },
+    });
+
+    expect(result.created).toBe(false);
+    expect(result.actions).toEqual(["added"]);
+  });
+
   it("edit --local writes a minimal partial entry and explicit enabled: true beats base disabled", async () => {
     const { xdg, configDir } = setup({
       ...baseConfig,
@@ -551,6 +564,48 @@ describe("init under a pre-existing overlay", () => {
     await expect(
       loadDiffwardenConfig({ cwd: root as string, repoRoot: root as string, env }),
     ).rejects.toThrow(/local overlay reviewer "codex" has no base entry to overlay/);
+  });
+});
+
+describe("validateConfigLayers", () => {
+  const base = JSON.stringify(baseConfig);
+
+  it("rejects everything the loader would, including overlay-shape problems the merged schema misses", () => {
+    // Duplicate overlay ids fold into ONE schema-valid merged entry, so only the shape check sees them.
+    const dupes = JSON.stringify({
+      reviewers: [
+        { id: "pi-default", enabled: false },
+        { id: "pi-default", enabled: true },
+      ],
+    });
+    expect(() => validateConfigLayers(base, dupes, "/base", "/local")).toThrow(
+      /duplicate reviewer id "pi-default"/,
+    );
+    expect(() =>
+      validateConfigLayers(base, JSON.stringify({ reviewers: {} }), "/base", "/local"),
+    ).toThrow(/"reviewers" must be an array/);
+    expect(() => validateConfigLayers(base, "{not json", "/base", "/local")).toThrow(
+      /Invalid JSON/,
+    );
+    expect(() =>
+      validateConfigLayers(
+        base,
+        JSON.stringify({ reviewers: [{ id: "ghost", enabled: false }] }),
+        "/base",
+        "/local",
+      ),
+    ).toThrow(/no base entry to overlay/);
+  });
+
+  it("accepts a clean pair and returns the merged config with provenance", () => {
+    const { config, provenance } = validateConfigLayers(
+      base,
+      JSON.stringify({ reviewers: [{ id: "pi-default", enabled: false }] }),
+      "/base",
+      "/local",
+    );
+    expect(config.reviewers?.find((entry) => entry.id === "pi-default")?.enabled).toBe(false);
+    expect(provenance.reviewerOverrides["pi-default"]).toEqual(["enabled"]);
   });
 });
 
