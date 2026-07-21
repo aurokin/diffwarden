@@ -26,6 +26,7 @@ import {
   diffwardenConfigSchema,
   editReviewerInLocalConfig,
   editReviewerInUserConfig,
+  findProjectConfigPath,
   initDiffwardenConfig,
   listUserConfigReviewerSets,
   listUserConfigReviewers,
@@ -1840,9 +1841,20 @@ async function inspectConfigForDoctor(cwd: string): Promise<DoctorConfigHealth> 
     loaded = await loadDiffwardenConfig({ cwd });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // A project config wins wholesale and is loaded standalone, so when one was selected the
+    // failure is its own — diagnosing the untouched user layers would point at the wrong files.
+    const projectPath = findProjectConfigPath(cwd);
     return {
       warnings,
-      fatal: { message, diagnosis: await diagnoseConfigLayers(basePath, localPath) },
+      fatal: {
+        message,
+        diagnosis:
+          projectPath !== undefined
+            ? [
+                `Project config ${projectPath} was selected and failed to load; fix or remove it (user config layers are not consulted while it exists)`,
+              ]
+            : await diagnoseConfigLayers(basePath, localPath),
+      },
     };
   }
 

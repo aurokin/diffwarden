@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -1054,6 +1055,38 @@ describe("diffwarden discovery & setup e2e", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ created: true });
     expect(result.stderr).toContain("does not merge cleanly");
     expect(result.stderr).toContain("diffwarden doctor");
+  });
+
+  it("doctor diagnoses a failing project config instead of blaming the user layers", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    mkdirSync(path.join(configHome, "diffwarden"), { recursive: true });
+    writeFileSync(
+      userConfigFile(configHome),
+      `${JSON.stringify(
+        {
+          defaultReviewerSet: "1",
+          reviewerSets: { "1": ["codex"] },
+          reviewers: [{ id: "codex", engine: "codex", transport: "cli" }],
+          readonly: true,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    // The repo's own config wins wholesale — and is broken. The diagnosis must name it, not
+    // report the (valid, unconsulted) user layers.
+    const repoDir = realpathSync(mkdtemp("diffwarden-e2e-project-"));
+    const projectPath = path.join(repoDir, "diffwarden.config.json");
+    writeFileSync(projectPath, "{not json\n");
+
+    const error = (await runDiffwarden(repoDir, ["doctor", "--reviewer", "fake", "--json"], {
+      XDG_CONFIG_HOME: configHome,
+    }).catch((failure) => failure)) as { code?: number; stdout: string };
+    expect(error.code).toBe(1);
+    const parsed = JSON.parse(error.stdout) as { error: string; diagnosis: string[] };
+    expect(parsed.error).toContain(projectPath);
+    expect(parsed.diagnosis.join("\n")).toContain(projectPath);
+    expect(parsed.diagnosis.join("\n")).not.toContain("valid standalone");
   });
 
   it("rejects an add with no engine and an unknown engine", async () => {

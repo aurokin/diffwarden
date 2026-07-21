@@ -1915,7 +1915,7 @@ function starterConfigJson(): string {
   )}\n`;
 }
 
-function findProjectConfigPath(cwd: string, repoRoot: string | undefined): string | undefined {
+export function findProjectConfigPath(cwd: string, repoRoot?: string): string | undefined {
   let current = path.resolve(cwd);
   const stopAt = repoRoot === undefined ? path.parse(current).root : path.resolve(repoRoot);
 
