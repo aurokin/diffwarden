@@ -442,6 +442,22 @@ describe("local overlay write path", () => {
     expect((base.reviewers as unknown[]).length).toBe(2);
   });
 
+  it("remove --local guards the effective default set like the base path (refuses without force)", async () => {
+    const { xdg } = setup(baseConfig, {
+      reviewers: [{ id: "droid", engine: "droid", transport: "cli" }],
+      // Local replacement of the DEFAULT set makes the appended id its effective member.
+      reviewerSets: { "1": ["droid"] },
+    });
+    const env = { XDG_CONFIG_HOME: xdg };
+
+    await expect(removeReviewerFromLocalConfig({ id: "droid", env })).rejects.toThrow(
+      /default reviewer set "1".*--force/s,
+    );
+
+    const forced = await removeReviewerFromLocalConfig({ id: "droid", force: true, env });
+    expect(forced.setsReferencing).toEqual(["1"]);
+  });
+
   it("remove --local errors when the overlay has no entry for the id", async () => {
     const { xdg } = setup(baseConfig, { reviewers: [] });
 
@@ -568,6 +584,36 @@ describe("base writes under an overlay", () => {
     expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
     const written = JSON.parse(readFileSync(realConfig, "utf8")) as Record<string, unknown>;
     expect(written.reviewers).toBeDefined();
+  });
+
+  it("creates the dangling link's target directory instead of failing ENOENT", async () => {
+    const { xdg, configDir } = setup();
+    // The link points into a dotfiles directory that has not been created yet.
+    const realConfig = path.join(root as string, "dotfiles", "nested", "diffwarden.config.json");
+    const linkPath = path.join(configDir, "diffwarden.config.json");
+    symlinkSync(realConfig, linkPath);
+
+    const { initDiffwardenConfig } = await import("../src/core/config.js");
+    await initDiffwardenConfig({ env: { XDG_CONFIG_HOME: xdg } });
+
+    const { lstatSync } = await import("node:fs");
+    expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(realConfig, "utf8"))).toBeDefined();
+  });
+
+  it("fails on a symlink cycle instead of renaming over an unresolved link", async () => {
+    const { xdg, configDir } = setup();
+    const linkPath = path.join(configDir, "diffwarden.config.json");
+    const otherPath = path.join(configDir, "cycle.json");
+    symlinkSync(otherPath, linkPath);
+    symlinkSync(linkPath, otherPath);
+
+    const { initDiffwardenConfig } = await import("../src/core/config.js");
+    await expect(initDiffwardenConfig({ env: { XDG_CONFIG_HOME: xdg } })).rejects.toThrow(
+      /Too many levels of symbolic links/,
+    );
+    const { lstatSync } = await import("node:fs");
+    expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
   });
 });
 

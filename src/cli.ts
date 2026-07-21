@@ -631,7 +631,11 @@ reviewers
       }
 
       if (selection.target === "local") {
-        const result = await removeReviewerFromLocalConfig({ id: selection.id, env: process.env });
+        const result = await removeReviewerFromLocalConfig({
+          id: selection.id,
+          force: options.force === true,
+          env: process.env,
+        });
         for (const setName of result.setsReferencing) {
           process.stderr.write(
             `Warning: reviewer set "${setName}" still references "${selection.id}", which no longer exists on this host; reviews using that set will fail until it is pruned.\n`,

@@ -1222,6 +1222,7 @@ export type RemoveReviewerFromLocalConfigResult = {
  */
 export async function removeReviewerFromLocalConfig(options: {
   id: string;
+  force?: boolean;
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
   expectedSha256?: string;
@@ -1267,6 +1268,23 @@ export async function removeReviewerFromLocalConfig(options: {
         if (Array.isArray(members) && members.includes(options.id)) {
           setsReferencing.push(name);
         }
+      }
+      // Mirror the base remove path's default-set guard: a dangling member in the EFFECTIVE
+      // default set breaks every default review on this host, so refuse without --force.
+      const defaultSet =
+        typeof localRaw.defaultReviewerSet === "string"
+          ? localRaw.defaultReviewerSet
+          : typeof baseRaw.defaultReviewerSet === "string"
+            ? baseRaw.defaultReviewerSet
+            : undefined;
+      if (
+        options.force !== true &&
+        defaultSet !== undefined &&
+        setsReferencing.includes(defaultSet)
+      ) {
+        throw invalidConfig(
+          `This leaves the default reviewer set "${defaultSet}" referencing "${options.id}", which would no longer exist on this host; default reviews would fail. Re-run with --force to proceed, or update the set first.`,
+        );
       }
     }
     return { setsReferencing, wasAppended: isAppended };
@@ -1652,6 +1670,7 @@ async function createConfigFileExclusive(configPath: string, content: string): P
   // "wx" on a DANGLING symlink fails EEXIST, but a dotfiles link installed before its target is a
   // creation, not a conflict — resolve through the link and create its target instead.
   const targetPath = await resolveWriteTarget(configPath);
+  await mkdir(path.dirname(targetPath), { recursive: true });
   try {
     await writeFile(targetPath, content, { flag: "wx" });
   } catch (error) {
@@ -1676,6 +1695,9 @@ async function atomicWrite(
   // updated through the link, not replaced by a regular file that silently orphans the host from
   // its synced source.
   const targetPath = await resolveWriteTarget(configPath);
+  // A dangling link may point into a directory that does not exist yet (dotfiles bootstrap):
+  // create it, so the write creates the link's target instead of failing ENOENT.
+  await mkdir(path.dirname(targetPath), { recursive: true });
   const tempPath = `${targetPath}.${process.pid}.tmp`;
   await writeFile(tempPath, content, "utf8");
   try {
@@ -1705,11 +1727,16 @@ async function resolveWriteTarget(configPath: string, depth = 0): Promise<string
     // realpath fails for a DANGLING link too, not just an absent file. A dotfiles symlink is
     // often installed before its target exists; write THROUGH it (creating the target) instead
     // of letting the rename replace the link with a regular file. Depth-capped against cycles.
-    if (depth < 32) {
-      const linkTarget = await readlink(configPath).catch(() => undefined);
-      if (linkTarget !== undefined) {
-        return resolveWriteTarget(path.resolve(path.dirname(configPath), linkTarget), depth + 1);
+    const linkTarget = await readlink(configPath).catch(() => undefined);
+    if (linkTarget !== undefined) {
+      if (depth >= 32) {
+        // Still a link at the cap: a cycle or pathological chain. Fail — falling through would
+        // rename over a link we did not fully follow.
+        throw invalidConfig(
+          `Too many levels of symbolic links resolving config path: ${configPath}`,
+        );
       }
+      return resolveWriteTarget(path.resolve(path.dirname(configPath), linkTarget), depth + 1);
     }
     // File absent (fresh create): resolve the parent directory — just created by mkdir above —
     // and keep the basename.
