@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readlink, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -1649,8 +1649,11 @@ export async function removeReviewerFromSetInUserConfig(
 
 async function createConfigFileExclusive(configPath: string, content: string): Promise<void> {
   await mkdir(path.dirname(configPath), { recursive: true });
+  // "wx" on a DANGLING symlink fails EEXIST, but a dotfiles link installed before its target is a
+  // creation, not a conflict — resolve through the link and create its target instead.
+  const targetPath = await resolveWriteTarget(configPath);
   try {
-    await writeFile(configPath, content, { flag: "wx" });
+    await writeFile(targetPath, content, { flag: "wx" });
   } catch (error) {
     if (isNodeErrorWithCode(error, "EEXIST")) {
       throw invalidConfig(
@@ -1695,12 +1698,21 @@ async function atomicWrite(
 }
 
 /** Fully resolve `configPath` through symlinks; for a not-yet-existing file, resolve its directory. */
-async function resolveWriteTarget(configPath: string): Promise<string> {
+async function resolveWriteTarget(configPath: string, depth = 0): Promise<string> {
   try {
     return await realpath(configPath);
   } catch {
-    // File absent (fresh create) or a dangling link component: resolve the parent directory —
-    // just created by mkdir above — and keep the basename.
+    // realpath fails for a DANGLING link too, not just an absent file. A dotfiles symlink is
+    // often installed before its target exists; write THROUGH it (creating the target) instead
+    // of letting the rename replace the link with a regular file. Depth-capped against cycles.
+    if (depth < 32) {
+      const linkTarget = await readlink(configPath).catch(() => undefined);
+      if (linkTarget !== undefined) {
+        return resolveWriteTarget(path.resolve(path.dirname(configPath), linkTarget), depth + 1);
+      }
+    }
+    // File absent (fresh create): resolve the parent directory — just created by mkdir above —
+    // and keep the basename.
     try {
       return path.join(await realpath(path.dirname(configPath)), path.basename(configPath));
     } catch {

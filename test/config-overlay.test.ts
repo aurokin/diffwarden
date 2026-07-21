@@ -549,6 +549,26 @@ describe("base writes under an overlay", () => {
       ["pi-default", "codex", "droid"],
     );
   });
+
+  it("preserves a DANGLING base-config symlink by creating its target (link installed before dotfiles)", async () => {
+    const { xdg, configDir } = setup();
+    // The symlink landed first; its dotfiles target does not exist yet.
+    const dotfiles = path.join(root as string, "dotfiles");
+    mkdirSync(dotfiles, { recursive: true });
+    const realConfig = path.join(dotfiles, "diffwarden.config.json");
+    const linkPath = path.join(configDir, "diffwarden.config.json");
+    symlinkSync(realConfig, linkPath);
+
+    const { initDiffwardenConfig } = await import("../src/core/config.js");
+    await initDiffwardenConfig({ env: { XDG_CONFIG_HOME: xdg } });
+
+    // The link must survive with the starter config created at its target, not be replaced by a
+    // regular file that orphans the host from its synced source.
+    const { lstatSync } = await import("node:fs");
+    expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    const written = JSON.parse(readFileSync(realConfig, "utf8")) as Record<string, unknown>;
+    expect(written.reviewers).toBeDefined();
+  });
 });
 
 describe("init under a pre-existing overlay", () => {
