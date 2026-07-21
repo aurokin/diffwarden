@@ -220,13 +220,44 @@ function buildCandidateMap(
   return map;
 }
 
+/** Which config file a layered interactive flow writes: the synced base or the host-local overlay. */
+export type ConfigWriteTarget = "base" | "local";
+
+/**
+ * The base-vs-overlay question shared by the interactive flows when a host overlay is in play.
+ * Rendered inside the calling flow's intro frame. Returns undefined on cancel.
+ */
+async function selectWriteTarget(options: {
+  basePath: string;
+  localPath: string;
+}): Promise<ConfigWriteTarget | undefined> {
+  const choice = await select({
+    message: "Write changes to which config?  (Esc to cancel)",
+    options: [
+      { value: "base", label: "base — synced config", hint: options.basePath },
+      { value: "local", label: "local — this host only", hint: options.localPath },
+    ],
+    initialValue: "base",
+    ...io,
+  });
+  if (isCancel(choice)) {
+    return undefined;
+  }
+  return choice as ConfigWriteTarget;
+}
+
 /** Scaffold a whole config from discovery (the `init` flow). */
-export function runClackReviewerSetup(options: {
+export async function runClackReviewerSetup(options: {
   ready: PublicReviewerEntry[];
   candidates: ReviewerDiscoveryCandidate[];
   configPath: string;
 }): Promise<PublicReviewerEntry[] | undefined> {
-  return runReviewerConfigureFlow({ ...options, title: "diffwarden · setup", writeVerb: "Write" });
+  const outcome = await runReviewerConfigureFlow({
+    ...options,
+    title: "diffwarden · setup",
+    writeVerb: "Write",
+  });
+  return outcome?.entries;
 }
 
 /** Add reviewers to an existing config (the `reviewers add` flow); the caller merges the result. */
@@ -236,7 +267,9 @@ export function runClackReviewerAdd(options: {
   configPath: string;
   /** Ids already in the config (excluded from `ready`) — an in-picker rename must not collide with them. */
   reservedIds: Set<string>;
-}): Promise<PublicReviewerEntry[] | undefined> {
+  /** Present when a host overlay is in play: ask base-vs-local after the intro (inside the frame). */
+  targetSelect?: { basePath: string; localPath: string };
+}): Promise<{ entries: PublicReviewerEntry[]; target: ConfigWriteTarget } | undefined> {
   return runReviewerConfigureFlow({
     ...options,
     title: "diffwarden · add reviewers",
@@ -256,8 +289,24 @@ async function runReviewerConfigureFlow(options: {
   title: string;
   writeVerb: "Write" | "Add";
   reservedIds?: Set<string>;
-}): Promise<PublicReviewerEntry[] | undefined> {
+  targetSelect?: { basePath: string; localPath: string };
+}): Promise<{ entries: PublicReviewerEntry[]; target: ConfigWriteTarget } | undefined> {
   intro(options.title, io);
+
+  // With a host overlay in play, destination comes first so every later hint (the write row, the
+  // outro) can name the file that will actually change.
+  let target: ConfigWriteTarget = "base";
+  let configPath = options.configPath;
+  if (options.targetSelect !== undefined) {
+    const choice = await selectWriteTarget(options.targetSelect);
+    if (choice === undefined) {
+      cancel("Cancelled — nothing written.", io);
+      return undefined;
+    }
+    target = choice;
+    configPath =
+      choice === "local" ? options.targetSelect.localPath : options.targetSelect.basePath;
+  }
 
   const candidateByTransport = buildCandidateMap(options.candidates);
   // One catalog session per run: auth resolution and the model fetch happen at most once per
@@ -351,7 +400,7 @@ async function runReviewerConfigureFlow(options: {
     const outcome = await configureLoop(
       draft,
       candidateByTransport,
-      options.configPath,
+      configPath,
       options.writeVerb,
       reservedIds,
       catalog,
@@ -365,10 +414,10 @@ async function runReviewerConfigureFlow(options: {
     }
     const gerund = options.writeVerb === "Add" ? "Adding" : "Writing";
     outro(
-      `${gerund} ${draft.length} reviewer${draft.length === 1 ? "" : "s"} to ${options.configPath}`,
+      `${gerund} ${draft.length} reviewer${draft.length === 1 ? "" : "s"} to ${configPath}`,
       io,
     );
-    return draft.map(toEntry);
+    return { entries: draft.map(toEntry), target };
   }
 }
 
@@ -440,22 +489,73 @@ export async function runClackReviewerEdit(options: {
   targetId?: string;
   candidates: ReviewerDiscoveryCandidate[];
   configPath: string;
-}): Promise<{ id: string; entry: PublicReviewerEntry } | undefined> {
+  /**
+   * Present when a host overlay is in play: ask base-vs-local after the intro, seed the editor
+   * from the right layer (base entries for base edits, the merged view for local overrides), and
+   * label the fields the overlay already overrides.
+   */
+  layers?: {
+    basePath: string;
+    localPath: string;
+    baseEntries: PublicReviewerEntry[];
+    mergedEntries: PublicReviewerEntry[];
+    localOverridesById: Record<string, string[]>;
+    appendedReviewerIds: string[];
+    /** Skip the target question and use this target (the `edit --local` interactive path). */
+    forcedTarget?: ConfigWriteTarget;
+  };
+}): Promise<{ id: string; entry: PublicReviewerEntry; target: ConfigWriteTarget } | undefined> {
   intro("diffwarden · edit reviewer", io);
   const candidateByTransport = buildCandidateMap(options.candidates);
   const catalog = createModelCatalogSession();
 
+  // Destination first (when a host overlay is in play): the editable entry list depends on it —
+  // base edits exclude local-only reviewers, local overrides edit the merged (effective) view.
+  let target: ConfigWriteTarget = "base";
+  let entries = options.entries;
+  let configPath = options.configPath;
+  const { layers } = options;
+  if (layers !== undefined) {
+    if (layers.forcedTarget !== undefined) {
+      target = layers.forcedTarget;
+    } else {
+      const choice = await selectWriteTarget({
+        basePath: layers.basePath,
+        localPath: layers.localPath,
+      });
+      if (choice === undefined) {
+        cancel("Cancelled — nothing written.", io);
+        return undefined;
+      }
+      target = choice;
+    }
+    entries = target === "local" ? layers.mergedEntries : layers.baseEntries;
+    configPath = target === "local" ? layers.localPath : layers.basePath;
+  }
+
   let entry =
     options.targetId !== undefined
-      ? options.entries.find((candidate) => candidate.id === options.targetId)
+      ? entries.find((candidate) => candidate.id === options.targetId)
       : undefined;
   if (entry === undefined) {
+    if (options.targetId === undefined && entries.length === 0) {
+      cancel("No reviewers to edit here — nothing written.", io);
+      return undefined;
+    }
+    const localOnly = new Set(layers?.appendedReviewerIds ?? []);
     const picked = await select({
       message: "Select a reviewer to edit (Esc to cancel)",
-      options: options.entries.map((candidate) => ({
+      options: entries.map((candidate) => ({
         value: candidate.id,
         label: candidate.id,
-        hint: `${candidate.engine}${candidate.enabled === false ? " · disabled" : ""}`,
+        hint: [
+          candidate.engine,
+          ...(candidate.enabled === false ? ["disabled"] : []),
+          ...(localOnly.has(candidate.id) ? ["local only"] : []),
+          ...((layers?.localOverridesById[candidate.id]?.length ?? 0) > 0
+            ? [`host overrides: ${(layers?.localOverridesById[candidate.id] ?? []).join(", ")}`]
+            : []),
+        ].join(" · "),
       })),
       ...io,
     });
@@ -463,7 +563,7 @@ export async function runClackReviewerEdit(options: {
       cancel("Cancelled — nothing written.", io);
       return undefined;
     }
-    entry = options.entries.find((candidate) => candidate.id === picked);
+    entry = entries.find((candidate) => candidate.id === picked);
   }
   if (entry === undefined) {
     cancel("Cancelled — nothing written.", io);
@@ -472,17 +572,22 @@ export async function runClackReviewerEdit(options: {
 
   const reviewerId = entry.id;
   const draft = toDraft(entry);
+  const overriddenFields = layers?.localOverridesById[reviewerId] ?? [];
+  const overrideNote =
+    target === "local" && overriddenFields.length > 0
+      ? ` · host overrides: ${overriddenFields.join(", ")}`
+      : "";
 
   while (true) {
     const transport = transportLabel[effectiveTransport(draft)];
     const field = await select({
-      message: `Editing ${draft.id} (${draft.engine} · ${transport})`,
+      message: `Editing ${draft.id} (${draft.engine} · ${transport})${overrideNote}`,
       options: [
         transportFieldRow(draft),
         modelFieldRow(draft),
         effortFieldRow(draft),
         enabledFieldRow(draft),
-        { value: "save", label: "✓ save changes", hint: options.configPath },
+        { value: "save", label: "✓ save changes", hint: configPath },
         quitOption,
       ],
       ...io,
@@ -511,27 +616,48 @@ export async function runClackReviewerEdit(options: {
     }
   }
 
-  outro(`Updating ${reviewerId} in ${options.configPath}`, io);
-  return { id: reviewerId, entry: toEntry(draft) };
+  outro(`Updating ${reviewerId} in ${configPath}`, io);
+  return { id: reviewerId, entry: toEntry(draft), target };
 }
 
+/** A remove-picker row: where the reviewer lives decides what "remove" can mean for it. */
+export type RemovableReviewerSummary = ConfiguredReviewerSummary & {
+  /** base: base only · overridden: base entry with host overrides · local: overlay only. */
+  origin: "base" | "overridden" | "local";
+};
+
 /**
- * Pick a configured reviewer to remove (the `reviewers remove` flow), then confirm. Returns the id
- * to remove, or undefined when the user cancels at either step. Confirm defaults to "no" — a stray
- * Enter must not delete a reviewer.
+ * Pick a configured reviewer to remove (the `reviewers remove` flow), then confirm. The picker
+ * shows the MERGED view: a local-only reviewer routes to the overlay, an overlaid base reviewer
+ * offers a scope choice (remove everywhere vs clear host overrides only), a plain base reviewer
+ * confirms as before. Returns the id + write target, or undefined when the user cancels. Confirm
+ * defaults to "no" — a stray Enter must not delete a reviewer.
  */
 export async function runClackReviewerRemove(options: {
-  reviewers: ConfiguredReviewerSummary[];
+  reviewers: RemovableReviewerSummary[];
   configPath: string;
-}): Promise<string | undefined> {
+  /** The overlay path, when one exists — names the file in overlay-scoped prompts. */
+  localPath?: string;
+  /** Skip the scope question and clear overlay entries only (the `remove --local` path). */
+  forcedTarget?: "local";
+}): Promise<{ id: string; target: "base" | "local" } | undefined> {
   intro("diffwarden · remove reviewer", io);
 
+  const originHint: Record<RemovableReviewerSummary["origin"], string | undefined> = {
+    base: undefined,
+    overridden: "host overrides",
+    local: "local only",
+  };
   const choice = await select({
     message: "Select a reviewer to remove (Esc to cancel)",
     options: options.reviewers.map((reviewer) => ({
       value: reviewer.id,
       label: reviewer.id,
-      hint: `${reviewer.engine}${reviewer.enabled ? "" : " · disabled"}`,
+      hint: [
+        reviewer.engine,
+        ...(reviewer.enabled ? [] : ["disabled"]),
+        ...(originHint[reviewer.origin] !== undefined ? [originHint[reviewer.origin]] : []),
+      ].join(" · "),
     })),
     ...io,
   });
@@ -539,9 +665,47 @@ export async function runClackReviewerRemove(options: {
     cancel("Cancelled — nothing removed.", io);
     return undefined;
   }
+  const picked = options.reviewers.find((reviewer) => reviewer.id === choice);
+  if (picked === undefined) {
+    cancel("Cancelled — nothing removed.", io);
+    return undefined;
+  }
 
+  // Local-only reviewers live in the overlay; --local narrows every removal to the overlay.
+  let target: "base" | "local" =
+    picked.origin === "local" || options.forcedTarget === "local" ? "local" : "base";
+  if (picked.origin === "overridden" && options.forcedTarget === undefined) {
+    const scope = await select({
+      message: `"${picked.id}" has host-local overrides — remove what?  (Esc to cancel)`,
+      options: [
+        {
+          value: "base",
+          label: "the reviewer, everywhere",
+          hint: `removes it from ${options.configPath} and clears its host overrides`,
+        },
+        {
+          value: "local",
+          label: "its host overrides only",
+          hint: `keeps the reviewer; clears its entry in ${options.localPath ?? "the local overlay"}`,
+        },
+      ],
+      initialValue: "base",
+      ...io,
+    });
+    if (isCancel(scope)) {
+      cancel("Cancelled — nothing removed.", io);
+      return undefined;
+    }
+    target = scope as "base" | "local";
+  }
+
+  const targetPath =
+    target === "local" ? (options.localPath ?? "the local overlay") : options.configPath;
   const confirmed = await confirm({
-    message: `Remove "${choice}" from ${options.configPath}?`,
+    message:
+      target === "local" && picked.origin === "overridden"
+        ? `Clear the host overrides for "${picked.id}" in ${targetPath}?`
+        : `Remove "${picked.id}" from ${targetPath}?`,
     initialValue: false,
     ...io,
   });
@@ -550,8 +714,13 @@ export async function runClackReviewerRemove(options: {
     return undefined;
   }
 
-  outro(`Removing ${choice} from ${options.configPath}`, io);
-  return choice;
+  outro(
+    target === "local" && picked.origin === "overridden"
+      ? `Clearing host overrides for ${picked.id} in ${targetPath}`
+      : `Removing ${picked.id} from ${targetPath}`,
+    io,
+  );
+  return { id: picked.id, target };
 }
 
 /**

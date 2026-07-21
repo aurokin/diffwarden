@@ -3,9 +3,11 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -985,6 +987,106 @@ describe("diffwarden discovery & setup e2e", () => {
     const second = await runDiffwarden(process.cwd(), ["reviewers", "add", "codex", "--json"], env);
     expect(JSON.parse(second.stdout)).toMatchObject({ created: false, action: "updated" });
     expect(JSON.parse(readFileSync(configPath, "utf8")).reviewers).toHaveLength(1);
+  });
+
+  it("ignores a local-only overlay until the base config lands, then merges it (fresh-host bootstrap)", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const env = { XDG_CONFIG_HOME: configHome };
+    const configDir = path.join(configHome, "diffwarden");
+    const localPath = path.join(configDir, "diffwarden.config.local.json");
+    mkdirSync(configDir, { recursive: true });
+
+    // Dotfiles have not landed yet: only the host overlay exists. An overlay only overlays, so
+    // every config-driven command behaves exactly like a no-config host.
+    writeFileSync(
+      localPath,
+      `${JSON.stringify({ reviewers: [{ id: "codex", enabled: false }] }, null, 2)}\n`,
+    );
+    await expect(runDiffwarden(process.cwd(), ["reviewers", "list"], env)).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("No diffwarden config found"),
+    });
+
+    // doctor points out the orphan overlay instead of silently ignoring it.
+    const doctor = await runDiffwarden(
+      process.cwd(),
+      ["doctor", "--reviewer", "fake", "--json"],
+      env,
+    );
+    expect(doctor.stderr).toContain("not applied");
+    expect(doctor.stderr).toContain(localPath);
+
+    // The synced base lands; the very next run merges the overlay — no restart, no cache.
+    writeFileSync(
+      userConfigFile(configHome),
+      `${JSON.stringify(
+        {
+          defaultReviewerSet: "1",
+          reviewerSets: { "1": ["codex"] },
+          reviewers: [{ id: "codex", engine: "codex", transport: "cli" }],
+          readonly: true,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const list = await runDiffwarden(process.cwd(), ["reviewers", "list", "--json"], env);
+    const summary = JSON.parse(list.stdout);
+    expect(summary.config.path).toBe(userConfigFile(configHome));
+    expect(summary.config.local.path).toBe(localPath);
+    expect(summary.localOverrides).toEqual({ codex: ["enabled"] });
+    expect(summary.reviewers).toEqual([expect.objectContaining({ id: "codex", enabled: false })]);
+  });
+
+  it("warns when init creates a base that conflicts with a pre-existing overlay", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const configDir = path.join(configHome, "diffwarden");
+    mkdirSync(configDir, { recursive: true });
+    // The overlay landed before dotfiles: a partial override for an id the static starter
+    // config does not define. init must still succeed — and say the pair will not load.
+    writeFileSync(
+      path.join(configDir, "diffwarden.config.local.json"),
+      `${JSON.stringify({ reviewers: [{ id: "codex", enabled: false }] }, null, 2)}\n`,
+    );
+
+    const result = await runDiffwarden(process.cwd(), ["init", "--json"], {
+      XDG_CONFIG_HOME: configHome,
+    });
+    expect(JSON.parse(result.stdout)).toMatchObject({ created: true });
+    expect(result.stderr).toContain("does not merge cleanly");
+    expect(result.stderr).toContain("diffwarden doctor");
+  });
+
+  it("doctor diagnoses a failing project config instead of blaming the user layers", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    mkdirSync(path.join(configHome, "diffwarden"), { recursive: true });
+    writeFileSync(
+      userConfigFile(configHome),
+      `${JSON.stringify(
+        {
+          defaultReviewerSet: "1",
+          reviewerSets: { "1": ["codex"] },
+          reviewers: [{ id: "codex", engine: "codex", transport: "cli" }],
+          readonly: true,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    // The repo's own config wins wholesale — and is broken. The diagnosis must name it, not
+    // report the (valid, unconsulted) user layers.
+    const repoDir = realpathSync(mkdtemp("diffwarden-e2e-project-"));
+    const projectPath = path.join(repoDir, "diffwarden.config.json");
+    writeFileSync(projectPath, "{not json\n");
+
+    const error = (await runDiffwarden(repoDir, ["doctor", "--reviewer", "fake", "--json"], {
+      XDG_CONFIG_HOME: configHome,
+    }).catch((failure) => failure)) as { code?: number; stdout: string };
+    expect(error.code).toBe(1);
+    const parsed = JSON.parse(error.stdout) as { error: string; diagnosis: string[] };
+    expect(parsed.error).toContain(projectPath);
+    expect(parsed.diagnosis.join("\n")).toContain(projectPath);
+    expect(parsed.diagnosis.join("\n")).not.toContain("valid standalone");
   });
 
   it("rejects an add with no engine and an unknown engine", async () => {

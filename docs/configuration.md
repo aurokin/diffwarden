@@ -26,6 +26,87 @@ flow. Pass `--json`, or run in a non-TTY (CI, piped), to write the static starte
 instead. `init` and `reviewers add` always write to the user config path above, never to a
 project `diffwarden.config.json`. See [Discovery & Setup](#discovery--setup).
 
+## Host-Local Overlay
+
+The user config can be split into a fleet-portable base and a host-owned overlay:
+
+- `…/diffwarden/diffwarden.config.json` — the base, safe to sync across machines (dotfiles)
+- `…/diffwarden/diffwarden.config.local.json` — the host-local overlay, never synced
+
+At load time the overlay's raw JSON is merged over the base before validation; the merged
+result is what runs. With no overlay file present, behavior is byte-identical to a single
+config file — users who keep one diffwarden file see nothing new.
+
+Precedence in one sentence: a project config wins wholesale (the overlay never applies to
+it); otherwise the user base config is loaded and, if `diffwarden.config.local.json` sits
+next to it, it is merged on top — local wins.
+
+Merge rules:
+
+| Value | Rule |
+| --- | --- |
+| Objects (`reporting`, `sdkOptions`, …) | Deep-merge key-wise; local wins per key |
+| Scalars / `null` / type mismatches | Local value wholesale (`null` is a value, not a deletion) |
+| Arrays (`modelCatalog`, set members) | Local array replaces wholesale |
+| `reviewers` | Merged by `id`: a matching id overlays that entry's fields; a new id appends (and must be a complete entry, `engine` included) |
+| `reviewerSets` | The map merges per set name; a local set replaces that base set's membership wholesale |
+
+There is no per-host deletion: a base reviewer cannot be removed by the overlay — disable it
+with `enabled: false` instead. The base must always remain a complete, valid, standalone
+config (that is exactly what dotfiles syncing depends on); `diffwarden doctor` flags a base
+that only validates with the overlay's help.
+
+What belongs where: the reviewer catalog, reviewer sets, `defaultReviewerSet`, `readonly`,
+and `reporting` are fleet policy — keep them in the base. Machine identity
+(`sdkOptions.machineId` for droid) and per-host `enabled` toggles are host-owned — keep them
+in the overlay.
+
+The declarative reviewer commands take `--local` to target the overlay:
+
+```bash
+diffwarden reviewers add droid --transport cli --local
+diffwarden reviewers edit droid --disabled --local     # host-only toggle
+diffwarden reviewers remove droid --local              # clears this host's overrides
+```
+
+In the overlay, `--enabled` writes an explicit `enabled: true` (absence means "inherit
+base", so re-enabling must be explicit to beat a base `enabled: false`). Per-field override
+clearing is a hand edit; `remove <id> --local` clears a reviewer's whole overlay entry.
+Reviewer sets are base-owned: there is no `--local` for `reviewers set`, and
+`add --local --set <name>` is rejected. Base set membership must reference base reviewers —
+an id that exists only in this host's overlay is rejected, since the synced set would break
+on every other host (define a host-only set in the overlay file instead). The interactive
+`reviewers add`, `edit`, and `remove` flows ask base-vs-local when an overlay file exists.
+
+Base writes stay safe under an overlay: any base edit whose merged result would be invalid
+is refused naming both files, and a base write that an overlay key shadows prints a note
+that the effective value on this host did not change. A base config that is a symlink (the
+dotfiles layout) is updated through the link, never replaced by a regular file.
+
+A worked fleet recipe:
+
+1. Keep the base in dotfiles, with droid's entry shipping WITHOUT `sdkOptions.machineId`.
+2. Per host, hand-write the overlay (no CLI verb sets `sdkOptions` today):
+
+   ```json
+   {
+     "reviewers": [
+       { "id": "droid", "sdkOptions": { "machineId": "<host-id>" } }
+     ]
+   }
+   ```
+
+3. Flip per-host toggles with `diffwarden reviewers edit <id> --disabled --local`.
+4. Add `diffwarden.config.local.json` to the dotfiles ignore list.
+5. `diffwarden doctor` and `diffwarden reviewers list` show the overlay path and which
+   values are host-local; identical base file hashes across hosts are your drift detector.
+
+Rollback is deleting the overlay file. An overlay without a base config is ignored (an
+overlay only overlays; doctor points this out), and an older diffwarden binary simply
+ignores the overlay file. On a host where the base was synced away from under an overlay
+entry, the next load fails loudly naming the orphan entry and the fix; `diffwarden doctor`
+diagnoses which file is at fault.
+
 ## Reviewer Selection
 
 Use explicit reviewers:
@@ -275,7 +356,10 @@ intended to make a run reproducible without persisting more patch content than n
 - `invocation`: the requested target, reviewers or reviewer set, model, effort, timeout,
   strict mode, finding gate, and output mode when those options were supplied.
 - `config`: the loaded config path and SHA-256 of the config file contents when a config file
-  was used. The report does not embed config contents.
+  was used. When a host-local overlay was merged over the user config, `config.local` carries
+  the overlay's path and SHA-256 as a second `{path, sha256}` record; `config.path` and
+  `config.sha256` keep meaning the base (or project) file's bytes. The report does not embed
+  config contents. Consumers that ignore unknown keys are unaffected.
 - `reviewer_selection`: the requested reviewer specs or reviewer set plus the resolved reviewer
   ids that actually ran.
 - `target`: for diff-backed targets, SHA-256 and byte count of the reviewed patch. Reports do

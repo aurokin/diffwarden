@@ -1226,8 +1226,17 @@ Initial precedence:
 1. CLI flags
 2. environment variables
 3. project config file
-4. user config file
+4. user config file (base merged with an optional host-local overlay)
 5. built-in defaults for non-reviewer behavior only
+
+The user config may be split into a syncable base (`diffwarden.config.json`) and a host-local
+overlay (`diffwarden.config.local.json` in the same directory, never synced). At load time the
+overlay's raw JSON is deep-merged over the base before schema validation: objects merge key-wise
+with local winning per key, scalars and arrays take the local value wholesale (no deletion
+markers), and `reviewers` merge by `id` (a matching id overlays that entry's fields; a new id
+appends and must be complete). `reviewerSets` merge per set name with member arrays replacing
+wholesale. The overlay never applies to a project config, and an overlay without a base is
+ignored. With no overlay file, behavior is byte-identical to a single config file.
 
 Possible environment variables:
 

@@ -14,23 +14,34 @@ import {
 import {
   type DiffwardenConfig,
   type EditReviewerPatch,
+  type LayeredUserConfigView,
   type LoadedDiffwardenConfig,
   type PublicReviewerEntry,
+  type RemoveReviewerFromUserConfigResult,
   addReviewerToSetInUserConfig,
   addReviewerToUserConfig,
+  addReviewersToLocalConfig,
   addReviewersToUserConfig,
   createDiscoveredUserConfig,
+  diffwardenConfigSchema,
+  editReviewerInLocalConfig,
   editReviewerInUserConfig,
+  findProjectConfigPath,
   initDiffwardenConfig,
   listUserConfigReviewerSets,
   listUserConfigReviewers,
   loadDiffwardenConfig,
+  loadLayeredUserConfigView,
   loadUserConfigReviewerEntries,
+  removeReviewerFromLocalConfig,
   removeReviewerFromSetInUserConfig,
   removeReviewerFromUserConfig,
+  replaceReviewerLocalOverride,
   replaceReviewerSetInUserConfig,
   setReviewerInUserConfig,
   userConfigPath,
+  userLocalConfigPath,
+  validateConfigLayers,
 } from "./core/config.js";
 import {
   type ReviewerCandidateRecommendation,
@@ -109,10 +120,19 @@ type ReviewerListSummary = {
   config: {
     path: string;
     sha256: string;
+    /** Present when a host-local overlay was merged over the user config. */
+    local?: {
+      path: string;
+      sha256: string;
+    };
   };
   defaultReviewerSet?: string;
   reviewerSets: Record<string, string[]>;
   reviewers: ReviewerListEntry[];
+  /** Per-reviewer id → fields the local overlay overrides (present only when an overlay is active). */
+  localOverrides?: Record<string, string[]>;
+  /** Reviewer ids defined only in the local overlay (present only when an overlay is active). */
+  localOnlyReviewers?: string[];
 };
 
 type ReviewerListEntry = {
@@ -307,6 +327,7 @@ program
       }
 
       const configPath = await initDiffwardenConfig();
+      await warnIfOrphanOverlayConflicts(configPath);
       process.stdout.write(
         options.json === true
           ? `${JSON.stringify({ path: configPath, created: true }, null, 2)}\n`
@@ -344,7 +365,37 @@ program
     }) => {
       // Non-review commands intentionally use command-local options only.
       // The old root/global merge path was tied to the removed --format surface.
-      const loadedConfig = await loadDiffwardenConfig({ cwd: options.cwd });
+      const configHealth = await inspectConfigForDoctor(options.cwd);
+      if (configHealth.fatal !== undefined) {
+        // Diagnose a failing config load instead of dying on it: name the file at fault and the
+        // fix, then exit non-zero. This is doctor's job when a fleet-synced base and a host
+        // overlay disagree.
+        if (options.json === true) {
+          process.stdout.write(
+            `${JSON.stringify(
+              { error: configHealth.fatal.message, diagnosis: configHealth.fatal.diagnosis },
+              null,
+              2,
+            )}\n`,
+          );
+        } else {
+          const lines = [
+            "# Diffwarden Doctor",
+            "",
+            `Config failed to load: ${configHealth.fatal.message}`,
+            "",
+            ...configHealth.fatal.diagnosis.map((line) => `- ${line}`),
+            "",
+          ];
+          process.stdout.write(`${lines.join("\n")}\n`);
+        }
+        process.exitCode = 1;
+        return;
+      }
+      const loadedConfig = configHealth.loaded;
+      for (const warning of configHealth.warnings) {
+        process.stderr.write(`Warning: ${warning}\n`);
+      }
       const cliTimeoutSeconds = parseTimeoutSeconds("--timeout", options.timeout);
       const envOptions = resolveReviewEnvOptionsWithSettings(process.env, {
         includeTimeout: cliTimeoutSeconds === undefined,
@@ -374,8 +425,15 @@ program
 
       process.stdout.write(
         options.json === true
-          ? `${JSON.stringify(report, null, 2)}\n`
-          : renderPreflightText(report),
+          ? `${JSON.stringify(
+              {
+                ...report,
+                ...(configHealth.identity !== undefined ? { config: configHealth.identity } : {}),
+              },
+              null,
+              2,
+            )}\n`
+          : renderPreflightText(report, configHealth.identity),
       );
 
       if (report.reviewers.some((reviewer) => reviewer.status === "failed")) {
@@ -455,6 +513,7 @@ reviewers
   .option("--provider <name>", "provider hint for the reviewer")
   .option("--set <name>", "also add the reviewer id to this reviewer set")
   .option("--disabled", "write the reviewer as a disabled placeholder (enabled: false)")
+  .option("--local", "write to the host-local overlay (diffwarden.config.local.json), never synced")
   .option("--interactive", "force the discovered picker for a bare add (no engine); needs a TTY")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
@@ -466,6 +525,12 @@ reviewers
       throw invalidCli(
         '--interactive forces the discovered picker and cannot be combined with a named engine. Run a bare "diffwarden reviewers add --interactive" to pick, or drop --interactive to add the named engine directly.',
       );
+    }
+
+    // Reviewer set membership is fleet policy and lives in the base config; a local set entry
+    // would shadow the ENTIRE base set on this host. Refuse the combination.
+    if (options.local === true && options.set !== undefined) {
+      throw invalidCli("reviewer set membership is base-owned; run without --local");
     }
 
     // Interactive (clack multiselect) only when no engine is named: a bare `add` at a terminal opens
@@ -481,6 +546,31 @@ reviewers
 
     const entry = buildRequiredAddEntry(engineArg, options);
 
+    if (options.local === true) {
+      const result = await addReviewersToLocalConfig({ entries: [entry], env: process.env });
+      await warnIfProjectConfigShadows(options.cwd, result.path);
+      if (options.json === true) {
+        process.stdout.write(
+          `${JSON.stringify(
+            {
+              path: result.path,
+              created: result.created,
+              action: result.actions[0],
+              reviewer: entry,
+            },
+            null,
+            2,
+          )}\n`,
+        );
+        return;
+      }
+      const verb = result.actions[0] === "updated" ? "Updated" : "Added";
+      process.stdout.write(
+        `${verb} reviewer ${entry.id} (${entry.engine}) in the local overlay ${result.path}\n`,
+      );
+      return;
+    }
+
     // By design the write target is the env-located user config (decision: always user, never
     // project), so it is not derived from --cwd. --cwd only scopes the shadow-config check below.
     const result = await addReviewerToUserConfig({
@@ -490,6 +580,7 @@ reviewers
     });
 
     await warnIfProjectConfigShadows(options.cwd, result.path);
+    await warnIfLocalOverlayShadows(entry.id, Object.keys(entry), { touchesEnabled: false });
 
     if (options.json === true) {
       process.stdout.write(
@@ -520,35 +611,78 @@ reviewers
   .command("remove [id]")
   .description("Remove a reviewer from the user config and prune it from reviewer sets.")
   .option("--force", "remove even if it empties the default reviewer set")
+  .option("--local", "remove only the host-local overlay entry (clears this host's overrides)")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
   .action(
     async (
       idArg: string | undefined,
-      options: { force?: boolean; cwd: string; json?: boolean },
+      options: { force?: boolean; local?: boolean; cwd: string; json?: boolean },
     ) => {
       // Interactive-by-default in a TTY: a bare `remove` at a terminal picks the reviewer from the
       // clack picker and confirms; naming an id stays declarative, and a non-TTY / --json bare
       // `remove` errors instead of hanging.
-      const id = idArg ?? (await resolveClackRemoveId(options));
-      if (id === undefined) {
+      const selection =
+        idArg !== undefined
+          ? { id: idArg, target: options.local === true ? ("local" as const) : ("base" as const) }
+          : await resolveClackRemoveSelection(options);
+      if (selection === undefined) {
+        return;
+      }
+
+      if (selection.target === "local") {
+        const result = await removeReviewerFromLocalConfig({
+          id: selection.id,
+          force: options.force === true,
+          env: process.env,
+        });
+        for (const setName of result.setsReferencing) {
+          process.stderr.write(
+            `Warning: reviewer set "${setName}" still references "${selection.id}", which no longer exists on this host; reviews using that set will fail until it is pruned.\n`,
+          );
+        }
+        if (options.json === true) {
+          process.stdout.write(
+            `${JSON.stringify(
+              {
+                path: result.path,
+                removed: selection.id,
+                setsReferencing: result.setsReferencing,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          return;
+        }
+        process.stdout.write(
+          result.wasAppended
+            ? `Removed reviewer ${selection.id} from the local overlay ${result.path}\n`
+            : `Cleared host overrides for ${selection.id} in ${result.path}\n`,
+        );
         return;
       }
 
       // By design the write target is the env-located user config (decision: always user, never
       // project), so it is not derived from --cwd; --cwd only scopes the shadow-config check.
       const result = await removeReviewerFromUserConfig({
-        id,
+        id: selection.id,
         env: process.env,
         ...(options.force === true ? { force: true } : {}),
       });
 
       await warnIfProjectConfigShadows(options.cwd, result.path);
+      reportRemoveOverlayOutcome(selection.id, result);
 
       if (options.json === true) {
         process.stdout.write(
           `${JSON.stringify(
-            { path: result.path, removed: id, prunedFromSets: result.prunedFromSets },
+            {
+              path: result.path,
+              removed: selection.id,
+              prunedFromSets: result.prunedFromSets,
+              ...(result.local !== undefined ? { local: result.local } : {}),
+            },
             null,
             2,
           )}\n`,
@@ -560,9 +694,29 @@ reviewers
         result.prunedFromSets.length > 0
           ? ` and pruned it from reviewer set ${result.prunedFromSets.join(", ")}`
           : "";
-      process.stdout.write(`Removed reviewer ${id}${setSuffix} in ${result.path}\n`);
+      process.stdout.write(`Removed reviewer ${selection.id}${setSuffix} in ${result.path}\n`);
     },
   );
+
+/** Stderr advisories for the overlay side of a base remove: prune outcome + dangling local set members. */
+function reportRemoveOverlayOutcome(id: string, result: RemoveReviewerFromUserConfigResult): void {
+  if (result.local === undefined) {
+    return;
+  }
+  if (result.local.pruned) {
+    process.stderr.write(`Also removed the host overrides for ${id} from ${result.local.path}\n`);
+  }
+  if (result.local.pruneError !== undefined) {
+    process.stderr.write(
+      `Warning: could not remove the overlay entry for "${id}" from ${result.local.path} (${result.local.pruneError}); the next diffwarden run will fail until it is removed by hand.\n`,
+    );
+  }
+  for (const setName of result.local.localSetsReferencing) {
+    process.stderr.write(
+      `Warning: the local overlay's reviewer set "${setName}" still references "${id}"; reviews using that set will fail until it is edited in ${result.local.path}.\n`,
+    );
+  }
+}
 
 reviewers
   .command("edit [id]")
@@ -573,6 +727,7 @@ reviewers
   .option("--provider <name>", "provider hint for the reviewer")
   .option("--enabled", "mark the reviewer enabled (clear a disabled placeholder)")
   .option("--disabled", "mark the reviewer disabled (enabled: false)")
+  .option("--local", "write to the host-local overlay (diffwarden.config.local.json), never synced")
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--json", "output machine-readable JSON")
   .action(async (idArg: string | undefined, options: ReviewerEditCliOptions) => {
@@ -595,10 +750,30 @@ reviewers
       );
     }
 
+    if (options.local === true) {
+      const result = await editReviewerInLocalConfig({ id: idArg, patch, env: process.env });
+      await warnIfProjectConfigShadows(options.cwd, result.path);
+      if (options.json === true) {
+        process.stdout.write(
+          `${JSON.stringify({ path: result.path, reviewer: result.reviewer }, null, 2)}\n`,
+        );
+        return;
+      }
+      process.stdout.write(`Updated reviewer ${idArg} in the local overlay ${result.path}\n`);
+      return;
+    }
+
+    // A base edit of an id that exists only in the overlay would report "not found" against the
+    // wrong file; point at --local instead (mirrors the remove pointer).
+    await assertNotLocalOnlyReviewer(idArg);
+
     // Write target is the env-located user config by design; --cwd only scopes the shadow check.
     const result = await editReviewerInUserConfig({ id: idArg, patch, env: process.env });
 
     await warnIfProjectConfigShadows(options.cwd, result.path);
+    await warnIfLocalOverlayShadows(idArg, Object.keys(patch), {
+      touchesEnabled: patch.enabled !== undefined,
+    });
 
     if (options.json === true) {
       process.stdout.write(
@@ -608,6 +783,26 @@ reviewers
     }
     process.stdout.write(`Updated reviewer ${idArg} in ${result.path}\n`);
   });
+
+/** Base-edit guard: an id defined only in the local overlay gets a --local pointer, not "not found". */
+async function assertNotLocalOnlyReviewer(id: string): Promise<void> {
+  const localPath = userLocalConfigPath(process.env);
+  if (!existsSync(localPath)) {
+    return;
+  }
+  let view: LayeredUserConfigView;
+  try {
+    view = await loadLayeredUserConfigView({ env: process.env });
+  } catch {
+    // Missing/broken base: let the declarative path surface its own error.
+    return;
+  }
+  if (view.appendedReviewerIds.includes(id)) {
+    throw invalidCli(
+      `Reviewer "${id}" is defined only in the local overlay at ${view.localPath}. Re-run with --local to edit it.`,
+    );
+  }
+}
 
 const reviewerSet = reviewers
   .command("set")
@@ -658,6 +853,7 @@ async function runClackSetFlow(): Promise<void> {
     // Abort instead of clobbering a concurrent config change made while the prompts were open.
     expectedSha256: sha256,
   });
+  await warnIfLocalSetShadows(edited.setName);
   process.stdout.write(
     `Updated reviewer set ${edited.setName} (${
       result.members.length === 0 ? "empty" : result.members.join(", ")
@@ -678,6 +874,7 @@ reviewerSet
     });
 
     await warnIfProjectConfigShadows(options.cwd, result.path);
+    await warnIfLocalSetShadows(setName);
 
     if (options.json === true) {
       process.stdout.write(
@@ -708,6 +905,7 @@ reviewerSet
       });
 
       await warnIfProjectConfigShadows(options.cwd, result.path);
+      await warnIfLocalSetShadows(setName);
 
       if (options.json === true) {
         process.stdout.write(
@@ -959,7 +1157,17 @@ async function runReviewCli(options: ReviewCliOptions): Promise<void> {
           }
         : {}),
       ...(loadedConfig !== undefined
-        ? { config: { path: loadedConfig.path, sha256: loadedConfig.sha256 } }
+        ? {
+            config: {
+              path: loadedConfig.path,
+              sha256: loadedConfig.sha256,
+              ...(loadedConfig.overlay !== undefined
+                ? {
+                    local: { path: loadedConfig.overlay.path, sha256: loadedConfig.overlay.sha256 },
+                  }
+                : {}),
+            },
+          }
         : {}),
       diff: resolved.diff,
     },
@@ -1073,8 +1281,18 @@ function resolveReviewPlan(options: {
   };
 }
 
-function renderPreflightText(report: ReviewerPreflightReport): string {
-  const lines = ["# Diffwarden Doctor", "", `CWD: ${report.cwd}`, ""];
+function renderPreflightText(
+  report: ReviewerPreflightReport,
+  configIdentity?: DoctorConfigHealth["identity"],
+): string {
+  const lines = [
+    "# Diffwarden Doctor",
+    "",
+    `CWD: ${report.cwd}`,
+    ...(configIdentity !== undefined ? [`Config: ${configIdentity.path}`] : []),
+    ...(configIdentity?.local !== undefined ? [`Local overlay: ${configIdentity.local.path}`] : []),
+    "",
+  ];
 
   const caveat = windowsDoctorCaveat();
   if (caveat !== undefined) {
@@ -1149,6 +1367,7 @@ type ReviewerAddCliOptions = {
   provider?: string;
   set?: string;
   disabled?: boolean;
+  local?: boolean;
   interactive?: boolean;
   cwd: string;
   json?: boolean;
@@ -1161,6 +1380,7 @@ type ReviewerEditCliOptions = {
   provider?: string;
   enabled?: boolean;
   disabled?: boolean;
+  local?: boolean;
   cwd: string;
   json?: boolean;
 };
@@ -1233,15 +1453,27 @@ async function runClackAddFlow(options: ReviewerAddCliOptions): Promise<void> {
   assertNoEntryShapingFlags(options);
 
   const configPath = userConfigPath(process.env);
+  const localPath = userLocalConfigPath(process.env);
+  const overlayExists = existsSync(localPath);
   const discovery = await discoverReviewers({ cwd: options.cwd, env: process.env });
-  // Reserve EVERY id already on disk, including hand-edited/legacy rows that loadUserConfigReviewerEntries
-  // would drop (unknown engine, etc.): mergeReviewerById matches by id alone, so an in-picker rename to
-  // such an id would otherwise silently overwrite it. listUserConfigReviewers keeps every string-id row.
-  // Capture its read-time sha so the final write can abort if the config changed while the picker was open.
+  // Reserve EVERY id already on disk — in the base AND the local overlay (the collision space is
+  // the MERGED reviewer list) — including hand-edited/legacy rows that loadUserConfigReviewerEntries
+  // would drop (unknown engine, etc.): mergeReviewerById matches by id alone, so an in-picker rename
+  // to such an id would otherwise silently overwrite it. listUserConfigReviewers keeps every
+  // string-id row. Capture the read-time shas so the final write can abort if the target file
+  // changed while the picker was open.
   const existing = existsSync(configPath)
     ? await listUserConfigReviewers({ env: process.env })
     : undefined;
-  const existingIds = new Set(existing?.reviewers.map((reviewer) => reviewer.id) ?? []);
+  const layered =
+    existsSync(configPath) && overlayExists
+      ? await loadLayeredUserConfigView({ env: process.env })
+      : undefined;
+  const existingIds = new Set(
+    layered !== undefined
+      ? layered.summaries.map((reviewer) => reviewer.id)
+      : (existing?.reviewers.map((reviewer) => reviewer.id) ?? []),
+  );
   // selectDiscoveredReviewers curates ONE recommendation per engine (primary transport preferred) —
   // the same set `init` offers. So the collapse happens before this existing-id filter by design: if
   // the primary id (e.g. `codex`) is already configured, bare add won't re-offer that engine under a
@@ -1257,14 +1489,45 @@ async function runClackAddFlow(options: ReviewerAddCliOptions): Promise<void> {
     return;
   }
 
-  const sculpted = await runClackReviewerAdd({
+  // Interactive parity: with an overlay present, the flow asks where the new reviewers land
+  // (inside its intro frame). Without one, base is the only sensible target and single-file users
+  // see nothing new. An explicit --local flag skips the question; --set implies base (set
+  // membership is base-owned, so there is nothing to ask).
+  const askTarget = options.local !== true && overlayExists && options.set === undefined;
+  if (options.local === true && !existsSync(configPath)) {
+    throw invalidCli(
+      `No diffwarden user config at ${configPath}; the local overlay only overlays a base config. Run diffwarden init first.`,
+    );
+  }
+
+  const outcome = await runClackReviewerAdd({
     ready,
     candidates: discovery.candidates,
-    configPath,
+    configPath: options.local === true ? localPath : configPath,
     reservedIds: existingIds,
+    ...(askTarget ? { targetSelect: { basePath: configPath, localPath } } : {}),
   });
-  if (sculpted === undefined || sculpted.length === 0) {
+  if (outcome === undefined || outcome.entries.length === 0) {
     process.stdout.write("Aborted.\n");
+    return;
+  }
+  const sculpted = outcome.entries;
+  const target: "base" | "local" =
+    options.local === true ? "local" : askTarget ? outcome.target : "base";
+
+  if (target === "local") {
+    // The local batch merges by id into the overlay in one atomic write; the merged view is
+    // validated before the write, and the local file's own CAS guards the prompt window.
+    await addReviewersToLocalConfig({
+      entries: sculpted,
+      env: process.env,
+      ...(layered?.localSha256 !== undefined ? { expectedSha256: layered.localSha256 } : {}),
+    });
+    await warnIfProjectConfigShadows(options.cwd, localPath);
+    const ids = sculpted.map((entry) => entry.id).join(", ");
+    process.stdout.write(
+      `Added ${sculpted.length} reviewer${sculpted.length === 1 ? "" : "s"} to the local overlay ${localPath}: ${ids}\n`,
+    );
     return;
   }
 
@@ -1304,10 +1567,22 @@ async function runClackEditFlow(
     entries,
     sha256: loadedSha256,
   } = await loadUserConfigReviewerEntries({ env: process.env });
+
+  // A host overlay in play (an overlay file exists, or --local asked for one) upgrades the editor
+  // to the layered flow: destination question, merged-view seeds for local edits, override labels.
+  const overlayExists = existsSync(userLocalConfigPath(process.env));
+  const layered =
+    overlayExists || options.local === true
+      ? await loadLayeredUserConfigView({ env: process.env })
+      : undefined;
+
   // Validate a named target first: `edit <id>` must report that the id cannot be edited (non-zero)
   // even when the editable list is empty, matching the declarative path — not silently exit 0 via
   // the empty-list message below. The bare picker (no id) is what the empty-list case belongs to.
-  if (idArg !== undefined && !entries.some((entry) => entry.id === idArg)) {
+  // The nameable universe is the MERGED view when an overlay is active (a local-only id is
+  // editable — with --local), the base file otherwise.
+  const nameableEntries = layered?.entries ?? entries;
+  if (idArg !== undefined && !nameableEntries.some((entry) => entry.id === idArg)) {
     // An id is absent from the editable set for exactly one of two reasons: it truly does not exist,
     // or it exists as a legacy/unknown-engine row (loadUserConfigReviewerEntries drops those,
     // listUserConfigReviewers keeps them). Distinguish the two so a present-but-uneditable reviewer
@@ -1321,7 +1596,7 @@ async function runClackEditFlow(
     }
     throw invalidCli(`No reviewer with id "${idArg}" to edit.`);
   }
-  if (entries.length === 0) {
+  if (nameableEntries.length === 0) {
     process.stdout.write("No configured reviewers to edit.\n");
     return;
   }
@@ -1332,9 +1607,46 @@ async function runClackEditFlow(
     ...(idArg !== undefined ? { targetId: idArg } : {}),
     candidates: discovery.candidates,
     configPath,
+    ...(layered !== undefined
+      ? {
+          layers: {
+            basePath: layered.basePath,
+            localPath: layered.localPath,
+            baseEntries: layered.baseEntries,
+            mergedEntries: layered.entries,
+            localOverridesById: layered.reviewerOverrides,
+            appendedReviewerIds: layered.appendedReviewerIds,
+            // --local skips the destination question; a named local-only id can only mean local.
+            ...(options.local === true ||
+            (idArg !== undefined && layered.appendedReviewerIds.includes(idArg))
+              ? { forcedTarget: "local" as const }
+              : {}),
+          },
+        }
+      : {}),
   });
   if (edited === undefined) {
     process.stdout.write("Aborted.\n");
+    return;
+  }
+
+  if (edited.target === "local" && layered !== undefined) {
+    // The editor showed the EFFECTIVE (merged) values; persist only the delta against the base
+    // entry so the overlay carries exactly the per-host differences.
+    const baseEntry = layered.baseEntries.find((entry) => entry.id === edited.id);
+    const patch = localOverridePatch(edited.entry, baseEntry);
+    const result = await replaceReviewerLocalOverride({
+      id: edited.id,
+      patch,
+      env: process.env,
+      ...(layered.localSha256 !== undefined ? { expectedSha256: layered.localSha256 } : {}),
+    });
+    await warnIfProjectConfigShadows(options.cwd, result.path);
+    process.stdout.write(
+      Object.keys(patch).length === 0 && baseEntry !== undefined
+        ? `Cleared host overrides for ${edited.id} in ${result.path}\n`
+        : `Updated reviewer ${edited.id} in the local overlay ${result.path}\n`,
+    );
     return;
   }
 
@@ -1345,26 +1657,87 @@ async function runClackEditFlow(
     id: edited.id,
     entry: edited.entry,
     env: process.env,
-    expectedSha256: loadedSha256,
+    expectedSha256: layered?.baseSha256 ?? loadedSha256,
   });
   await warnIfProjectConfigShadows(options.cwd, result.path);
+  await warnIfLocalOverlayShadows(edited.id, Object.keys(edited.entry), {
+    touchesEnabled: true,
+  });
   process.stdout.write(`Updated reviewer ${edited.id} in ${result.path}\n`);
 }
 
-/** Pick a configured reviewer to remove via the clack picker; mirrors the no-id remove TTY gate. */
-async function resolveClackRemoveId(options: {
+/**
+ * The overlay delta for an interactively edited reviewer: managed fields where the edited
+ * (effective) entry differs from the base entry. `enabled` is explicit in both directions —
+ * in the overlay, absence means "inherit base", so re-enabling must beat a base `enabled: false`.
+ */
+function localOverridePatch(
+  edited: PublicReviewerEntry,
+  baseEntry: PublicReviewerEntry | undefined,
+): EditReviewerPatch {
+  const editedEnabled = edited.enabled !== false;
+  const baseEnabled = baseEntry === undefined || baseEntry.enabled !== false;
+  return {
+    ...(edited.transport !== undefined && edited.transport !== baseEntry?.transport
+      ? { transport: edited.transport }
+      : {}),
+    ...(edited.provider !== undefined && edited.provider !== baseEntry?.provider
+      ? { provider: edited.provider }
+      : {}),
+    ...(edited.model !== undefined && edited.model !== baseEntry?.model
+      ? { model: edited.model }
+      : {}),
+    ...(edited.effort !== undefined && edited.effort !== baseEntry?.effort
+      ? { effort: edited.effort }
+      : {}),
+    ...(editedEnabled !== baseEnabled ? { enabled: editedEnabled } : {}),
+  };
+}
+
+/**
+ * Pick a configured reviewer to remove via the clack picker; mirrors the no-id remove TTY gate.
+ * The picker shows the MERGED view: local-only reviewers route to the overlay, overlaid base
+ * reviewers offer a scope choice (remove everywhere vs clear host overrides only).
+ */
+async function resolveClackRemoveSelection(options: {
   json?: boolean;
+  local?: boolean;
   cwd: string;
-}): Promise<string | undefined> {
+}): Promise<{ id: string; target: "base" | "local" } | undefined> {
   if (options.json === true || !isInteractiveAvailable(process.stdin)) {
     throw invalidCli("Specify a reviewer id to remove (interactive selection requires a TTY).");
   }
-  const { path: configPath, reviewers } = await listUserConfigReviewers({ env: process.env });
-  if (reviewers.length === 0) {
+  const view = await loadLayeredUserConfigView({ env: process.env });
+  if (view.summaries.length === 0) {
     process.stdout.write("No configured reviewers to remove.\n");
     return undefined;
   }
-  return runClackReviewerRemove({ reviewers, configPath });
+  const localOnly = new Set(view.appendedReviewerIds);
+  // --local narrows the picker to reviewers that actually have overlay entries to clear.
+  const summaries =
+    options.local === true
+      ? view.summaries.filter(
+          (reviewer) =>
+            localOnly.has(reviewer.id) || (view.reviewerOverrides[reviewer.id]?.length ?? 0) > 0,
+        )
+      : view.summaries;
+  if (summaries.length === 0) {
+    process.stdout.write("No reviewers with host-local overlay entries to remove.\n");
+    return undefined;
+  }
+  return runClackReviewerRemove({
+    reviewers: summaries.map((reviewer) => ({
+      ...reviewer,
+      origin: localOnly.has(reviewer.id)
+        ? ("local" as const)
+        : (view.reviewerOverrides[reviewer.id]?.length ?? 0) > 0
+          ? ("overridden" as const)
+          : ("base" as const),
+    })),
+    configPath: view.basePath,
+    ...(view.localSha256 !== undefined ? { localPath: view.localPath } : {}),
+    ...(options.local === true ? { forcedTarget: "local" as const } : {}),
+  });
 }
 
 function hasEditFieldFlags(options: ReviewerEditCliOptions): boolean {
@@ -1441,6 +1814,179 @@ function deepPreflightConfig(targets: ReviewerDeepPreflightTarget[]): Diffwarden
   };
 }
 
+type DoctorConfigHealth = {
+  loaded?: LoadedDiffwardenConfig;
+  identity?: {
+    path: string;
+    sha256: string;
+    local?: { path: string; sha256: string };
+  };
+  /** Non-fatal overlay findings: orphan overlay, base no longer standalone-valid. */
+  warnings: string[];
+  /** Set when config loading failed; `diagnosis` names which file is at fault and the fix. */
+  fatal?: { message: string; diagnosis: string[] };
+};
+
+/**
+ * Doctor's config loader: never dies on a failing merged load. On failure it inspects each layer
+ * separately — is the base valid standalone, is the overlay well-formed, which overlay entries
+ * are orphans — so the fleet-removed-an-overlaid-reviewer scenario reads as a diagnosis with a
+ * fix instead of a raw load error. On success it still warns about an unapplied (orphan) overlay
+ * and about a base that is no longer a complete standalone config.
+ */
+async function inspectConfigForDoctor(cwd: string): Promise<DoctorConfigHealth> {
+  const basePath = userConfigPath(process.env);
+  const localPath = userLocalConfigPath(process.env);
+  const localExists = existsSync(localPath);
+  const warnings: string[] = [];
+
+  let loaded: LoadedDiffwardenConfig | undefined;
+  try {
+    loaded = await loadDiffwardenConfig({ cwd });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // A project config wins wholesale and is loaded standalone, so when one was selected the
+    // failure is its own — diagnosing the untouched user layers would point at the wrong files.
+    const projectPath = findProjectConfigPath(cwd);
+    return {
+      warnings,
+      fatal: {
+        message,
+        diagnosis:
+          projectPath !== undefined
+            ? [
+                `Project config ${projectPath} was selected and failed to load; fix or remove it (user config layers are not consulted while it exists)`,
+              ]
+            : await diagnoseConfigLayers(basePath, localPath),
+      },
+    };
+  }
+
+  if (localExists && loaded?.overlay === undefined) {
+    // The overlay file exists but was not applied: a project config was selected, or no base
+    // user config exists yet (an overlay only overlays).
+    warnings.push(
+      loaded === undefined || path.resolve(loaded.path) !== path.resolve(basePath)
+        ? `A local overlay exists at ${localPath} but is not applied${
+            loaded !== undefined
+              ? ` — the project config at ${loaded.path} takes precedence`
+              : ` — no base user config exists at ${basePath}. The overlay only overlays; run diffwarden init or sync your base config to activate it.`
+          }`
+        : `A local overlay exists at ${localPath} but was not applied`,
+    );
+  }
+
+  if (loaded?.overlay !== undefined) {
+    // The dotfiles contract is that the BASE stays a complete valid config on its own; enforce it
+    // on the authoring host, where it is otherwise undetectable once the overlay papers over it.
+    const standaloneIssue = await validateBaseStandalone(loaded.path);
+    if (standaloneIssue !== undefined) {
+      warnings.push(
+        `Base config ${loaded.path} is not valid standalone (the overlay currently completes it); hosts without this overlay will fail to load it: ${standaloneIssue}`,
+      );
+    }
+  }
+
+  return {
+    ...(loaded !== undefined
+      ? {
+          loaded,
+          identity: {
+            path: loaded.path,
+            sha256: loaded.sha256,
+            ...(loaded.overlay !== undefined
+              ? { local: { path: loaded.overlay.path, sha256: loaded.overlay.sha256 } }
+              : {}),
+          },
+        }
+      : {}),
+    warnings,
+  };
+}
+
+/** Per-layer diagnosis for a failed config load: which file is broken and what fixes it. */
+async function diagnoseConfigLayers(basePath: string, localPath: string): Promise<string[]> {
+  const diagnosis: string[] = [];
+  const baseIssue = existsSync(basePath) ? await validateBaseStandalone(basePath) : undefined;
+  if (!existsSync(basePath)) {
+    diagnosis.push(`Base config: none at ${basePath}`);
+  } else {
+    diagnosis.push(
+      baseIssue === undefined
+        ? `Base config ${basePath} is valid standalone`
+        : `Base config ${basePath} is invalid standalone: ${baseIssue}`,
+    );
+  }
+
+  if (!existsSync(localPath)) {
+    return diagnosis;
+  }
+  try {
+    const localRaw = JSON.parse(await readFile(localPath, "utf8")) as unknown;
+    if (typeof localRaw !== "object" || localRaw === null || Array.isArray(localRaw)) {
+      diagnosis.push(`Local overlay ${localPath} must be a JSON object`);
+      return diagnosis;
+    }
+    diagnosis.push(`Local overlay ${localPath} is well-formed JSON`);
+    const localReviewers = (localRaw as Record<string, unknown>).reviewers;
+    if (Array.isArray(localReviewers) && existsSync(basePath) && baseIssue === undefined) {
+      const baseIds = await readBaseReviewerIds(basePath);
+      for (const reviewer of localReviewers) {
+        if (
+          typeof reviewer === "object" &&
+          reviewer !== null &&
+          typeof (reviewer as Record<string, unknown>).id === "string" &&
+          !baseIds.has((reviewer as Record<string, unknown>).id as string) &&
+          typeof (reviewer as Record<string, unknown>).engine !== "string"
+        ) {
+          diagnosis.push(
+            `Local overlay reviewer "${(reviewer as Record<string, unknown>).id as string}" has no base entry to overlay (the base may have removed it); give it an engine or remove it from ${localPath}`,
+          );
+        }
+      }
+    }
+  } catch (error) {
+    diagnosis.push(
+      `Local overlay ${localPath} is not readable JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return diagnosis;
+}
+
+/** Parse + schema-validate a base config file alone; returns the issue text, or undefined when valid. */
+async function validateBaseStandalone(basePath: string): Promise<string | undefined> {
+  try {
+    // Read + parse + schema without any overlay involvement.
+    const raw = await readFile(basePath, "utf8");
+    const data = JSON.parse(raw) as unknown;
+    const parsed = diffwardenConfigSchema.safeParse(data);
+    return parsed.success ? undefined : "schema validation failed";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function readBaseReviewerIds(basePath: string): Promise<Set<string>> {
+  const ids = new Set<string>();
+  try {
+    const raw = JSON.parse(await readFile(basePath, "utf8")) as Record<string, unknown>;
+    if (Array.isArray(raw.reviewers)) {
+      for (const reviewer of raw.reviewers) {
+        if (
+          typeof reviewer === "object" &&
+          reviewer !== null &&
+          typeof (reviewer as Record<string, unknown>).id === "string"
+        ) {
+          ids.add((reviewer as Record<string, unknown>).id as string);
+        }
+      }
+    }
+  } catch {
+    // Unreadable base: no ids to compare against.
+  }
+  return ids;
+}
+
 async function warnIfProjectConfigShadows(cwd: string, writtenPath: string): Promise<void> {
   // Best-effort advisory only. A malformed project config in cwd must not fail the command or
   // suppress JSON output after the user config write already succeeded.
@@ -1450,10 +1996,125 @@ async function warnIfProjectConfigShadows(cwd: string, writtenPath: string): Pro
   } catch {
     return;
   }
-  if (loaded !== undefined && path.resolve(loaded.path) !== path.resolve(writtenPath)) {
+  if (loaded === undefined) {
+    return;
+  }
+  // A write to the local overlay is effective whenever the USER config is the loaded config —
+  // the overlay merges into it at load time. Only a genuine project config shadows it, so never
+  // flag the user base config itself as "a project config" after a local-overlay write.
+  const loadedPath = path.resolve(loaded.path);
+  if (
+    loadedPath !== path.resolve(writtenPath) &&
+    loadedPath !== path.resolve(userConfigPath(process.env))
+  ) {
     process.stderr.write(
       `Note: a project config at ${loaded.path} takes precedence over ${writtenPath}; reviews run from this directory will not use reviewers added to the user config.\n`,
     );
+  }
+}
+
+/**
+ * After a BASE reviewer write: warn per written field the host-local overlay overrides (the base
+ * write is inert on this host), and — whenever an overlay exists and the write touched `enabled` —
+ * tip that enabled toggles are host-local by convention. Best-effort advisory on stderr, mirroring
+ * warnIfProjectConfigShadows: it never fails the command and never touches --json stdout.
+ */
+async function warnIfLocalOverlayShadows(
+  id: string,
+  fields: string[],
+  options: { touchesEnabled: boolean },
+): Promise<void> {
+  const localPath = userLocalConfigPath(process.env);
+  if (!existsSync(localPath)) {
+    return;
+  }
+  if (options.touchesEnabled) {
+    process.stderr.write(
+      `Tip: enabled toggles are host-local by convention — "--local" writes them to the un-synced overlay at ${localPath} instead of the synced base config.\n`,
+    );
+  }
+  try {
+    const raw = JSON.parse(await readFile(localPath, "utf8")) as unknown;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return;
+    }
+    const reviewers = (raw as Record<string, unknown>).reviewers;
+    if (!Array.isArray(reviewers)) {
+      return;
+    }
+    const entry = reviewers.find(
+      (reviewer): reviewer is Record<string, unknown> =>
+        typeof reviewer === "object" &&
+        reviewer !== null &&
+        (reviewer as Record<string, unknown>).id === id,
+    );
+    if (entry === undefined) {
+      return;
+    }
+    const overriddenFields = fields.filter((field) => field !== "id" && field in entry);
+    for (const field of overriddenFields) {
+      process.stderr.write(
+        `Note: "${field}" for reviewer "${id}" is overridden by ${localPath}; this edit does not change the effective value on this host. Re-run with --local to change it here.\n`,
+      );
+    }
+  } catch {
+    // Unreadable overlay: the load path reports it; a write advisory must not fail the command.
+  }
+}
+
+/**
+ * After `init` creates a base config: a pre-existing host overlay (fresh-host bootstrap order —
+ * overlay first, dotfiles later) may not merge cleanly with the new base, e.g. a partial override
+ * for a reviewer id the base does not define. init still succeeds, but every subsequent load
+ * would fail — so say it NOW, not at the next command. Best-effort stderr advisory.
+ */
+async function warnIfOrphanOverlayConflicts(basePath: string): Promise<void> {
+  const localPath = userLocalConfigPath(process.env);
+  if (!existsSync(localPath)) {
+    return;
+  }
+  let baseContent: string;
+  let localContent: string;
+  try {
+    baseContent = await readFile(basePath, "utf8");
+    localContent = await readFile(localPath, "utf8");
+  } catch {
+    // Unreadable layer: nothing to diagnose here; init's advisory must not fail the command.
+    return;
+  }
+  try {
+    validateConfigLayers(baseContent, localContent, basePath, localPath);
+  } catch {
+    process.stderr.write(
+      `Warning: the existing local overlay at ${localPath} does not merge cleanly with the new config at ${basePath}; diffwarden will fail to load until one of them is fixed. Run diffwarden doctor for a diagnosis.\n`,
+    );
+  }
+}
+
+/** After a BASE reviewer-set write: warn when the local overlay defines the same set name (which replaces it wholesale on this host). */
+async function warnIfLocalSetShadows(setName: string): Promise<void> {
+  const localPath = userLocalConfigPath(process.env);
+  if (!existsSync(localPath)) {
+    return;
+  }
+  try {
+    const raw = JSON.parse(await readFile(localPath, "utf8")) as unknown;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return;
+    }
+    const sets = (raw as Record<string, unknown>).reviewerSets;
+    if (
+      typeof sets === "object" &&
+      sets !== null &&
+      !Array.isArray(sets) &&
+      Object.prototype.hasOwnProperty.call(sets, setName)
+    ) {
+      process.stderr.write(
+        `Note: reviewer set "${setName}" is overridden wholesale by ${localPath}; this edit does not change its membership on this host.\n`,
+      );
+    }
+  } catch {
+    // Best-effort advisory only.
   }
 }
 
@@ -1492,6 +2153,7 @@ async function runInitDiscover(options: {
   // --cwd scopes discovery (the host probe above); the scaffold always writes the env-located
   // user config by design (decision: always user, never project), not a cwd-relative file.
   const configPath = await createDiscoveredUserConfig({ reviewers, env: process.env });
+  await warnIfOrphanOverlayConflicts(configPath);
   process.stdout.write(
     options.json === true
       ? `${JSON.stringify({ path: configPath, created: true, reviewers }, null, 2)}\n`
@@ -1528,12 +2190,20 @@ function selectDiscoveredReviewers(
 }
 
 function summarizeReviewers(loadedConfig: LoadedDiffwardenConfig): ReviewerListSummary {
+  const { overlay } = loadedConfig;
   return {
     schema_version: 2,
     config: {
       path: loadedConfig.path,
       sha256: loadedConfig.sha256,
+      ...(overlay !== undefined ? { local: { path: overlay.path, sha256: overlay.sha256 } } : {}),
     },
+    ...(overlay !== undefined
+      ? {
+          localOverrides: overlay.reviewerOverrides,
+          localOnlyReviewers: overlay.appendedReviewerIds,
+        }
+      : {}),
     ...(loadedConfig.config.defaultReviewerSet !== undefined
       ? { defaultReviewerSet: loadedConfig.config.defaultReviewerSet }
       : {}),
@@ -1561,6 +2231,7 @@ function renderReviewerListText(summary: ReviewerListSummary): string {
     "# Diffwarden Reviewers",
     "",
     `Config: ${summary.config.path}`,
+    ...(summary.config.local !== undefined ? [`Local overlay: ${summary.config.local.path}`] : []),
     `Default reviewer set: ${summary.defaultReviewerSet ?? "(none)"}`,
     "",
     "## Reviewer Sets",
@@ -1587,11 +2258,26 @@ function renderReviewerListText(summary: ReviewerListSummary): string {
   if (summary.reviewers.length === 0) {
     lines.push("_None configured._", "");
   } else {
+    const localOnly = new Set(summary.localOnlyReviewers ?? []);
+    const overrides = summary.localOverrides ?? {};
     lines.push("| ID | Engine | Enabled | Profile | Transport | Provider | Model | Effort |");
     lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
+    const footnotes: string[] = [];
     for (const reviewer of summary.reviewers) {
+      const marker = localOnly.has(reviewer.id)
+        ? " +"
+        : (overrides[reviewer.id]?.length ?? 0) > 0
+          ? " *"
+          : "";
+      if (localOnly.has(reviewer.id)) {
+        footnotes.push(`+ ${reviewer.id}: defined only in the local overlay`);
+      } else if ((overrides[reviewer.id]?.length ?? 0) > 0) {
+        footnotes.push(
+          `* ${reviewer.id}: fields overridden by the local overlay: ${(overrides[reviewer.id] ?? []).join(", ")}`,
+        );
+      }
       const row = [
-        reviewer.id,
+        `${reviewer.id}${marker}`,
         reviewer.engine,
         reviewer.enabled ? "yes" : "no",
         reviewer.profile ?? "",
@@ -1605,6 +2291,9 @@ function renderReviewerListText(summary: ReviewerListSummary): string {
       lines.push(`| ${row} |`);
     }
     lines.push("");
+    if (footnotes.length > 0) {
+      lines.push(...footnotes, "");
+    }
   }
 
   return `${lines.join("\n")}\n`;

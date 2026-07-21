@@ -180,7 +180,10 @@ diffwarden review --target uncommitted --reviewer fake --agent
 - Diffwarden does not publish review comments to external services.
 - Reviewing and `reviewers discover` are read-only and spend no model budget. The config-writing
   commands — `reviewers add`, `reviewers edit`, `reviewers remove`, `reviewers set add/remove`,
-  and `init` — write only to the user config file, atomically. Do not run them unless the user
+  and `init` — write only to the user config files, atomically: the base user config by default,
+  or the host-local overlay (`diffwarden.config.local.json`) when `--local` is passed to
+  `add`/`edit`/`remove`. Host-owned values (machine ids, per-host enabled toggles) belong in the
+  overlay; the catalog and reviewer sets belong in the base. Do not run them unless the user
   explicitly asks you to change reviewer setup. `remove` and `set remove` refuse to empty the
   `defaultReviewerSet` without `--force`. These commands are interactive-by-default only in a TTY;
   when you do run them, always name the target explicitly (the engine for `add`, the id for
