@@ -32,6 +32,7 @@ import {
   loadDiffwardenConfig,
   loadLayeredUserConfigView,
   loadUserConfigReviewerEntries,
+  mergeConfigOverlay,
   removeReviewerFromLocalConfig,
   removeReviewerFromSetInUserConfig,
   removeReviewerFromUserConfig,
@@ -325,6 +326,7 @@ program
       }
 
       const configPath = await initDiffwardenConfig();
+      await warnIfOrphanOverlayConflicts(configPath);
       process.stdout.write(
         options.json === true
           ? `${JSON.stringify({ path: configPath, created: true }, null, 2)}\n`
@@ -629,7 +631,7 @@ reviewers
 
       if (selection.target === "local") {
         const result = await removeReviewerFromLocalConfig({ id: selection.id, env: process.env });
-        for (const setName of result.baseSetsReferencing) {
+        for (const setName of result.setsReferencing) {
           process.stderr.write(
             `Warning: reviewer set "${setName}" still references "${selection.id}", which no longer exists on this host; reviews using that set will fail until it is pruned.\n`,
           );
@@ -640,7 +642,7 @@ reviewers
               {
                 path: result.path,
                 removed: selection.id,
-                baseSetsReferencing: result.baseSetsReferencing,
+                setsReferencing: result.setsReferencing,
               },
               null,
               2,
@@ -2044,6 +2046,44 @@ async function warnIfLocalOverlayShadows(
   }
 }
 
+/**
+ * After `init` creates a base config: a pre-existing host overlay (fresh-host bootstrap order —
+ * overlay first, dotfiles later) may not merge cleanly with the new base, e.g. a partial override
+ * for a reviewer id the base does not define. init still succeeds, but every subsequent load
+ * would fail — so say it NOW, not at the next command. Best-effort stderr advisory.
+ */
+async function warnIfOrphanOverlayConflicts(basePath: string): Promise<void> {
+  const localPath = userLocalConfigPath(process.env);
+  if (!existsSync(localPath)) {
+    return;
+  }
+  try {
+    const baseRaw = JSON.parse(await readFile(basePath, "utf8")) as unknown;
+    const localRaw = JSON.parse(await readFile(localPath, "utf8")) as unknown;
+    if (
+      typeof baseRaw !== "object" ||
+      baseRaw === null ||
+      Array.isArray(baseRaw) ||
+      typeof localRaw !== "object" ||
+      localRaw === null ||
+      Array.isArray(localRaw)
+    ) {
+      return;
+    }
+    const { merged } = mergeConfigOverlay(
+      baseRaw as Record<string, unknown>,
+      localRaw as Record<string, unknown>,
+    );
+    if (!diffwardenConfigSchema.safeParse(merged).success) {
+      process.stderr.write(
+        `Warning: the existing local overlay at ${localPath} does not merge cleanly with the new config at ${basePath}; diffwarden will fail to load until one of them is fixed. Run diffwarden doctor for a diagnosis.\n`,
+      );
+    }
+  } catch {
+    // Unreadable layer: the load path reports it; init's advisory must not fail the command.
+  }
+}
+
 /** After a BASE reviewer-set write: warn when the local overlay defines the same set name (which replaces it wholesale on this host). */
 async function warnIfLocalSetShadows(setName: string): Promise<void> {
   const localPath = userLocalConfigPath(process.env);
@@ -2106,6 +2146,7 @@ async function runInitDiscover(options: {
   // --cwd scopes discovery (the host probe above); the scaffold always writes the env-located
   // user config by design (decision: always user, never project), not a cwd-relative file.
   const configPath = await createDiscoveredUserConfig({ reviewers, env: process.env });
+  await warnIfOrphanOverlayConflicts(configPath);
   process.stdout.write(
     options.json === true
       ? `${JSON.stringify({ path: configPath, created: true, reviewers }, null, 2)}\n`

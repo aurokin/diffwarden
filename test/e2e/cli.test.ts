@@ -1037,6 +1037,25 @@ describe("diffwarden discovery & setup e2e", () => {
     expect(summary.reviewers).toEqual([expect.objectContaining({ id: "codex", enabled: false })]);
   });
 
+  it("warns when init creates a base that conflicts with a pre-existing overlay", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const configDir = path.join(configHome, "diffwarden");
+    mkdirSync(configDir, { recursive: true });
+    // The overlay landed before dotfiles: a partial override for an id the static starter
+    // config does not define. init must still succeed — and say the pair will not load.
+    writeFileSync(
+      path.join(configDir, "diffwarden.config.local.json"),
+      `${JSON.stringify({ reviewers: [{ id: "codex", enabled: false }] }, null, 2)}\n`,
+    );
+
+    const result = await runDiffwarden(process.cwd(), ["init", "--json"], {
+      XDG_CONFIG_HOME: configHome,
+    });
+    expect(JSON.parse(result.stdout)).toMatchObject({ created: true });
+    expect(result.stderr).toContain("does not merge cleanly");
+    expect(result.stderr).toContain("diffwarden doctor");
+  });
+
   it("rejects an add with no engine and an unknown engine", async () => {
     await expect(runDiffwarden(process.cwd(), ["reviewers", "add"])).rejects.toMatchObject({
       code: 2,

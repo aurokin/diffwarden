@@ -393,7 +393,7 @@ describe("local overlay write path", () => {
     expect((written.reviewers as unknown[]).length).toBe(1);
   });
 
-  it("remove --local deletes only the overlay entry and reports base sets referencing an appended id", async () => {
+  it("remove --local deletes only the overlay entry and reports effective sets referencing an appended id", async () => {
     const { xdg, configDir } = setup(
       {
         ...baseConfig,
@@ -404,15 +404,19 @@ describe("local overlay write path", () => {
           { id: "codex", enabled: false },
           { id: "droid", engine: "droid", transport: "cli" },
         ],
+        // Overlay-owned set also referencing the appended id — must be reported too, and a local
+        // replacement of a base set name must be evaluated as the EFFECTIVE membership.
+        reviewerSets: { hostonly: ["droid"], night: ["pi-default"] },
       },
     );
     const env = { XDG_CONFIG_HOME: xdg };
 
     const appended = await removeReviewerFromLocalConfig({ id: "droid", env });
-    expect(appended.baseSetsReferencing).toEqual(["night"]);
+    // base "night" is replaced by the local "night" (no droid); local "hostonly" references it.
+    expect(appended.setsReferencing).toEqual(["hostonly"]);
 
     const overridden = await removeReviewerFromLocalConfig({ id: "codex", env });
-    expect(overridden.baseSetsReferencing).toEqual([]);
+    expect(overridden.setsReferencing).toEqual([]);
 
     const written = JSON.parse(
       readFileSync(path.join(configDir, "diffwarden.config.local.json"), "utf8"),
@@ -531,6 +535,22 @@ describe("base writes under an overlay", () => {
     expect((written.reviewers as Record<string, unknown>[]).map((reviewer) => reviewer.id)).toEqual(
       ["pi-default", "codex", "droid"],
     );
+  });
+});
+
+describe("init under a pre-existing overlay", () => {
+  it("init succeeds but the merged pair with an orphan overlay fails to load (doctor's case)", async () => {
+    // Fresh-host bootstrap gone wrong: the overlay landed first with a partial override for an id
+    // the starter base does not define. initDiffwardenConfig itself must still succeed (the CLI
+    // layer warns); the next load fails loudly with the targeted orphan message.
+    const { xdg } = setup(undefined, { reviewers: [{ id: "codex", enabled: false }] });
+    const env = { XDG_CONFIG_HOME: xdg };
+
+    const { initDiffwardenConfig } = await import("../src/core/config.js");
+    await expect(initDiffwardenConfig({ env })).resolves.toBeDefined();
+    await expect(
+      loadDiffwardenConfig({ cwd: root as string, repoRoot: root as string, env }),
+    ).rejects.toThrow(/local overlay reviewer "codex" has no base entry to overlay/);
   });
 });
 

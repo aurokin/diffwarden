@@ -1185,8 +1185,11 @@ function omitLocalManagedReviewerKeys(raw: Record<string, unknown>): Record<stri
 export type RemoveReviewerFromLocalConfigResult = {
   path: string;
   sha256: string;
-  /** Base reviewer sets that still reference a removed LOCAL-APPENDED reviewer (warn material). */
-  baseSetsReferencing: string[];
+  /**
+   * EFFECTIVE reviewer sets (base merged with overlay-owned sets, local replacing per name) that
+   * still reference a removed LOCAL-APPENDED reviewer (warn material).
+   */
+  setsReferencing: string[];
   /** True when the id was local-only (a removed reviewer), false when base still defines it (cleared overrides). */
   wasAppended: boolean;
 };
@@ -1194,8 +1197,8 @@ export type RemoveReviewerFromLocalConfigResult = {
 /**
  * Delete a reviewer's local overlay entry — the "un-override everything for this reviewer" verb
  * (`reviewers remove <id> --local`). Errors if the overlay has no entry for the id. Removing a
- * local-APPENDED reviewer reports which base sets still reference it, so the caller can warn
- * before review fails at runtime with an unknown-id error.
+ * local-APPENDED reviewer reports which effective reviewer sets (base or overlay-owned) still
+ * reference it, so the caller can warn before review fails at runtime with an unknown-id error.
  */
 export async function removeReviewerFromLocalConfig(options: {
   id: string;
@@ -1225,20 +1228,33 @@ export async function removeReviewerFromLocalConfig(options: {
     localRaw.reviewers = reviewers;
 
     const isAppended = findReviewerIndexById(baseReviewers, options.id) < 0;
-    const baseSetsReferencing: string[] = [];
-    if (isAppended && isRecord(baseRaw.reviewerSets)) {
-      for (const [name, members] of Object.entries(baseRaw.reviewerSets)) {
+    const setsReferencing: string[] = [];
+    if (isAppended) {
+      // Dangling members must be found in the EFFECTIVE sets: the overlay's own reviewerSets are
+      // a supported merge case and replace a same-name base set wholesale.
+      const effectiveSets: Record<string, unknown> = Object.create(null);
+      if (isRecord(baseRaw.reviewerSets)) {
+        for (const [name, members] of Object.entries(baseRaw.reviewerSets)) {
+          defineMergedKey(effectiveSets, name, members);
+        }
+      }
+      if (isRecord(localRaw.reviewerSets)) {
+        for (const [name, members] of Object.entries(localRaw.reviewerSets)) {
+          defineMergedKey(effectiveSets, name, members);
+        }
+      }
+      for (const [name, members] of Object.entries(effectiveSets)) {
         if (Array.isArray(members) && members.includes(options.id)) {
-          baseSetsReferencing.push(name);
+          setsReferencing.push(name);
         }
       }
     }
-    return { baseSetsReferencing, wasAppended: isAppended };
+    return { setsReferencing, wasAppended: isAppended };
   });
   return {
     path: localPath,
     sha256: digest,
-    baseSetsReferencing: result.baseSetsReferencing,
+    setsReferencing: result.setsReferencing,
     wasAppended: result.wasAppended,
   };
 }
