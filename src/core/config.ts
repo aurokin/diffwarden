@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -16,6 +16,7 @@ import { invalidConfig } from "./errors.js";
 import { reviewerSdkSchema } from "./schema.js";
 
 const configFileName = "diffwarden.config.json";
+const localConfigFileName = "diffwarden.config.local.json";
 const effortValues = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const effortSchema = z.enum(effortValues);
 const transportSchema = z.enum(["sdk", "cli", "app-server"]);
@@ -149,10 +150,27 @@ export const diffwardenConfigSchema = z
 
 export type DiffwardenConfig = z.infer<typeof diffwardenConfigSchema>;
 
+/** Which keys the host-local overlay contributed to the effective config, recorded during merge. */
+export type ConfigOverlayProvenance = {
+  /** Top-level keys the local file set (overridden or added). */
+  topLevelOverrides: string[];
+  /** Per-reviewer id → entry-level fields the local file set on a base reviewer. */
+  reviewerOverrides: Record<string, string[]>;
+  /** Reviewer ids defined only in the local file (appended after base entries). */
+  appendedReviewerIds: string[];
+};
+
+export type LoadedConfigOverlay = ConfigOverlayProvenance & {
+  path: string;
+  sha256: string;
+};
+
 export type LoadedDiffwardenConfig = {
   path: string;
   sha256: string;
   config: DiffwardenConfig;
+  /** Present only when a host-local overlay was merged over the user config. */
+  overlay?: LoadedConfigOverlay;
 };
 
 export type LoadDiffwardenConfigOptions = {
@@ -182,23 +200,197 @@ export async function loadDiffwardenConfig(
     throw invalidConfig(`Unable to read config at ${configPath}: ${errorMessage(error)}`);
   }
 
-  let data: unknown;
-  try {
-    data = JSON.parse(raw);
-  } catch (error) {
-    throw invalidConfig(`Invalid JSON in config at ${configPath}: ${errorMessage(error)}`);
+  // The host-local overlay applies only when the USER config was selected — a project config wins
+  // wholesale, and the overlay solves a user-config sync problem, not a repo one.
+  const env = options.env ?? process.env;
+  const localPath = userLocalConfigPath(env, options.homeDir);
+  const localRaw =
+    path.resolve(configPath) === path.resolve(userConfigPath(env, options.homeDir))
+      ? await readFileIfExists(localPath)
+      : undefined;
+
+  // No overlay: byte-identical behavior to the single-file path, including error messages.
+  if (localRaw === undefined) {
+    let data: unknown;
+    try {
+      data = JSON.parse(raw);
+    } catch (error) {
+      throw invalidConfig(`Invalid JSON in config at ${configPath}: ${errorMessage(error)}`);
+    }
+
+    const parsed = diffwardenConfigSchema.safeParse(data);
+    if (!parsed.success) {
+      throw invalidConfig(`Invalid config at ${configPath}: ${z.prettifyError(parsed.error)}`);
+    }
+
+    return {
+      path: configPath,
+      sha256: sha256(raw),
+      config: parsed.data,
+    };
   }
 
-  const parsed = diffwardenConfigSchema.safeParse(data);
+  const baseObject = parseRawConfigObject(raw, configPath);
+  const localObject = parseRawConfigObject(localRaw, localPath);
+  assertLocalOverlayShape(localObject, localPath);
+
+  const { merged, provenance } = mergeConfigOverlay(baseObject, localObject);
+  assertAppendedReviewersComplete(merged, provenance, localPath);
+
+  const parsed = diffwardenConfigSchema.safeParse(merged);
   if (!parsed.success) {
-    throw invalidConfig(`Invalid config at ${configPath}: ${z.prettifyError(parsed.error)}`);
+    throw invalidConfig(
+      `Invalid merged config (base ${configPath} + local ${localPath}): ${z.prettifyError(parsed.error)}`,
+    );
   }
 
   return {
     path: configPath,
     sha256: sha256(raw),
     config: parsed.data,
+    overlay: { path: localPath, sha256: sha256(localRaw), ...provenance },
   };
+}
+
+/**
+ * Deep-merge the host-local overlay's raw JSON over the base config's raw JSON, before any schema
+ * validation (partial local reviewer entries are completed by the merge, so nothing partial ever
+ * reaches zod). Rules: objects deep-merge key-wise; scalars/arrays/type-mismatches take the local
+ * value wholesale (null is a value, not a deletion marker); top-level `reviewers` merges by id —
+ * a matching id overlays that entry, a new id appends after the base entries. `reviewerSets` falls
+ * out of the object rule: the map merges per set name, each member array replaces wholesale.
+ *
+ * All produced objects have null prototypes (mirroring the reviewerSets defenses elsewhere in this
+ * file) so keys like "__proto__" — legal set names today — merge as data instead of polluting.
+ */
+export function mergeConfigOverlay(
+  base: Record<string, unknown>,
+  local: Record<string, unknown>,
+): { merged: Record<string, unknown>; provenance: ConfigOverlayProvenance } {
+  const provenance: ConfigOverlayProvenance = {
+    topLevelOverrides: [],
+    reviewerOverrides: Object.create(null) as Record<string, string[]>,
+    appendedReviewerIds: [],
+  };
+
+  const merged = nullPrototypeCopy(base);
+  for (const key of Object.keys(local)) {
+    if (key === "reviewers") {
+      continue;
+    }
+    provenance.topLevelOverrides.push(key);
+    defineMergedKey(merged, key, deepMergeValue(base[key], local[key]));
+  }
+
+  if (local.reviewers !== undefined) {
+    const baseReviewers = Array.isArray(base.reviewers) ? base.reviewers : [];
+    const localReviewers = Array.isArray(local.reviewers) ? local.reviewers : [];
+    const mergedReviewers: unknown[] = baseReviewers.map((reviewer) =>
+      isRecord(reviewer) ? nullPrototypeCopy(reviewer) : reviewer,
+    );
+    for (const localReviewer of localReviewers) {
+      if (!isRecord(localReviewer) || typeof localReviewer.id !== "string") {
+        // Structurally invalid rows are rejected by assertLocalOverlayShape before merge; keep the
+        // merge total anyway so the pure function never throws on odd input.
+        mergedReviewers.push(localReviewer);
+        continue;
+      }
+      const index = findReviewerIndexById(mergedReviewers, localReviewer.id);
+      if (index >= 0) {
+        const baseEntry = mergedReviewers[index];
+        mergedReviewers[index] = deepMergeValue(baseEntry, localReviewer);
+        provenance.reviewerOverrides[localReviewer.id] = Object.keys(localReviewer).filter(
+          (key) => key !== "id",
+        );
+      } else {
+        mergedReviewers.push(nullPrototypeCopy(localReviewer));
+        provenance.appendedReviewerIds.push(localReviewer.id);
+      }
+    }
+    defineMergedKey(merged, "reviewers", mergedReviewers);
+  }
+
+  return { merged, provenance };
+}
+
+/** Objects deep-merge; anything else — scalars, arrays, null, type mismatches — takes local wholesale. */
+function deepMergeValue(base: unknown, local: unknown): unknown {
+  if (!isRecord(base) || !isRecord(local)) {
+    return isRecord(local) ? nullPrototypeCopy(local) : local;
+  }
+  const merged = nullPrototypeCopy(base);
+  for (const key of Object.keys(local)) {
+    defineMergedKey(merged, key, deepMergeValue(base[key], local[key]));
+  }
+  return merged;
+}
+
+/** Deep null-prototype copy: records survive keys like "__proto__" as data at every level. */
+function nullPrototypeCopy(value: Record<string, unknown>): Record<string, unknown> {
+  const copy: Record<string, unknown> = Object.create(null);
+  for (const key of Object.keys(value)) {
+    const child = value[key];
+    defineMergedKey(copy, key, isRecord(child) ? nullPrototypeCopy(child) : child);
+  }
+  return copy;
+}
+
+/** defineProperty, not assignment: mirrors the reviewerSets "__proto__" defense at the write sites. */
+function defineMergedKey(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
+/**
+ * Structural checks on the local overlay file only — it is never schema-validated standalone
+ * (partial entries are legal there). Rejects non-array `reviewers`, rows without a string id,
+ * and duplicate ids WITHIN the local file (later rows would silently fold into earlier ones).
+ */
+function assertLocalOverlayShape(localRaw: Record<string, unknown>, localPath: string): void {
+  if (localRaw.reviewers === undefined) {
+    return;
+  }
+  if (!Array.isArray(localRaw.reviewers)) {
+    throw invalidConfig(`Local overlay at ${localPath}: "reviewers" must be an array`);
+  }
+  const ids = new Set<string>();
+  for (const [index, reviewer] of localRaw.reviewers.entries()) {
+    if (!isRecord(reviewer) || typeof reviewer.id !== "string" || reviewer.id.length === 0) {
+      throw invalidConfig(
+        `Local overlay at ${localPath}: reviewers[${index}] must be an object with a string "id"`,
+      );
+    }
+    if (ids.has(reviewer.id)) {
+      throw invalidConfig(`Local overlay at ${localPath}: duplicate reviewer id "${reviewer.id}"`);
+    }
+    ids.add(reviewer.id);
+  }
+}
+
+/**
+ * A local reviewer id with no base counterpart is an APPEND and must be a complete entry. Catch the
+ * missing-engine case before zod so the error names the fix (and the orphan-after-base-removal case
+ * reads as what it is) instead of a raw strict-schema failure.
+ */
+function assertAppendedReviewersComplete(
+  merged: Record<string, unknown>,
+  provenance: ConfigOverlayProvenance,
+  localPath: string,
+): void {
+  const reviewers = Array.isArray(merged.reviewers) ? merged.reviewers : [];
+  for (const id of provenance.appendedReviewerIds) {
+    const index = findReviewerIndexById(reviewers, id);
+    const entry = index >= 0 ? reviewers[index] : undefined;
+    if (!isRecord(entry) || typeof entry.engine !== "string") {
+      throw invalidConfig(
+        `local overlay reviewer "${id}" has no base entry to overlay; give it an engine or remove it from ${localPath}`,
+      );
+    }
+  }
 }
 
 export async function initDiffwardenConfig(
@@ -269,6 +461,11 @@ export async function addReviewerToUserConfig(
   }
 
   assertWritableConfig(rawConfig, configPath);
+  assertMergedWritableConfig(
+    rawConfig,
+    configPath,
+    await readOverlayForValidation(options.env ?? process.env, options.homeDir),
+  );
 
   const serialized = `${JSON.stringify(rawConfig, null, 2)}\n`;
   // Compare-and-swap on every write, not only when a caller passes a token: abort if another
@@ -347,6 +544,11 @@ export async function addReviewersToUserConfig(
   rawConfig.reviewers = reviewers;
 
   assertWritableConfig(rawConfig, configPath);
+  assertMergedWritableConfig(
+    rawConfig,
+    configPath,
+    await readOverlayForValidation(options.env ?? process.env, options.homeDir),
+  );
 
   const serialized = `${JSON.stringify(rawConfig, null, 2)}\n`;
   // Compare-and-swap on every write so a concurrent setup cannot clobber the batch.
@@ -395,8 +597,10 @@ export async function createDiscoveredUserConfig(
 async function mutateUserConfig<T>(
   options: { env?: NodeJS.ProcessEnv; homeDir?: string; expectedSha256?: string },
   mutate: (rawConfig: Record<string, unknown>, configPath: string) => T,
+  overlayOverride?: OverlayForValidation,
 ): Promise<{ path: string; sha256: string; result: T }> {
-  const configPath = userConfigPath(options.env ?? process.env, options.homeDir);
+  const env = options.env ?? process.env;
+  const configPath = userConfigPath(env, options.homeDir);
   const existingRaw = await readFileIfExists(configPath);
   if (existingRaw === undefined) {
     throw invalidConfig(
@@ -410,6 +614,13 @@ async function mutateUserConfig<T>(
   const rawConfig = parseRawConfigObject(existingRaw, configPath);
   const result = mutate(rawConfig, configPath);
   assertWritableConfig(rawConfig, configPath);
+  // Callers that are ALSO about to rewrite the overlay (base remove's auto-prune) pass the
+  // overlay state they will write, so validation sees the pair of files that will actually exist.
+  assertMergedWritableConfig(
+    rawConfig,
+    configPath,
+    overlayOverride ?? (await readOverlayForValidation(env, options.homeDir)),
+  );
   const serialized = `${JSON.stringify(rawConfig, null, 2)}\n`;
   await atomicWrite(configPath, serialized, { expectedSha256: sha256(existingRaw) });
   return { path: configPath, sha256: sha256(serialized), result };
@@ -467,32 +678,111 @@ export type RemoveReviewerFromUserConfigResult = {
   path: string;
   prunedFromSets: string[];
   sha256: string;
+  /** Present when a host-local overlay exists: what happened to its entry for the removed id. */
+  local?: {
+    path: string;
+    /** True when the overlay had an entry for the id and it was pruned. */
+    pruned: boolean;
+    /** Set when the prune failed — an orphan overlay entry remains and the next load fails loudly. */
+    pruneError?: string;
+    /** Local reviewer sets that still reference the removed id (dangling members, warn material). */
+    localSetsReferencing: string[];
+  };
 };
 
 /**
  * Delete a configured reviewer by id and prune it from every reviewer set. Refuses (unless
- * `force`) when this would leave `defaultReviewerSet` empty. Errors if the id is not configured.
+ * `force`) when this would leave `defaultReviewerSet` empty. Errors if the id is not configured
+ * in the base — a local-only id gets a pointer at `remove <id> --local` instead.
+ *
+ * When a host-local overlay has an entry for the id, it is auto-pruned in a SECOND atomic write
+ * after the base write (non-transactional by design: base validation runs against the overlay
+ * state we are about to write, and a failed prune is reported — the next load then fails loudly
+ * with a targeted fix message rather than silently misbehaving).
  */
 export async function removeReviewerFromUserConfig(
   options: RemoveReviewerFromUserConfigOptions,
 ): Promise<RemoveReviewerFromUserConfigResult> {
+  const env = options.env ?? process.env;
+  const localPath = userLocalConfigPath(env, options.homeDir);
+  const localContent = await readFileIfExists(localPath);
+
+  // Compute the pruned overlay up front so the base write validates against the overlay state
+  // that will exist AFTER the prune — otherwise removing an overlaid reviewer would always be
+  // refused for the orphan entry the prune is about to delete.
+  let prunedLocalRaw: Record<string, unknown> | undefined;
+  let overlayForValidation: OverlayForValidation | undefined;
+  let localSetsReferencing: string[] = [];
+  let localHadEntry = false;
+  if (localContent !== undefined) {
+    try {
+      const localRaw = parseRawConfigObject(localContent, localPath);
+      assertLocalOverlayShape(localRaw, localPath);
+      const reviewers = Array.isArray(localRaw.reviewers) ? [...localRaw.reviewers] : [];
+      const index = findReviewerIndexById(reviewers, options.id);
+      if (index >= 0) {
+        localHadEntry = true;
+        reviewers.splice(index, 1);
+        prunedLocalRaw = { ...localRaw, reviewers };
+      }
+      if (isRecord(localRaw.reviewerSets)) {
+        localSetsReferencing = Object.entries(localRaw.reviewerSets)
+          .filter(([, members]) => Array.isArray(members) && members.includes(options.id))
+          .map(([name]) => name);
+      }
+      overlayForValidation = { localRaw: prunedLocalRaw ?? localRaw, localPath };
+    } catch {
+      // Broken overlay: skip prune and merged validation; load/doctor reports it.
+      overlayForValidation = { localRaw: undefined, localPath };
+    }
+  }
+
   const {
     path,
     sha256: digest,
     result,
-  } = await mutateUserConfig(options, (rawConfig, configPath) => {
-    const reviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
-    const index = findReviewerIndexById(reviewers, options.id);
-    if (index < 0) {
-      throw invalidConfig(`No reviewer with id "${options.id}" in ${configPath}`);
+  } = await mutateUserConfig(
+    options,
+    (rawConfig, configPath) => {
+      const reviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
+      const index = findReviewerIndexById(reviewers, options.id);
+      if (index < 0) {
+        throw invalidConfig(
+          localHadEntry
+            ? `Reviewer "${options.id}" is defined only in the local overlay at ${localPath}. Remove it with "diffwarden reviewers remove ${options.id} --local".`
+            : `No reviewer with id "${options.id}" in ${configPath}`,
+        );
+      }
+      reviewers.splice(index, 1);
+      rawConfig.reviewers = reviewers;
+      const prunedFromSets = pruneReviewerFromSets(rawConfig, options.id);
+      guardDefaultReviewerSet(rawConfig, configPath, options.force === true);
+      return { prunedFromSets };
+    },
+    overlayForValidation,
+  );
+
+  let local: RemoveReviewerFromUserConfigResult["local"];
+  if (localContent !== undefined) {
+    local = { path: localPath, pruned: false, localSetsReferencing };
+    if (prunedLocalRaw !== undefined) {
+      try {
+        await atomicWrite(localPath, `${JSON.stringify(prunedLocalRaw, null, 2)}\n`, {
+          expectedSha256: sha256(localContent),
+        });
+        local.pruned = true;
+      } catch (error) {
+        local.pruneError = errorMessage(error);
+      }
     }
-    reviewers.splice(index, 1);
-    rawConfig.reviewers = reviewers;
-    const prunedFromSets = pruneReviewerFromSets(rawConfig, options.id);
-    guardDefaultReviewerSet(rawConfig, configPath, options.force === true);
-    return { prunedFromSets };
-  });
-  return { path, prunedFromSets: result.prunedFromSets, sha256: digest };
+  }
+
+  return {
+    path,
+    prunedFromSets: result.prunedFromSets,
+    sha256: digest,
+    ...(local !== undefined ? { local } : {}),
+  };
 }
 
 /** Fields `reviewers edit` can patch; only provided keys change, the rest of the entry survives. */
@@ -669,6 +959,291 @@ function omitManagedReviewerKeys(raw: Record<string, unknown>): Record<string, u
 }
 
 /**
+ * Read the local overlay's raw JSON, apply `mutate`, run the structural checks, validate the RESULT
+ * MERGED OVER THE CURRENT BASE (the local file is never schema-validated standalone), and write
+ * atomically with the same CAS guards as the base mutators — against the LOCAL file's bytes. An
+ * absent local file mutates from `{}` and is created by the write. Errors up front when no base
+ * config exists: an overlay only overlays.
+ *
+ * Each write CASes only the file it targets; a base change between our read and write is tolerated
+ * (worst case: a validation error on the next load, never corruption). No two-file locking.
+ */
+async function mutateLocalConfig<T>(
+  options: { env?: NodeJS.ProcessEnv; homeDir?: string; expectedSha256?: string },
+  mutate: (localRaw: Record<string, unknown>, localPath: string) => T,
+): Promise<{ path: string; sha256: string; result: T }> {
+  const env = options.env ?? process.env;
+  const basePath = userConfigPath(env, options.homeDir);
+  const baseContent = await readFileIfExists(basePath);
+  if (baseContent === undefined) {
+    throw invalidConfig(
+      `No diffwarden user config at ${basePath}; the local overlay only overlays a base config. Run diffwarden init, or wait for your synced base config to land, then retry.`,
+    );
+  }
+
+  const localPath = userLocalConfigPath(env, options.homeDir);
+  const existingRaw = await readFileIfExists(localPath);
+  if (
+    options.expectedSha256 !== undefined &&
+    (existingRaw === undefined || sha256(existingRaw) !== options.expectedSha256)
+  ) {
+    throw invalidConfig(`Config changed on disk since it was read: ${localPath}`);
+  }
+
+  const localRaw = existingRaw === undefined ? {} : parseRawConfigObject(existingRaw, localPath);
+  const result = mutate(localRaw, localPath);
+  assertLocalOverlayShape(localRaw, localPath);
+
+  const baseRaw = parseRawConfigObject(baseContent, basePath);
+  const { merged, provenance } = mergeConfigOverlay(baseRaw, localRaw);
+  assertAppendedReviewersComplete(merged, provenance, localPath);
+  const parsed = diffwardenConfigSchema.safeParse(merged);
+  if (!parsed.success) {
+    throw invalidConfig(
+      `Refusing to write invalid local overlay to ${localPath} (merged with ${basePath}): ${z.prettifyError(parsed.error)}`,
+    );
+  }
+
+  const serialized = `${JSON.stringify(localRaw, null, 2)}\n`;
+  await atomicWrite(
+    localPath,
+    serialized,
+    existingRaw === undefined ? { expectAbsent: true } : { expectedSha256: sha256(existingRaw) },
+  );
+  return { path: localPath, sha256: sha256(serialized), result };
+}
+
+/**
+ * Merge reviewer entries into the HOST-LOCAL overlay by id (creating the file on demand), one
+ * atomic write for the whole batch — the `reviewers add --local` path. The merged view is
+ * validated before writing, so an entry the base cannot support fails here, not at load.
+ */
+export async function addReviewersToLocalConfig(options: {
+  entries: PublicReviewerEntry[];
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  expectedSha256?: string;
+}): Promise<AddReviewersToUserConfigResult> {
+  const created = { value: false };
+  const {
+    path: localPath,
+    sha256: digest,
+    result,
+  } = await mutateLocalConfig(options, (localRaw, configPath) => {
+    created.value = Object.keys(localRaw).length === 0;
+    const reviewers = Array.isArray(localRaw.reviewers) ? [...localRaw.reviewers] : [];
+    const actions: ("added" | "updated")[] = [];
+    for (const entry of options.entries) {
+      actions.push(mergeReviewerById(reviewers, entry, configPath));
+    }
+    localRaw.reviewers = reviewers;
+    return actions;
+  });
+  return { path: localPath, created: created.value, actions: result, sha256: digest };
+}
+
+/**
+ * Patch a reviewer's fields IN THE HOST-LOCAL OVERLAY — the `reviewers edit <id> --local` path.
+ * The id must exist in the merged view (base reviewers are overridable, local-appended reviewers
+ * editable). Finds-or-creates the minimal local entry `{id}` and sets exactly the patched keys.
+ *
+ * Deliberate divergence from base semantics: `enabled: true` is written EXPLICITLY (in the base,
+ * enabled-true is expressed by deleting the key; in the overlay, absence means "inherit base", so
+ * the override must be explicit to beat a base `enabled: false`).
+ */
+export async function editReviewerInLocalConfig(options: {
+  id: string;
+  patch: EditReviewerPatch;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  expectedSha256?: string;
+}): Promise<EditReviewerInUserConfigResult> {
+  const env = options.env ?? process.env;
+  const basePath = userConfigPath(env, options.homeDir);
+  const baseContent = await readFileIfExists(basePath);
+  const baseReviewers =
+    baseContent === undefined
+      ? []
+      : (() => {
+          const parsedBase = parseRawConfigObject(baseContent, basePath);
+          return Array.isArray(parsedBase.reviewers) ? parsedBase.reviewers : [];
+        })();
+
+  const {
+    path: localPath,
+    sha256: digest,
+    result,
+  } = await mutateLocalConfig(options, (localRaw, configPath) => {
+    const reviewers = Array.isArray(localRaw.reviewers) ? [...localRaw.reviewers] : [];
+    const baseIndex = findReviewerIndexById(baseReviewers, options.id);
+    const localIndex = findReviewerIndexById(reviewers, options.id);
+    if (baseIndex < 0 && localIndex < 0) {
+      throw invalidConfig(
+        `No reviewer with id "${options.id}" in ${basePath} or ${configPath}. Add it first with "diffwarden reviewers add".`,
+      );
+    }
+
+    const existingLocal = localIndex >= 0 ? (reviewers[localIndex] as Record<string, unknown>) : {};
+    const localEntry: Record<string, unknown> = { id: options.id, ...existingLocal };
+    const { patch } = options;
+    if (patch.transport !== undefined) {
+      localEntry.transport = patch.transport;
+    }
+    if (patch.provider !== undefined) {
+      localEntry.provider = patch.provider;
+    }
+    if (patch.model !== undefined) {
+      localEntry.model = patch.model;
+    }
+    if (patch.effort !== undefined) {
+      localEntry.effort = patch.effort;
+    }
+    if (patch.enabled !== undefined) {
+      localEntry.enabled = patch.enabled;
+    }
+
+    // Capability-check the FULL composite — base entry + existing local entry + patch — so an
+    // existing local override (e.g. transport) participates in validating the new model/effort.
+    const baseEntry = baseIndex >= 0 ? baseReviewers[baseIndex] : undefined;
+    const composite = isRecord(baseEntry)
+      ? (deepMergeValue(baseEntry, localEntry) as Record<string, unknown>)
+      : localEntry;
+    assertMergedReviewerCapabilities(composite, options.id, configPath);
+
+    if (localIndex >= 0) {
+      reviewers[localIndex] = localEntry;
+    } else {
+      reviewers.push(localEntry);
+    }
+    localRaw.reviewers = reviewers;
+    return { reviewer: localEntry };
+  });
+  return { path: localPath, reviewer: result.reviewer, sha256: digest };
+}
+
+/**
+ * Replace the editor-managed override fields (transport/provider/model/effort/enabled) of a local
+ * overlay entry with exactly `patch`, preserving unmanaged keys (engine of an appended reviewer,
+ * sdkOptions, …) — the interactive editor's "what you see is the delta" save. An empty patch with
+ * no unmanaged keys left drops the entry entirely, so clearing every override cleans the file.
+ */
+export async function replaceReviewerLocalOverride(options: {
+  id: string;
+  patch: EditReviewerPatch;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  expectedSha256?: string;
+}): Promise<EditReviewerInUserConfigResult> {
+  const {
+    path: localPath,
+    sha256: digest,
+    result,
+  } = await mutateLocalConfig(options, (localRaw, _configPath) => {
+    const reviewers = Array.isArray(localRaw.reviewers) ? [...localRaw.reviewers] : [];
+    const index = findReviewerIndexById(reviewers, options.id);
+    const existing = index >= 0 ? (reviewers[index] as Record<string, unknown>) : {};
+    const preserved = omitLocalManagedReviewerKeys(existing);
+    const entry: Record<string, unknown> = {
+      id: options.id,
+      ...preserved,
+      ...(options.patch.transport !== undefined ? { transport: options.patch.transport } : {}),
+      ...(options.patch.provider !== undefined ? { provider: options.patch.provider } : {}),
+      ...(options.patch.model !== undefined ? { model: options.patch.model } : {}),
+      ...(options.patch.effort !== undefined ? { effort: options.patch.effort } : {}),
+      ...(options.patch.enabled !== undefined ? { enabled: options.patch.enabled } : {}),
+    };
+
+    const isBareId = Object.keys(entry).length === 1;
+    if (index >= 0 && isBareId) {
+      reviewers.splice(index, 1);
+    } else if (index >= 0) {
+      reviewers[index] = entry;
+    } else if (!isBareId) {
+      reviewers.push(entry);
+    }
+    localRaw.reviewers = reviewers;
+    return { reviewer: entry };
+  });
+  return { path: localPath, reviewer: result.reviewer, sha256: digest };
+}
+
+/**
+ * Local-override managed keys: like omitManagedReviewerKeys but WITHOUT engine/profile — those are
+ * base-owned for overridden reviewers and identity for appended ones, so the editor never clears them.
+ */
+function omitLocalManagedReviewerKeys(raw: Record<string, unknown>): Record<string, unknown> {
+  const managed = new Set(["id", "transport", "provider", "model", "effort", "enabled"]);
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!managed.has(key)) {
+      rest[key] = value;
+    }
+  }
+  return rest;
+}
+
+export type RemoveReviewerFromLocalConfigResult = {
+  path: string;
+  sha256: string;
+  /** Base reviewer sets that still reference a removed LOCAL-APPENDED reviewer (warn material). */
+  baseSetsReferencing: string[];
+  /** True when the id was local-only (a removed reviewer), false when base still defines it (cleared overrides). */
+  wasAppended: boolean;
+};
+
+/**
+ * Delete a reviewer's local overlay entry — the "un-override everything for this reviewer" verb
+ * (`reviewers remove <id> --local`). Errors if the overlay has no entry for the id. Removing a
+ * local-APPENDED reviewer reports which base sets still reference it, so the caller can warn
+ * before review fails at runtime with an unknown-id error.
+ */
+export async function removeReviewerFromLocalConfig(options: {
+  id: string;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  expectedSha256?: string;
+}): Promise<RemoveReviewerFromLocalConfigResult> {
+  const env = options.env ?? process.env;
+  const basePath = userConfigPath(env, options.homeDir);
+  const baseContent = await readFileIfExists(basePath);
+  const baseRaw = baseContent === undefined ? {} : parseRawConfigObject(baseContent, basePath);
+  const baseReviewers = Array.isArray(baseRaw.reviewers) ? baseRaw.reviewers : [];
+
+  const {
+    path: localPath,
+    sha256: digest,
+    result,
+  } = await mutateLocalConfig(options, (localRaw, configPath) => {
+    const reviewers = Array.isArray(localRaw.reviewers) ? [...localRaw.reviewers] : [];
+    const index = findReviewerIndexById(reviewers, options.id);
+    if (index < 0) {
+      throw invalidConfig(
+        `No local overlay entry for reviewer "${options.id}" in ${configPath}. To remove the reviewer itself, run "diffwarden reviewers remove ${options.id}".`,
+      );
+    }
+    reviewers.splice(index, 1);
+    localRaw.reviewers = reviewers;
+
+    const isAppended = findReviewerIndexById(baseReviewers, options.id) < 0;
+    const baseSetsReferencing: string[] = [];
+    if (isAppended && isRecord(baseRaw.reviewerSets)) {
+      for (const [name, members] of Object.entries(baseRaw.reviewerSets)) {
+        if (Array.isArray(members) && members.includes(options.id)) {
+          baseSetsReferencing.push(name);
+        }
+      }
+    }
+    return { baseSetsReferencing, wasAppended: isAppended };
+  });
+  return {
+    path: localPath,
+    sha256: digest,
+    baseSetsReferencing: result.baseSetsReferencing,
+    wasAppended: result.wasAppended,
+  };
+}
+
+/**
  * Read the configured reviewers as full public entries (id/engine/transport/model/effort/…), so the
  * interactive `edit` picker can list them and seed the field editor from the chosen one. Read-only;
  * throws the same missing-config error as the mutators. Entries without a string id or a known engine
@@ -765,6 +1340,115 @@ export async function listUserConfigReviewers(options: {
   return { path: configPath, reviewers, sha256: sha256(existingRaw) };
 }
 
+/** Reviewer ids present in the local overlay (empty when the overlay is absent or unreadable). */
+async function readLocalReviewerIds(
+  env: NodeJS.ProcessEnv,
+  homeDir: string | undefined,
+): Promise<Set<string>> {
+  const { localRaw } = await readOverlayForValidation(env, homeDir);
+  const ids = new Set<string>();
+  if (localRaw !== undefined && Array.isArray(localRaw.reviewers)) {
+    for (const reviewer of localRaw.reviewers) {
+      if (isRecord(reviewer) && typeof reviewer.id === "string") {
+        ids.add(reviewer.id);
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * The user config's two layers plus the merged view, for interactive flows and diagnostics.
+ * `localSha256` is undefined when no overlay file exists. `entries` / `summaries` reflect the
+ * MERGED view; `baseEntries` the base file alone. Read-only; throws the same missing-config error
+ * as the mutators when no base user config exists.
+ */
+export type LayeredUserConfigView = {
+  basePath: string;
+  baseSha256: string;
+  localPath: string;
+  localSha256: string | undefined;
+  /** Merged-view entries with a known engine (capability-editable). */
+  entries: PublicReviewerEntry[];
+  /** Base-file entries with a known engine. */
+  baseEntries: PublicReviewerEntry[];
+  /** Merged-view summaries keeping unknown-engine rows (targetable by id). */
+  summaries: ConfiguredReviewerSummary[];
+  reviewerOverrides: Record<string, string[]>;
+  appendedReviewerIds: string[];
+};
+
+export async function loadLayeredUserConfigView(options: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): Promise<LayeredUserConfigView> {
+  const env = options.env ?? process.env;
+  const basePath = userConfigPath(env, options.homeDir);
+  const baseContent = await readFileIfExists(basePath);
+  if (baseContent === undefined) {
+    throw invalidConfig(
+      `No diffwarden user config at ${basePath}. Run diffwarden init or diffwarden reviewers add <engine> first.`,
+    );
+  }
+  const baseRaw = parseRawConfigObject(baseContent, basePath);
+
+  const localPath = userLocalConfigPath(env, options.homeDir);
+  const localContent = await readFileIfExists(localPath);
+  let mergedRaw = baseRaw;
+  let provenance: ConfigOverlayProvenance = {
+    topLevelOverrides: [],
+    reviewerOverrides: Object.create(null) as Record<string, string[]>,
+    appendedReviewerIds: [],
+  };
+  if (localContent !== undefined) {
+    const localRaw = parseRawConfigObject(localContent, localPath);
+    assertLocalOverlayShape(localRaw, localPath);
+    const merged = mergeConfigOverlay(baseRaw, localRaw);
+    mergedRaw = merged.merged;
+    provenance = merged.provenance;
+  }
+
+  return {
+    basePath,
+    baseSha256: sha256(baseContent),
+    localPath,
+    localSha256: localContent !== undefined ? sha256(localContent) : undefined,
+    entries: publicEntriesFromRaw(mergedRaw),
+    baseEntries: publicEntriesFromRaw(baseRaw),
+    summaries: summariesFromRaw(mergedRaw),
+    reviewerOverrides: provenance.reviewerOverrides,
+    appendedReviewerIds: provenance.appendedReviewerIds,
+  };
+}
+
+function publicEntriesFromRaw(rawConfig: Record<string, unknown>): PublicReviewerEntry[] {
+  const rawReviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
+  const entries: PublicReviewerEntry[] = [];
+  for (const reviewer of rawReviewers) {
+    const entry = rawReviewerToPublicEntry(reviewer);
+    if (entry !== undefined) {
+      entries.push(entry);
+    }
+  }
+  return entries;
+}
+
+function summariesFromRaw(rawConfig: Record<string, unknown>): ConfiguredReviewerSummary[] {
+  const rawReviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
+  const summaries: ConfiguredReviewerSummary[] = [];
+  for (const reviewer of rawReviewers) {
+    if (!isRecord(reviewer) || typeof reviewer.id !== "string") {
+      continue;
+    }
+    summaries.push({
+      id: reviewer.id,
+      engine: typeof reviewer.engine === "string" ? reviewer.engine : "unknown",
+      enabled: reviewer.enabled !== false,
+    });
+  }
+  return summaries;
+}
+
 export type ReviewerSetMembershipOptions = {
   setName: string;
   reviewerId: string;
@@ -841,6 +1525,8 @@ export type ReviewerSetReplaceOptions = {
 export async function replaceReviewerSetInUserConfig(
   options: ReviewerSetReplaceOptions,
 ): Promise<ReviewerSetMembershipResult> {
+  // Membership may reference local-appended reviewers: validate ids against the MERGED view.
+  const localIds = await readLocalReviewerIds(options.env ?? process.env, options.homeDir);
   const {
     path,
     sha256: digest,
@@ -848,7 +1534,7 @@ export async function replaceReviewerSetInUserConfig(
   } = await mutateUserConfig(options, (rawConfig, configPath) => {
     const reviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
     for (const member of options.members) {
-      if (findReviewerIndexById(reviewers, member) < 0) {
+      if (findReviewerIndexById(reviewers, member) < 0 && !localIds.has(member)) {
         throw invalidConfig(
           `No reviewer with id "${member}" in ${configPath}; add it before adding it to a set`,
         );
@@ -877,13 +1563,18 @@ export async function replaceReviewerSetInUserConfig(
 export async function addReviewerToSetInUserConfig(
   options: ReviewerSetMembershipOptions,
 ): Promise<ReviewerSetMembershipResult> {
+  // Membership may reference local-appended reviewers: validate ids against the MERGED view.
+  const localIds = await readLocalReviewerIds(options.env ?? process.env, options.homeDir);
   const {
     path,
     sha256: digest,
     result,
   } = await mutateUserConfig(options, (rawConfig, configPath) => {
     const reviewers = Array.isArray(rawConfig.reviewers) ? rawConfig.reviewers : [];
-    if (findReviewerIndexById(reviewers, options.reviewerId) < 0) {
+    if (
+      findReviewerIndexById(reviewers, options.reviewerId) < 0 &&
+      !localIds.has(options.reviewerId)
+    ) {
       throw invalidConfig(
         `No reviewer with id "${options.reviewerId}" in ${configPath}; add it before adding it to a set`,
       );
@@ -942,12 +1633,16 @@ async function atomicWrite(
   guard: AtomicWriteGuard = {},
 ): Promise<void> {
   await mkdir(path.dirname(configPath), { recursive: true });
-  const tempPath = `${configPath}.${process.pid}.tmp`;
+  // Resolve symlinks BEFORE the rename swap: a user config symlinked from a dotfiles repo must be
+  // updated through the link, not replaced by a regular file that silently orphans the host from
+  // its synced source.
+  const targetPath = await resolveWriteTarget(configPath);
+  const tempPath = `${targetPath}.${process.pid}.tmp`;
   await writeFile(tempPath, content, "utf8");
   try {
     // Re-check the target immediately before swapping so a concurrent write since our read is
     // detected instead of silently overwritten.
-    const current = await readFileIfExists(configPath);
+    const current = await readFileIfExists(targetPath);
     const changed =
       guard.expectAbsent === true
         ? current !== undefined
@@ -956,10 +1651,25 @@ async function atomicWrite(
     if (changed) {
       throw invalidConfig(`Config changed on disk since it was read: ${configPath}`);
     }
-    await rename(tempPath, configPath);
+    await rename(tempPath, targetPath);
   } catch (error) {
     await rm(tempPath, { force: true });
     throw error;
+  }
+}
+
+/** Fully resolve `configPath` through symlinks; for a not-yet-existing file, resolve its directory. */
+async function resolveWriteTarget(configPath: string): Promise<string> {
+  try {
+    return await realpath(configPath);
+  } catch {
+    // File absent (fresh create) or a dangling link component: resolve the parent directory —
+    // just created by mkdir above — and keep the basename.
+    try {
+      return path.join(await realpath(path.dirname(configPath)), path.basename(configPath));
+    } catch {
+      return configPath;
+    }
   }
 }
 
@@ -1057,6 +1767,65 @@ function assertWritableConfig(rawConfig: unknown, configPath: string): void {
   }
 }
 
+type OverlayForValidation = {
+  /** The local overlay raw JSON to validate against; undefined = no overlay applies. */
+  localRaw: Record<string, unknown> | undefined;
+  localPath: string;
+};
+
+/**
+ * Read the local overlay for merged-view validation of a BASE write. A missing overlay returns
+ * undefined localRaw (nothing to merge). An unparseable/misshapen overlay also returns undefined:
+ * the load path already fails loudly on it, and refusing unrelated base writes until a broken
+ * overlay is hand-fixed would only add a second blocker.
+ */
+async function readOverlayForValidation(
+  env: NodeJS.ProcessEnv,
+  homeDir: string | undefined,
+): Promise<OverlayForValidation> {
+  const localPath = userLocalConfigPath(env, homeDir);
+  const localContent = await readFileIfExists(localPath);
+  if (localContent === undefined) {
+    return { localRaw: undefined, localPath };
+  }
+  try {
+    const localRaw = parseRawConfigObject(localContent, localPath);
+    assertLocalOverlayShape(localRaw, localPath);
+    return { localRaw, localPath };
+  } catch {
+    return { localRaw: undefined, localPath };
+  }
+}
+
+/**
+ * Refuse a base write whose result would be invalid once merged with the host-local overlay —
+ * otherwise a successful `reviewers add/edit/...` can deterministically break every subsequent
+ * load on this host. Named-both-files error so the user knows which side to fix.
+ */
+function assertMergedWritableConfig(
+  baseRaw: Record<string, unknown>,
+  basePath: string,
+  overlay: OverlayForValidation,
+): void {
+  if (overlay.localRaw === undefined) {
+    return;
+  }
+  const { merged, provenance } = mergeConfigOverlay(baseRaw, overlay.localRaw);
+  try {
+    assertAppendedReviewersComplete(merged, provenance, overlay.localPath);
+  } catch (error) {
+    throw invalidConfig(
+      `Refusing to write ${basePath}: the result would be invalid once merged with the local overlay at ${overlay.localPath}: ${errorMessage(error)}`,
+    );
+  }
+  const parsed = diffwardenConfigSchema.safeParse(merged);
+  if (!parsed.success) {
+    throw invalidConfig(
+      `Refusing to write ${basePath}: the result would be invalid once merged with the local overlay at ${overlay.localPath}: ${z.prettifyError(parsed.error)}`,
+    );
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1083,6 +1852,11 @@ export function userConfigPath(env: NodeJS.ProcessEnv, homeDir: string = homedir
     "diffwarden",
     configFileName,
   );
+}
+
+/** The host-local overlay path: `diffwarden.config.local.json` beside the user config. */
+export function userLocalConfigPath(env: NodeJS.ProcessEnv, homeDir: string = homedir()): string {
+  return path.join(path.dirname(userConfigPath(env, homeDir)), localConfigFileName);
 }
 
 function starterConfigJson(): string {

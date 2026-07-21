@@ -113,6 +113,11 @@ export type ReviewReportProvenance = {
   config?: {
     path: string;
     sha256: string;
+    /** Present when a host-local overlay was merged over the user config. */
+    local?: {
+      path: string;
+      sha256: string;
+    };
   };
   reviewer_selection: {
     reviewer_set?: string;
@@ -186,6 +191,10 @@ export type ReviewReportProvenanceInput = {
   config?: {
     path: string;
     sha256: string;
+    local?: {
+      path: string;
+      sha256: string;
+    };
   };
   diff?: string;
 };

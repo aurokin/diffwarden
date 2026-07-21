@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -985,6 +986,55 @@ describe("diffwarden discovery & setup e2e", () => {
     const second = await runDiffwarden(process.cwd(), ["reviewers", "add", "codex", "--json"], env);
     expect(JSON.parse(second.stdout)).toMatchObject({ created: false, action: "updated" });
     expect(JSON.parse(readFileSync(configPath, "utf8")).reviewers).toHaveLength(1);
+  });
+
+  it("ignores a local-only overlay until the base config lands, then merges it (fresh-host bootstrap)", async () => {
+    const configHome = mkdtemp("diffwarden-e2e-xdg-");
+    const env = { XDG_CONFIG_HOME: configHome };
+    const configDir = path.join(configHome, "diffwarden");
+    const localPath = path.join(configDir, "diffwarden.config.local.json");
+    mkdirSync(configDir, { recursive: true });
+
+    // Dotfiles have not landed yet: only the host overlay exists. An overlay only overlays, so
+    // every config-driven command behaves exactly like a no-config host.
+    writeFileSync(
+      localPath,
+      `${JSON.stringify({ reviewers: [{ id: "codex", enabled: false }] }, null, 2)}\n`,
+    );
+    await expect(runDiffwarden(process.cwd(), ["reviewers", "list"], env)).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining("No diffwarden config found"),
+    });
+
+    // doctor points out the orphan overlay instead of silently ignoring it.
+    const doctor = await runDiffwarden(
+      process.cwd(),
+      ["doctor", "--reviewer", "fake", "--json"],
+      env,
+    );
+    expect(doctor.stderr).toContain("not applied");
+    expect(doctor.stderr).toContain(localPath);
+
+    // The synced base lands; the very next run merges the overlay — no restart, no cache.
+    writeFileSync(
+      userConfigFile(configHome),
+      `${JSON.stringify(
+        {
+          defaultReviewerSet: "1",
+          reviewerSets: { "1": ["codex"] },
+          reviewers: [{ id: "codex", engine: "codex", transport: "cli" }],
+          readonly: true,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const list = await runDiffwarden(process.cwd(), ["reviewers", "list", "--json"], env);
+    const summary = JSON.parse(list.stdout);
+    expect(summary.config.path).toBe(userConfigFile(configHome));
+    expect(summary.config.local.path).toBe(localPath);
+    expect(summary.localOverrides).toEqual({ codex: ["enabled"] });
+    expect(summary.reviewers).toEqual([expect.objectContaining({ id: "codex", enabled: false })]);
   });
 
   it("rejects an add with no engine and an unknown engine", async () => {

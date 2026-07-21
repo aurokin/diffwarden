@@ -149,7 +149,11 @@ diffwarden reviewers remove codex
 ```
 
 `add`, `edit`, `remove`, and `set` all write only the env-located user config (never the project
-config), atomically. Removing a reviewer also prunes it from every reviewer set; `remove` and
+config), atomically. A host-local overlay (`diffwarden.config.local.json`, targeted with
+`--local`) keeps machine-specific values — machine ids, per-host enabled toggles — out of a
+dotfiles-synced base config; see
+[Host-Local Overlay](docs/configuration.md#host-local-overlay).
+Removing a reviewer also prunes it from every reviewer set; `remove` and
 `set remove` refuse to leave `defaultReviewerSet` empty unless you pass `--force`. In a TTY, the
 config-mutating commands are interactive by default: a bare `add` opens an arrow-key multiselect
 of discovered reviewers that aren't already configured and walks each through a field editor for
