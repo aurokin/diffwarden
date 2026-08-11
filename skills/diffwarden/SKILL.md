@@ -1,6 +1,6 @@
 ---
 name: diffwarden
-description: Use when an agent should run the diffwarden CLI to request read-only code review of local changes, a branch diff, a single commit, or repository-scoped custom instructions from the repository it is working in.
+description: Use when an agent should run the diffwarden CLI to perform read-only code review of local changes, a branch diff, a single commit, or repository-scoped custom instructions from the repository it is working in.
 ---
 
 # Diffwarden
