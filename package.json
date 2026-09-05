@@ -1,6 +1,6 @@
 {
   "name": "diffwarden",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "A small CLI for agent-callable code review.",
   "type": "module",
   "license": "MIT",
