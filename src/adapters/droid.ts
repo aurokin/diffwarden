@@ -1,13 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type {
-  AvailableModelConfig,
   CreateSessionOptions,
   DroidResultMessage,
+  ModelInfo,
   OutputFormat,
   ReasoningEffort,
   SessionSettings,
-} from "@factory/droid-sdk";
+} from "@factory/droid-sdk/node";
 import { normalizeStructuredOrTextAdapterOutput } from "../core/adapter-output.js";
 import {
   DiffwardenError,
@@ -40,11 +40,12 @@ import type {
   ReviewReviewerConfig,
 } from "./types.js";
 
+// Droid SDK 0.9 moved local subprocess sessions to the Node entrypoint.
 const droidPackageName = "@factory/droid-sdk";
 const defaultDroidExecutable = "droid";
 const execFileAsync = promisify(execFile);
 
-type DroidSdk = typeof import("@factory/droid-sdk");
+type DroidSdk = typeof import("@factory/droid-sdk/node");
 
 type DroidAdapterDependencies = {
   loadSdk: () => Promise<DroidSdk>;
@@ -91,32 +92,54 @@ export function createDroidAdapter(
           execPath: executable,
           interactionMode: sdk.DroidInteractionMode.Spec,
           autonomyLevel: sdk.AutonomyLevel.Off,
-          enabledToolIds: droidSdkReviewAllowedToolList(),
+          autoRejectPermissionRequests: true,
+          disableBuiltinSkills: true,
+          apiKey: requireDroidApiKey(input.env),
           tags: [droidSessionTag(input, "sdk")],
           ...(input.env !== undefined ? { env: stringEnv(droidProcessEnv(input.env)) } : {}),
           ...(input.signal !== undefined ? { abortSignal: input.signal } : {}),
           ...(input.reviewer.model !== undefined ? { specModeModelId: input.reviewer.model } : {}),
           ...(effort !== undefined ? { specModeReasoningEffort: effort } : {}),
         } satisfies CreateSessionOptions);
-        resolvedSettings = resolveDroidSettings(session.initResult.settings);
+        try {
+          const tools = await session.listTools();
+          const allowed = new Set(droidSdkReviewAllowedToolList());
+          // SDK 0.9.1 only exposes a denylist. Derive it from the runtime inventory,
+          // then require the exact read-only tool set before sending any prompt.
+          const disabledToolIds = tools
+            .filter((tool) => !allowed.has(tool.id))
+            .map((tool) => tool.id);
+          if (disabledToolIds.length > 0) await session.updateSettings({ disabledToolIds });
+          const actual = (await session.listTools())
+            .filter((tool) => tool.allowed)
+            .map((tool) => tool.id);
+          if (
+            actual.some((id) => !allowed.has(id)) ||
+            [...allowed].some((id) => !actual.includes(id))
+          ) {
+            throw missingRequirement("Droid SDK runtime did not enforce the review tool allowlist");
+          }
+        } catch (error) {
+          await session.close().catch(() => undefined);
+          throw error;
+        }
+        resolvedSettings = resolveDroidSettings(session.settings);
 
         let appliedEffort = effort;
         if (input.reviewer.effort === "off") {
-          const disable = droidDisableEffort(
-            session.initResult.availableModels,
-            resolvedSettings.model,
-          );
-          if (disable !== undefined) {
-            try {
+          try {
+            const disable = droidDisableEffort(
+              await listDroidModels(sdk, input, executable),
+              resolvedSettings.model,
+            );
+            if (disable !== undefined) {
               await session.updateSettings({ specModeReasoningEffort: disable });
-            } catch (error) {
-              // The session-closing finally below only wraps the stream loop; a
-              // failed settings update must not leak the session subprocess.
-              await session.close().catch(() => undefined);
-              throw error;
+              appliedEffort = disable;
+              resolvedSettings = { ...resolvedSettings, effort: disable };
             }
-            appliedEffort = disable;
-            resolvedSettings = { ...resolvedSettings, effort: disable };
+          } catch (error) {
+            await session.close().catch(() => undefined);
+            throw error;
           }
         }
 
@@ -194,56 +217,21 @@ export function createDroidAdapter(
         throw reviewerFailed(`Droid reviewer failed: ${detail}`);
       }
     },
-    /**
-     * List Droid's model catalog: `availableModels` only arrives in the createSession init
-     * result, so listing opens a short-lived spec-mode session and closes it immediately.
-     * The abort signal goes INTO createSession — the hang-prone call is session init itself,
-     * before any handle exists, and the SDK cancels a pending init natively.
-     */
     async listModels(input: ListModelsInput): Promise<ModelCatalogEntry[]> {
       const sdk = await dependencies.loadSdk();
       if (input.signal?.aborted) {
         throw reviewerFailed("Droid model catalog fetch aborted");
       }
-      const machineId = droidMachineId(input.reviewer);
       try {
-        const session = await sdk.createSession({
-          cwd: input.cwd ?? process.cwd(),
-          ...(machineId !== undefined ? { machineId } : {}),
-          execPath: droidExecutable(input.reviewer),
-          interactionMode: sdk.DroidInteractionMode.Spec,
-          autonomyLevel: sdk.AutonomyLevel.Off,
-          enabledToolIds: droidSdkReviewAllowedToolList(),
-          tags: [
-            {
-              name: "diffwarden",
-              metadata: {
-                transport: "sdk",
-                reviewer: input.reviewer.id,
-                target: "model-catalog",
-              },
-            },
-          ],
-          ...(input.env !== undefined ? { env: stringEnv(droidProcessEnv(input.env)) } : {}),
-          ...(input.signal !== undefined ? { abortSignal: input.signal } : {}),
-        } satisfies CreateSessionOptions);
-        try {
-          return droidModelCatalogEntries(
-            session.initResult.availableModels,
-            droidEffectiveTransport(input.reviewer),
-          );
-        } finally {
-          await session.close().catch(() => undefined);
-        }
+        const models = await listDroidModels(sdk, input, droidExecutable(input.reviewer));
+        return droidModelCatalogEntries(models, droidEffectiveTransport(input.reviewer));
       } catch (error) {
         if (error instanceof DiffwardenError) {
           throw error;
         }
         const detail = errorMessage(error);
         if (isDroidMissingAuth(detail)) {
-          throw missingAuth(
-            'droid is not authenticated — run "droid" and sign in, or set FACTORY_API_KEY',
-          );
+          throw missingAuth("Droid SDK requires FACTORY_API_KEY");
         }
         if (isDroidMissingExecutable(detail)) {
           throw missingRequirement(`Droid executable is unavailable: ${detail}`);
@@ -259,7 +247,7 @@ function droidEffectiveTransport(reviewer: ReviewReviewerConfig): "sdk" | "cli" 
 }
 
 /**
- * Map droid's `availableModels` init payload into catalog entries, narrowing each model's
+ * Map Droid model discovery results into catalog entries, narrowing each model's
  * effort levels to exactly what diffwarden can deliver over the effective transport:
  *
  * - keep native low/medium/high/xhigh verbatim (both delivery paths pass them through);
@@ -328,6 +316,7 @@ async function prepareDroidAdapter(
   input: ReviewAdapterPreflightInput,
 ): Promise<{ preflight: ReviewAdapterPreflightResult; runContext: DroidRunContext }> {
   const sdk = await dependencies.loadSdk();
+  requireDroidApiKey(input.env);
   const executable = droidExecutable(input.reviewer);
   const resolvedExecutable = await dependencies.checkExecutable(
     executable,
@@ -352,10 +341,8 @@ async function prepareDroidAdapter(
         },
         {
           name: "auth",
-          status: hasFactoryApiKey(input.env) ? "passed" : "warning",
-          detail: hasFactoryApiKey(input.env)
-            ? "FACTORY_API_KEY is present."
-            : "FACTORY_API_KEY is absent; local Droid auth may still work.",
+          status: "passed",
+          detail: "FACTORY_API_KEY is present.",
         },
         {
           name: "readonly",
@@ -428,7 +415,7 @@ export const droidAdapter = createDroidAdapter();
 
 async function loadDroidSdk(): Promise<DroidSdk> {
   try {
-    return await import("@factory/droid-sdk");
+    return await import("@factory/droid-sdk/node");
   } catch (error) {
     throw missingRequirement(`Failed to load ${droidPackageName}: ${errorMessage(error)}`);
   }
@@ -484,17 +471,14 @@ function droidEffort(effort: string | undefined): ReasoningEffort | undefined {
 /**
  * Droid models advertise different native disable values ("off" for the claude/glm families,
  * "none" for the auto router and gpt-5.6 family), and omitting the effort param runs the
- * model's default effort — not disabled. availableModels only arrives in the createSession
- * init result, so "off" is applied post-init via updateSettings. Models advertising neither
+ * model's default effort — not disabled. The discovery API supplies model capabilities, so "off" is applied post-init via updateSettings. Models advertising neither
  * value keep the session default (omission).
  */
 function droidDisableEffort(
-  availableModels: readonly AvailableModelConfig[] | undefined,
+  availableModels: readonly ModelInfo[] | undefined,
   model: string,
 ): ReasoningEffort | undefined {
-  const entry = availableModels?.find(
-    (candidate) => candidate.id === model || candidate.modelId === model,
-  );
+  const entry = availableModels?.find((candidate) => candidate.id === model);
   const supported = entry?.supportedReasoningEfforts;
   if (supported?.includes("off" as ReasoningEffort)) {
     return "off" as ReasoningEffort;
@@ -505,9 +489,43 @@ function droidDisableEffort(
   return undefined;
 }
 
-function hasFactoryApiKey(env: NodeJS.ProcessEnv | undefined): boolean {
-  const source = env ?? process.env;
-  return (source.FACTORY_API_KEY ?? "").trim().length > 0;
+function requireDroidApiKey(env: NodeJS.ProcessEnv | undefined): string {
+  const key = (env ?? process.env).FACTORY_API_KEY?.trim();
+  if (!key) throw missingAuth("Droid SDK requires FACTORY_API_KEY");
+  return key;
+}
+
+/** Own the client so cancellation rejects pending requests and clears their timers. */
+async function listDroidModels(
+  sdk: DroidSdk,
+  input: Pick<ListModelsInput, "cwd" | "env" | "signal">,
+  executable: string,
+): Promise<ModelInfo[]> {
+  input.signal?.throwIfAborted();
+  const transport = new sdk.ProcessTransport({
+    droidExecPath: executable,
+    cwd: input.cwd ?? process.cwd(),
+    env: {
+      ...stringEnv(droidProcessEnv(input.env)),
+      FACTORY_API_KEY: requireDroidApiKey(input.env),
+    },
+  });
+  const client = new sdk.DroidClient({ transport });
+  const abort = () => {
+    void client.close().catch(() => undefined);
+  };
+  input.signal?.addEventListener("abort", abort, { once: true });
+  try {
+    await transport.connect();
+    input.signal?.throwIfAborted();
+    const response = await client.listModels();
+    if (response.error !== undefined) throw new Error(response.error.message);
+    // Droid validates successful model payloads, but its error union leaves result unknown.
+    return (response.result as { models: ModelInfo[] }).models;
+  } finally {
+    input.signal?.removeEventListener("abort", abort);
+    await client.close().catch(() => undefined);
+  }
 }
 
 function droidProcessEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {

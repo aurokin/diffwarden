@@ -482,7 +482,10 @@ class CodexAppServerSession {
   private nextId = 1;
   private connection: AppServerConnection | undefined;
   private threadId: string | undefined;
+  private turnId = "";
+  private abortCleanup: Promise<void> | undefined;
   private reply = "";
+  private completedReply: string | undefined;
   private currentAgentMessageId = "";
   private currentAgentMessageText = "";
   private readonly activityDeltas: DeltaCoalescer | undefined;
@@ -549,7 +552,7 @@ class CodexAppServerSession {
       const error = reviewerFailed("codex app-server reviewer aborted");
       this.rejectAll(error);
       this.turnCompletion?.reject(error);
-      void this.close();
+      this.abortCleanup = this.interruptAndClose();
     });
 
     try {
@@ -568,7 +571,9 @@ class CodexAppServerSession {
       const threadResponse = await this.call("thread/start", {
         cwd: this.input.cwd,
         ...codexAppServerThreadConfig(this.options),
-        developerInstructions: codexAppServerDeveloperInstructions,
+        developerInstructions: [codexAppServerDeveloperInstructions, this.input.systemPrompt]
+          .filter(Boolean)
+          .join("\n\n"),
         ...codexAppServerReviewThreadParams,
         ...codexAppServerThreadModelOptions(this.input.reviewer),
       });
@@ -586,7 +591,7 @@ class CodexAppServerSession {
       this.flushActivityDeltas();
       this.activity?.end();
       removeAbortListener();
-      await this.close();
+      await (this.abortCleanup ?? this.close());
     }
   }
 
@@ -647,7 +652,7 @@ class CodexAppServerSession {
     this.onTurn(turnResponse);
     await turnWait;
 
-    const output = normalizeJsonLikeAdapterOutput(this.reply, {
+    const output = normalizeJsonLikeAdapterOutput(this.completedReply ?? this.reply, {
       captureMode: "native-structured",
       readonlyCapability: "enforced",
       transport: "app-server",
@@ -689,7 +694,7 @@ class CodexAppServerSession {
     await turnWait;
 
     return buildTextAdapterOutput({
-      text: this.reply.trim(),
+      text: (this.completedReply ?? this.reply).trim(),
       usage: this.usage,
       metadata: {
         captureMode: "text",
@@ -1007,6 +1012,9 @@ class CodexAppServerSession {
 
   private onTurn(value: unknown): void {
     const turn = isRecord(value) && isRecord(value.turn) ? value.turn : {};
+    if (typeof turn.id === "string") {
+      this.turnId = turn.id;
+    }
     const items = Array.isArray(turn.items) ? turn.items : [];
     for (const item of items) {
       if (isRecord(item)) {
@@ -1038,13 +1046,23 @@ class CodexAppServerSession {
 
   private captureThreadItem(item: Record<string, unknown>): void {
     if (item.type === "agentMessage" && typeof item.text === "string") {
+      // Codex 0.153 adds async questions to agentMessage. These and commentary
+      // are progress, even when they arrive after the final review answer.
+      if (item.delivery === "async" || item.phase === "commentary") {
+        if (item.id === this.currentAgentMessageId) {
+          this.reply = this.completedReply ?? "";
+        }
+        return;
+      }
       this.currentAgentMessageId = typeof item.id === "string" ? item.id : "agent-message";
       this.currentAgentMessageText = item.text;
       this.reply = item.text;
+      this.completedReply = item.text;
       return;
     }
     if (item.type === "exitedReviewMode" && typeof item.review === "string") {
       this.reply = item.review;
+      this.completedReply = item.review;
     }
   }
 
@@ -1065,6 +1083,25 @@ class CodexAppServerSession {
     const connection = this.connection;
     this.connection = undefined;
     await connection?.close();
+  }
+
+  private async interruptAndClose(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (this.threadId !== undefined && this.connection !== undefined) {
+        // A shared daemon keeps running after disconnect. Interrupt only our
+        // ephemeral thread; an empty turn ID targets a still-starting turn.
+        await Promise.race([
+          this.call("turn/interrupt", { threadId: this.threadId, turnId: this.turnId }),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, 1_000);
+          }),
+        ]).catch(() => undefined);
+      }
+    } finally {
+      clearTimeout(timer);
+      await this.close();
+    }
   }
 }
 
@@ -2057,7 +2094,7 @@ function firstLine(value: string): string {
 
 function formatTurnFailure(params: unknown, status: string): string {
   const message = stringAtPath(params, ["error", "message"]);
-  return message !== undefined
-    ? `codex app-server turn ${status}: ${message}`
-    : `codex app-server turn ${status}`;
+  const explanation = stringAtPath(params, ["error", "misalignment", "detailedExplanation"]);
+  const details = [...new Set([message, explanation].filter((value) => value?.trim()))].join("\n");
+  return `codex app-server turn ${status}${details ? `: ${details}` : ""}`;
 }

@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createExtensionRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { cliSpecs } from "../src/adapters/cli-specs.js";
 import type { CliRunResult } from "../src/adapters/cli-types.js";
@@ -183,12 +184,16 @@ function createMockPiAdapter(
   availableModels: MockPiModel[],
   options: { prompt?: MockPiPromptHandler } = {},
 ) {
-  const authStorage = createMockPiAuthStorage();
   const modelRegistry = {
-    getAvailable() {
+    async getAvailable() {
       return availableModels;
     },
     registerProvider() {},
+    async setRuntimeApiKey() {},
+    getProviders() {
+      return [] as [];
+    },
+    registerNativeProvider() {},
   };
   const settingsManager = createMockPiSettingsManager();
   const calls: {
@@ -206,8 +211,7 @@ function createMockPiAdapter(
       resourceLoader: unknown;
       sessionManager: unknown;
       settingsManager: unknown;
-      authStorage: unknown;
-      modelRegistry: unknown;
+      modelRuntime: unknown;
     }>;
   } = {
     createAgentSession: [],
@@ -216,13 +220,9 @@ function createMockPiAdapter(
   const adapter = createPiAdapter({
     async loadSdk() {
       return {
-        AuthStorage: {
-          inMemory() {
-            return authStorage;
-          },
-        },
-        ModelRegistry: {
-          inMemory() {
+        createExtensionRuntime,
+        ModelRuntime: {
+          async create() {
             return modelRegistry;
           },
         },
@@ -262,15 +262,6 @@ function createMockPiAdapter(
   });
 
   return { adapter, calls };
-}
-
-function createMockPiAuthStorage() {
-  return {
-    setRuntimeApiKey() {},
-    getRuntimeApiKey() {
-      return undefined;
-    },
-  };
 }
 
 function createMockPiSettingsManager(): MockPiSettingsManager {

@@ -1,4 +1,4 @@
-import type { ModelSelection } from "@cursor/sdk";
+import type { ModelSelection, RunError } from "@cursor/sdk";
 import { describe, expect, it } from "vitest";
 import {
   cursorReviewAutoReview,
@@ -183,6 +183,7 @@ describe("cursorAdapter", () => {
       apiKey: "key",
       model: { id: "composer-2.5" },
       mode: cursorReviewMode,
+      tools: ["read", "grep", "glob", "ls"],
       mcpServers: cursorReviewMcpServers,
       local: {
         cwd: process.cwd(),
@@ -195,6 +196,7 @@ describe("cursorAdapter", () => {
     expect(storeRoot).toContain("diffwarden-cursor-sdk-");
     expect(output.metadata).toMatchObject({
       cursorMode: cursorReviewMode,
+      cursorTools: ["read", "grep", "glob", "ls"],
       cursorAutoReview: cursorReviewAutoReview,
       cursorSandboxEnabled: cursorReviewSandboxOptions.enabled,
       cursorSettingSources: cursorReviewSettingSources,
@@ -358,6 +360,19 @@ describe("cursorAdapter", () => {
       requestedEffort: "high",
       effortResolutionSource: "unsupported",
       effort: "ignored",
+    });
+  });
+
+  it("preserves structured Cursor run failures", async () => {
+    const adapter = adapterWithResult({
+      status: "error",
+      result: "",
+      error: { message: "Model quota exhausted", code: "resource_exhausted" },
+    });
+    await expect(adapter.run(input({ env: { CURSOR_API_KEY: "key" } }))).rejects.toMatchObject({
+      code: "reviewer_failed",
+      message:
+        "Cursor reviewer finished with status: error: Model quota exhausted (resource_exhausted)",
     });
   });
 
@@ -550,11 +565,12 @@ describe("cursorAdapter", () => {
         text: "cursor ok",
         metadata: {
           captureMode: "text",
-          readonlyCapability: "prompt-only",
+          readonlyCapability: "tool-restricted",
           transport: "sdk",
           agentId: "agent-1",
           runId: "run-1",
           cursorMode: cursorReviewMode,
+          cursorTools: ["read", "grep", "glob", "ls"],
           cursorAutoReview: cursorReviewAutoReview,
           cursorSandboxEnabled: cursorReviewSandboxOptions.enabled,
           cursorSettingSources: cursorReviewSettingSources,
@@ -743,7 +759,7 @@ describe("cursorAdapter", () => {
           await createLiveAdapterInput(fixture, reviewer, process.env),
         );
 
-        expect(preflight?.metadata?.readonlyCapability).toBe("prompt-only");
+        expect(preflight?.metadata?.readonlyCapability).toBe("tool-restricted");
         expect(output.metadata?.captureMode).toBe("text");
         expect(output.metadata?.resolvedModel).toEqual(expect.any(String));
         expect(output.metadata?.modelResolutionSource).toBe("provider-result");
@@ -765,6 +781,7 @@ type MockCursorRun = {
     result: string;
     model?: ModelSelection;
     durationMs?: number;
+    error?: RunError;
   }>;
 };
 

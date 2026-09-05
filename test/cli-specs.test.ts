@@ -810,6 +810,7 @@ describe("cliSpecs", () => {
       args: [
         "--print",
         `Read the full Diffwarden review prompt from ${promptPath} and follow it exactly.`,
+        "--disable-slash-commands",
         "--print-timeout",
         "180s",
         "--sandbox",
@@ -2108,6 +2109,38 @@ describe("cliSpecs", () => {
       },
     });
   });
+
+  it.each(["low", "medium", "high"] as const)(
+    "passes Antigravity model and %s effort without changing review restrictions",
+    async (effort) => {
+      const invocation = await cliSpecs.antigravity.buildInvocation(
+        createInput(createReviewer("antigravity", { model: "gemini-3.7-flash", effort }), {
+          env: { HOME: createTempDir() },
+        }),
+        createTempDir(),
+      );
+      expect(valuesAfterFlag(invocation.args, "--model")).toEqual(["gemini-3.7-flash"]);
+      expect(valuesAfterFlag(invocation.args, "--effort")).toEqual([effort]);
+      expect(invocation.args).toContain("--disable-slash-commands");
+      expect(invocation.args).toContain("--sandbox");
+      expect(invocation.args).not.toContain("--dangerously-skip-permissions");
+    },
+  );
+
+  it.each(["off", "minimal", "xhigh", "max"] as const)(
+    "rejects unsupported Antigravity %s effort without silently remapping it",
+    async (effort) => {
+      await expect(
+        cliSpecs.antigravity.buildInvocation(
+          createInput(createReviewer("antigravity", { effort })),
+          createTempDir(),
+        ),
+      ).rejects.toMatchObject({
+        code: "invalid_cli",
+        message: "Antigravity CLI supports only low, medium, or high effort",
+      });
+    },
+  );
 
   it("rejects oversized cursor prompt argv input before a CLI is spawned", async () => {
     await expect(

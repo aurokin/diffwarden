@@ -2040,9 +2040,9 @@ describe("createCliAdapter", () => {
   });
 
   it.each([
-    ["model", { model: "test-model" }, "model"],
-    ["effort", { effort: "high" }, "effort"],
-  ] as const)("rejects unsupported Antigravity %s overrides", async (_name, extra, message) => {
+    ["model", { model: "test-model" }],
+    ["effort", { effort: "high" }],
+  ] as const)("accepts supported Antigravity %s overrides", async (_name, extra) => {
     const harness = createHarness("antigravity");
     const adapter = createCliAdapter("antigravity");
     const reviewer = createReviewer("antigravity", harness.executable, extra);
@@ -2054,9 +2054,8 @@ describe("createCliAdapter", () => {
         readonly: true,
         env: harness.env,
       }),
-    ).rejects.toMatchObject({
-      code: "invalid_cli",
-      message: expect.stringContaining(`does not support per-run ${message} overrides`),
+    ).resolves.toMatchObject({
+      metadata: { transport: "cli", ...extra },
     });
   });
 });

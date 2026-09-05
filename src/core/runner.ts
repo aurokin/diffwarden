@@ -859,7 +859,12 @@ function reviewerPromptSelection(
   promptFocus: string | undefined,
 ): ReviewerPromptSelection {
   const focusOptions = promptFocus !== undefined ? { focus: promptFocus } : {};
-  const support = reviewerSystemPromptSupport(reviewer.sdk, reviewer.transport);
+  // Native inline review installs Codex's own base rubric and does not preserve
+  // our developer contract. Its custom target must retain the combined prompt.
+  const support =
+    reviewer.sdk === "codex" && reviewer.appServerOptions?.reviewMode === "native"
+      ? undefined
+      : reviewerSystemPromptSupport(reviewer.sdk, reviewer.transport);
   if (support === undefined) {
     return { prompt: buildReviewPrompt(resolved.target, resolved.diff, focusOptions) };
   }

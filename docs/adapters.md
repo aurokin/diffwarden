@@ -6,10 +6,26 @@ target resolution, prompt assembly, parsing, validation, aggregation, and render
 Diffwarden supports only the latest released version of each coding-agent CLI/SDK. Adapter
 behavior (flags, effort vocabularies, listing surfaces) tracks the current engine release;
 older binaries are not compatibility targets, and anything they reject surfaces as the
-engine's own error.
+engine's own error. Pi is temporarily pinned to the last usable release as explained below.
 
 For the source-of-truth capability table, see [`features.md`](./features.md). This page
 explains adapter behavior and operational notes.
+
+## September 4 SDK refresh
+
+These are repository SDK versions, independent of installed CLIs and review-prompt sources.
+
+| Reviewer | Previous SDK | Updated SDK |
+| --- | --- | --- |
+| Claude | 0.3.167 | 0.3.261 |
+| Cursor | 1.0.18 | 1.0.31 |
+| Pi | 0.75.3 | 0.84.4, exact pin |
+| Droid | 0.3.0 | 0.9.1 |
+| Copilot | 1.0.0 | 1.0.13 |
+| Codex | No SDK dependency | App-server protocol checked against CLI 0.153.4 |
+
+Codex's original review source was May 28 commit `462deb0426bf`. The review-process
+refresh and source revisions are recorded in [ADR 0003](adr/0003-codex-review-process.md).
 
 ## Adapter Families
 
@@ -157,7 +173,7 @@ Current SDK coverage:
 | Cursor SDK | Preflight resolves aliases through `Cursor.models.list`; run output prefers the SDK result model. | Requested effort is reported as unsupported because the SDK path does not expose an effort control. |
 | Claude SDK | Reports the model Diffwarden passes to the SDK, using `sonnet` when no override is configured. | Maps public effort values to Claude native effort or disabled thinking. |
 | Pi SDK | Reports the selected authenticated provider/model from Pi's model registry. | Reports the requested and clamped Pi thinking level. |
-| Droid SDK | Reads the effective spec-mode model from `session.initResult.settings`. | Reads the effective spec-mode reasoning effort from `session.initResult.settings`. |
+| Droid SDK | Reads the effective spec-mode model from `session.settings`. | Reads the effective spec-mode reasoning effort from `session.settings`. |
 | Copilot SDK | Reports the requested model and promotes provider-result model metadata from `assistant.usage` / `assistant.message` events when available. | Maps `minimal` to `low`, omits SDK reasoning effort for `off`, and promotes provider-result effort metadata when available. |
 
 CLI transports always report deterministic values that Diffwarden passes on the command line:
@@ -189,10 +205,10 @@ Per-engine listing surfaces:
 | claude | SDK `query.supportedModels()` under the model-preflight lockdown | sdk only (the CLI has no listing surface) |
 | cursor | `Cursor.models.list` with `CURSOR_API_KEY` on sdk; `cursor-agent models` under delegated login on cli | sdk + cli |
 | codex | Forced stdio-isolated app-server `initialize(experimentalApi)` → paginated `model/list` | cli + app-server (same binary and auth.json) |
-| pi | SDK model registry `getAvailable()` with shared local auth (probed, never created) | sdk + cli |
+| pi | SDK `ModelRuntime.getAvailable()` with shared local auth (probed, never created) | sdk + cli |
 | opencode | `opencode models` plain `provider/model` lines — ids only, no effort metadata | cli |
 | copilot | Staged isolated SDK runtime (same staging as reviews, scoped to the setup cwd) → `client.listModels()` | sdk + cli (same backend catalog) |
-| droid | Short-lived spec-mode session → `initResult.availableModels` → close | sdk + cli |
+| droid | SDK `DroidClient.listModels()` over an owned client and process transport; requires `FACTORY_API_KEY` | sdk + cli |
 
 gemini, grok, and antigravity have no listing surface and stay free-text.
 
@@ -257,6 +273,18 @@ The Codex app-server path is configured through a named reviewer with
 running, and launches `codex app-server --listen unix://` only when no socket is available.
 The review itself starts an ephemeral read-only thread, sets Codex `web_search` to `"disabled"` by
 default, and requests JSON-schema turn output.
+
+The structured path adapts Codex 0.153.4's detached review-agent inspection process
+and repository-rule attribution. The stable review contract is delivered through
+`developerInstructions`; target, focus, provenance, and patch remain user input.
+Codex's model-specific base instructions are preserved. This is a fresh structured
+turn, not native detached `review/start`, whose API does not accept an output schema
+and whose worker uses server-level configuration. See the
+[integration decision](adr/0003-codex-review-process.md).
+
+Async questions and commentary do not replace a completed review answer. An aborted
+review requests interruption of its own thread before disconnecting from a shared
+server. Turn failures retain available monitoring explanations without automatic resume.
 
 Diffwarden's structured app-server mode sends `approvalPolicy: "never"`, `sandbox:
 "read-only"`, `ephemeral: true`, `persistExtendedHistory: false`, no client dynamic tools, and
@@ -336,8 +364,9 @@ zsh -lic 'pnpm dev -- review --target uncommitted --reviewer cursor'
 The adapter uses `@cursor/sdk` local mode with `mode: "plan"`, `sandboxOptions: { enabled: true }`,
 `autoReview: true`, empty `settingSources`, no MCP servers, and an ephemeral JSONL local store.
 The JSONL store keeps Diffwarden reviews out of Cursor's default persistent local SDK store.
-Cursor still does not expose deterministic read/glob/grep-only tool allowlisting for this path,
-so Diffwarden reports prompt-only read-only capability instead of hard enforcement.
+Cursor SDK 1.0.31 exposes tool allowlisting. Diffwarden allows only `read`, `grep`,
+`glob`, and `ls`, excluding shell, writes, MCP, and delegation, and reports
+`tool-restricted` read-only capability. Terminal SDK errors retain their message and code.
 
 If Cursor reports that local SDK sandboxing is unsupported on the host, Diffwarden classifies the
 reviewer as an environment failure and does not retry unsandboxed. Fix or remove the local Cursor
@@ -497,11 +526,11 @@ Reusable provider-heavy profiles should pin `provider`, `model`, and usually `ef
 config so results do not drift with environment variables, login state, or Pi model registry
 ordering.
 
-By default the adapter builds an isolated, in-memory `AuthStorage` (`AuthStorage.inMemory()`)
-that only sees provider credentials from environment variables. Set
-`sdkOptions.authSource: "shared"` on the reviewer to use `AuthStorage.create(authPath?)`
-instead, which loads the Pi CLI's on-disk `auth.json` (including OAuth logins like
-`openai-codex`) and auto-refreshes OAuth tokens with file locking. This shares the CLI's
+The adapter creates Pi's asynchronous `ModelRuntime` with in-memory credentials and
+`modelsPath: null` by default. It only sees provider credentials from environment variables.
+Set `sdkOptions.authSource: "shared"` on the reviewer to load the Pi CLI's on-disk
+`auth.json`, including OAuth logins like
+`openai-codex`, and refresh OAuth tokens with file locking. This shares the CLI's
 credentials without spawning the `pi` executable, so it avoids macOS executable-trust
 prompts. `sdkOptions.authPath` overrides the default `auth.json` location (a leading `~` is
 expanded); it requires `authSource: "shared"`. Preflight and output metadata report the
@@ -509,6 +538,9 @@ active `authSource` (and `authPath` when set). The default stays isolated to kee
 credential-free. Note that shared mode writes to `auth.json` on disk: it creates the file
 and its parent directory if absent, and rewrites the file when refreshing an expired OAuth
 token, so it is the one path where a review run mutates state outside the repository.
+
+Pi is pinned to SDK 0.84.4. Published 0.85.0 imports an undeclared
+`@earendil-works/pi-server` dependency and fails during module loading in a clean install.
 
 The Pi path reports a tool-restricted read-only capability. It passes only `read`, `grep`,
 `find`, `ls`, and `review_output` as active tools, uses an extension-free resource loader,
@@ -544,9 +576,7 @@ settings files; unsupported keys are rejected rather than ignored. Preflight and
 metadata report those runtime fields plus the Pi-native settings that can affect runtime
 duration: agent retry enabled/max retries/base delay, provider
 request timeout/retry/max retry delay, compaction enabled/reserve/keep-recent tokens, and
-HTTP idle timeout when the installed Pi SDK exposes that getter. With
-`@earendil-works/pi-coding-agent@0.75.3`, HTTP idle timeout is not exposed through the public
-settings manager, so Diffwarden reports it as unavailable instead of guessing. These are
+HTTP idle timeout. SDK 0.84.4 exposes `getHttpIdleTimeoutMs()` with a default of 300000 ms. These are
 Pi-native/provider-native controls, not Diffwarden tool-call or step caps. A configured reviewer
 timeout, when set, is the Diffwarden-owned run-level circuit breaker.
 
@@ -625,13 +655,18 @@ unavailable, malformed, or stored outside the default sessions directory, Diffwa
 review successful and omits those runtime fields rather than inferring defaults from CLI help.
 
 The Droid SDK adapter remains available through `--reviewer droid` or configured native
-profiles. It uses `@factory/droid-sdk`, creates a session, reads resolved model and effort
-settings from the session init result, streams a prompt with native JSON Schema output, and
+profiles. It uses `@factory/droid-sdk/node` 0.9.1, creates a session, reads resolved model and effort
+settings from `session.settings`, streams a prompt with native JSON Schema output, and
 runs in Droid's spec interaction mode with autonomy off and the SDK `Read`, `Glob`, `Grep`,
 `LS`, and `ExitSpecMode` tools explicitly allowlisted for read-only review behavior. Treat this
 path as experimental if Factory UI session history matters, because SDK runs still appear in Droid
 session history and may be grouped differently from CLI-created Droid Computer sessions. Set
-`FACTORY_API_KEY` or use local Droid auth supported by the installed CLI.
+`FACTORY_API_KEY` for SDK reviews. Local Droid CLI login remains available through CLI
+transport. The SDK no longer falls back to local CLI authentication. Diffwarden applies the
+tool policy through session settings: it inventories tools, disables every tool outside the
+review allowlist, and verifies the exact effective set with `listTools()` before sending the
+prompt. It disables built-in skills and rejects permission requests. JSON-RPC sessions ignore
+the CLI `--enabled-tools` argument, so the SDK adapter does not rely on that flag.
 
 Set `sdkOptions.machineId` on a Droid reviewer to target a specific Droid Computer. For live
 SDK smoke tests, set `DIFFWARDEN_LIVE_DROID_MACHINE_ID` to the ID from
@@ -697,7 +732,8 @@ overrides and GitHub CLI auth directories derived from `GH_CONFIG_DIR`, `XDG_CON
 `HOME`, `USERPROFILE`, or Windows AppData must also resolve outside the reviewed workspace.
 Set `sdkOptions.executable` to force the SDK runtime to spawn a Copilot-named runtime binary
 or readable `.js` runtime entry. Diffwarden launches `.js` entries through Node. Otherwise,
-Diffwarden resolves the SDK-bundled `@github/copilot` runtime entry explicitly. The resolved
+Diffwarden resolves the native executable bundled in the SDK's optional
+`@github/copilot-sdk-{platform}` package. The resolved
 runtime must live outside the reviewed workspace; source-checkout development installs should
 configure an external runtime or use Copilot CLI transport when reviewing the Diffwarden
 repository itself.
@@ -885,8 +921,10 @@ values are runtime-result evidence, not startup configuration proof.
 Diffwarden does not infer effort for Claude or Pi CLI unless the CLI emits an explicit runtime
 effort field. Gemini remains supported for enterprise and paid API-key users after Google's
 June 18, 2026 consumer/free Gemini CLI transition to Antigravity CLI, but new runtime-metadata
-extraction work should not build additional Gemini-specific behavior. Antigravity rejects model
-and effort overrides.
+extraction work should not build additional Gemini-specific behavior. Antigravity accepts
+`--model` and `--effort low|medium|high`; other effort values are rejected. Diffwarden also
+passes `--disable-slash-commands`, which requires Antigravity 1.1.9 or newer. The updated
+invocation was checked against 1.1.26.
 
 ## Live Test Controls
 

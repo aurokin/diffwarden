@@ -370,15 +370,15 @@ describe("editReviewerInUserConfig", () => {
 
   it("rejects an override the resulting transport cannot honor and writes nothing", async () => {
     const { env, configPath } = setup();
-    // antigravity CLI supports neither model nor effort overrides. Transport is omitted here, so
+    // Gemini CLI does not support effort overrides. Transport is omitted here, so
     // the check must resolve the engine default (cli) rather than assuming sdk.
     writeExisting(configPath, {
-      reviewers: [{ id: "agy", engine: "antigravity" }],
+      reviewers: [{ id: "gemini", engine: "gemini" }],
     });
     const before = readFileSync(configPath, "utf8");
 
     await expect(
-      editReviewerInUserConfig({ id: "agy", patch: { model: "x" }, env }),
+      editReviewerInUserConfig({ id: "gemini", patch: { effort: "high" }, env }),
     ).rejects.toThrow(/does not support/);
     expect(readFileSync(configPath, "utf8")).toBe(before);
   });

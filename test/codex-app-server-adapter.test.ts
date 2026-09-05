@@ -12,7 +12,7 @@ import {
 import { type Server, type Socket, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codexAppServerListModels,
   codexAppServerMaxPromptChars,
@@ -47,6 +47,72 @@ afterEach(async () => {
 });
 
 describe("createCodexAppServerAdapter", () => {
+  it.each([
+    { name: "active turn", options: {}, turnId: "turn-1" },
+    { name: "pending turn/start", options: { holdTurnStartResponse: true }, turnId: "" },
+    { name: "unacknowledged interrupt", options: { ignoreInterrupt: true }, turnId: "turn-1" },
+  ])("interrupts and disconnects on abort with an $name", async ({ options, turnId }) => {
+    const harness = createSocketHarness({ holdTurn: true, ...options });
+    await harness.start();
+    const controller = new AbortController();
+    const reviewer: ReviewReviewerConfig = {
+      id: "codex",
+      sdk: "codex",
+      transport: "app-server",
+      readonly: true,
+      cliOptions: { executable: process.execPath },
+    };
+    const run = createCodexAppServerAdapter().run({
+      ...createInput(reviewer, harness),
+      signal: controller.signal,
+    });
+    const rejected = expect(run).rejects.toThrow("aborted");
+    await vi.waitFor(() => expect(harness.readInvocation().turnStart).toBeDefined());
+    controller.abort();
+    await rejected;
+    expect(harness.readInvocation().messages).toContainEqual(
+      expect.objectContaining({
+        method: "turn/interrupt",
+        params: { threadId: "thread-1", turnId },
+      }),
+    );
+    await vi.waitFor(() => expect(harness.readInvocation().clientDisconnected).toBe(true));
+  });
+
+  it("delivers the stable contract above the patch without replacing model instructions", async () => {
+    const harness = createHarness();
+    const input = createInput(createReviewer(harness.executable), harness);
+    await createCodexAppServerAdapter().run({
+      ...input,
+      systemPrompt: "STABLE_REVIEW_CONTRACT",
+      prompt: "PATCH_AND_FOCUS",
+    });
+    const invocation = harness.readInvocation();
+    expect(invocation.threadStart.developerInstructions).toContain("STABLE_REVIEW_CONTRACT");
+    expect(invocation.threadStart.developerInstructions).not.toContain("PATCH_AND_FOCUS");
+    expect(invocation.threadStart).not.toHaveProperty("baseInstructions");
+    expect(invocation.threadStart).toMatchObject({ ephemeral: true, sandbox: "read-only" });
+    expect(invocation.turnStart?.input).toEqual([
+      { type: "text", text: "PATCH_AND_FOCUS", text_elements: [] },
+    ]);
+    expect(invocation.turnStart?.outputSchema).toEqual(reviewResultStrictJsonSchema);
+  });
+
+  it("retains the completed final answer when async questions and commentary follow it", async () => {
+    const harness = createHarness({ completedItemOnly: true, asyncQuestion: true });
+    const output = await createCodexAppServerAdapter().run(
+      createInput(createReviewer(harness.executable), harness),
+    );
+    expect(output.structured).toMatchObject({ overall_explanation: "codex app-server ok" });
+  });
+
+  it("preserves the explanation of a monitored turn failure", async () => {
+    const harness = createHarness({ failedTurn: true, monitoringFailure: true });
+    await expect(
+      createCodexAppServerAdapter().run(createInput(createReviewer(harness.executable), harness)),
+    ).rejects.toThrow("Review stopped for a policy explanation");
+  });
+
   it("reuses an existing shared CODEX_HOME app-server by default", async () => {
     const harness = createSocketHarness();
     await harness.start();
@@ -1129,10 +1195,18 @@ type FakeInvocation = {
   legacyApprovalResponse?: unknown;
   serverRequestResponse?: unknown;
   unsupportedResponse?: unknown;
+  clientDisconnected?: boolean;
+};
+
+type SocketHarnessOptions = {
+  crossThreadTraffic?: boolean;
+  holdTurn?: boolean;
+  holdTurnStartResponse?: boolean;
+  ignoreInterrupt?: boolean;
 };
 
 function createSocketHarness(
-  options: { crossThreadTraffic?: boolean } = {},
+  options: SocketHarnessOptions = {},
 ): Harness & { socketPath: string; start(): Promise<void> } {
   root = mkdtempSync(path.join("/tmp", "dw-cas-"));
   const cwd = path.join(root, "repo");
@@ -1172,7 +1246,10 @@ function createSocketHarness(
       await once(server, "listening");
     },
     readInvocation() {
-      return JSON.parse(readFileSync(invocationPath, "utf8")) as FakeInvocation;
+      return {
+        ...(JSON.parse(readFileSync(invocationPath, "utf8")) as FakeInvocation),
+        clientDisconnected: invocation.clientDisconnected === true,
+      };
     },
   };
 }
@@ -1240,6 +1317,8 @@ function createHarness(
     unsupportedRequest?: boolean;
     serverRequestMethod?: string;
     failedTurn?: boolean;
+    asyncQuestion?: boolean;
+    monitoringFailure?: boolean;
     directCompletedTurn?: boolean;
     directFailedTurn?: boolean;
     nativeReview?: boolean;
@@ -1283,6 +1362,8 @@ function createHarness(
         ? { DIFFWARDEN_FAKE_APP_SERVER_REQUEST_METHOD: options.serverRequestMethod }
         : {}),
       ...(options.failedTurn ? { DIFFWARDEN_FAKE_APP_SERVER_FAILED_TURN: "1" } : {}),
+      ...(options.asyncQuestion ? { DIFFWARDEN_FAKE_APP_SERVER_ASYNC_QUESTION: "1" } : {}),
+      ...(options.monitoringFailure ? { DIFFWARDEN_FAKE_APP_SERVER_MONITORING: "1" } : {}),
       ...(options.nativeReview ? { DIFFWARDEN_FAKE_APP_SERVER_NATIVE_REVIEW: "1" } : {}),
       ...(options.directCompletedTurn
         ? { DIFFWARDEN_FAKE_APP_SERVER_DIRECT_COMPLETED_TURN: "1" }
@@ -1314,12 +1395,16 @@ function createFakeWebSocketAppServer(
   socketPath: string,
   invocation: FakeInvocation & { messages: unknown[] },
   invocationPath: string,
-  options: { crossThreadTraffic?: boolean } = {},
+  options: SocketHarnessOptions = {},
 ): Server {
   const server = createServer((socket) => {
     let buffer = Buffer.alloc(0);
     let upgraded = false;
     const fragments: Buffer[] = [];
+
+    socket.on("close", () => {
+      invocation.clientDisconnected = true;
+    });
 
     socket.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
@@ -1371,7 +1456,7 @@ function handleFakeAppServerMessage(
   invocation: FakeInvocation & { messages: unknown[] },
   invocationPath: string,
   socket: Socket,
-  options: { crossThreadTraffic?: boolean } = {},
+  options: SocketHarnessOptions = {},
 ): void {
   invocation.messages.push(message);
   if (message.method === undefined && message.id === 999) {
@@ -1401,9 +1486,24 @@ function handleFakeAppServerMessage(
     fakeSocketSend(socket, { id: message.id, result: { thread: { id: "thread-1" } } });
     return;
   }
+  if (message.method === "turn/interrupt") {
+    writeFileSync(invocationPath, JSON.stringify(invocation));
+    if (!options.ignoreInterrupt) {
+      fakeSocketSend(socket, { id: message.id, result: {} });
+    }
+    return;
+  }
   if (message.method === "turn/start") {
     invocation.turnStart = message.params as FakeInvocation["turnStart"];
+    if (options.holdTurnStartResponse) {
+      writeFileSync(invocationPath, JSON.stringify(invocation));
+      return;
+    }
     fakeSocketSend(socket, { id: message.id, result: { turn: { id: "turn-1" } } });
+    if (options.holdTurn) {
+      writeFileSync(invocationPath, JSON.stringify(invocation));
+      return;
+    }
     if (options.crossThreadTraffic) {
       fakeSocketSend(socket, {
         id: 999,
@@ -1420,7 +1520,7 @@ function finishFakeSocketInvocation(
   invocation: FakeInvocation & { messages: unknown[] },
   invocationPath: string,
   socket: Socket,
-  options: { crossThreadTraffic?: boolean } = {},
+  options: SocketHarnessOptions = {},
 ): void {
   const review = {
     findings: [],
@@ -1990,6 +2090,19 @@ function finish() {
       }
     });
   }
+  if (process.env.DIFFWARDEN_FAKE_APP_SERVER_ASYNC_QUESTION) {
+    for (const item of [
+      { id: "question-1", delivery: "async", questions: [{ id: "q1", question: "Clarify?" }] },
+      { id: "commentary-1", phase: "commentary" }
+    ]) {
+      send({ method: "item/agentMessage/delta", params: {
+        ...threadFields, itemId: item.id, delta: "Not the review result"
+      }});
+      send({ method: "item/completed", params: {
+        ...threadFields, item: { type: "agentMessage", text: "Not the review result", ...item }
+      }});
+    }
+  }
   if (process.env.DIFFWARDEN_FAKE_APP_SERVER_FOREIGN_THREAD) {
     send({
       method: "item/agentMessage/delta",
@@ -2039,7 +2152,9 @@ function finish() {
         turn: {
           id: "turn-1",
           status: "failed",
-          error: { message: "model unavailable" }
+          error: { message: "model unavailable", ...(process.env.DIFFWARDEN_FAKE_APP_SERVER_MONITORING
+            ? { misalignment: { detailedExplanation: "Review stopped for a policy explanation" } }
+            : {}) }
         }
       }
     });

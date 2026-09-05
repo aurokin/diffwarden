@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import type {
+  CreateModelRuntimeOptions,
+  ModelRuntime,
+  ResourceLoader,
+  createExtensionRuntime,
+} from "@earendil-works/pi-coding-agent";
 import {
   buildStructuredReviewAdapterOutput,
   unwrapStructuredReview,
@@ -70,7 +76,7 @@ export function createPiAdapter(
     name: "pi",
     async preflight(input: ReviewAdapterPreflightInput): Promise<ReviewAdapterPreflightResult> {
       const sdk = await dependencies.loadSdk();
-      const { availableModels, authOptions } = createPiRuntimeContext(
+      const { availableModels, authOptions } = await createPiRuntimeContext(
         sdk,
         input.env,
         input.reviewer,
@@ -139,7 +145,7 @@ export function createPiAdapter(
     },
     async run(input: ReviewAdapterInput): Promise<ReviewAdapterOutput> {
       const sdk = await dependencies.loadSdk();
-      const { authStorage, modelRegistry, availableModels, authOptions } = createPiRuntimeContext(
+      const { modelRuntime, availableModels, authOptions } = await createPiRuntimeContext(
         sdk,
         input.env,
         input.reviewer,
@@ -194,11 +200,10 @@ export function createPiAdapter(
           })),
           tools: [...piSdkReviewTools],
           customTools: [reviewOutputTool],
-          resourceLoader: createExtensionFreeResourceLoader(),
+          resourceLoader: createExtensionFreeResourceLoader(sdk),
           sessionManager,
           settingsManager,
-          authStorage,
-          modelRegistry,
+          modelRuntime,
         });
 
         const removeAbortListener = bindAbortSignal(input.signal, () => session.abort());
@@ -285,7 +290,7 @@ export function createPiAdapter(
               ...input.reviewer,
               sdkOptions: { ...input.reviewer.sdkOptions, authSource: "shared" },
             };
-      const { availableModels } = createPiRuntimeContext(sdk, input.env, reviewer);
+      const { availableModels } = await createPiRuntimeContext(sdk, input.env, reviewer);
       // Scope to the reviewer's provider, and emit BARE ids in that case: the provider is
       // already carried in the reviewer's separate `provider` field, so a provider-qualified
       // value would double-qualify on the CLI path (`--model anthropic/anthropic/...`) and
@@ -333,15 +338,11 @@ function piSharedAuthFileExists(sdk: PiSdk, env: NodeJS.ProcessEnv | undefined):
 export const piAdapter = createPiAdapter();
 
 type PiSdk = {
-  AuthStorage: {
-    create?(authPath?: string): PiAuthStorage;
-    inMemory(data?: Record<string, unknown>): PiAuthStorage;
+  createExtensionRuntime: typeof createExtensionRuntime;
+  ModelRuntime: {
+    create(options: CreateModelRuntimeOptions): Promise<PiModelRuntime>;
   };
-  /** Resolves PI_CODING_AGENT_DIR/HOME to the CLI's agent dir (auth.json lives there). */
   getAgentDir?(): string;
-  ModelRegistry: {
-    inMemory(authStorage: PiAuthStorage): PiModelRegistry;
-  };
   SessionManager: {
     inMemory(cwd?: string): PiSessionManager;
   };
@@ -351,16 +352,13 @@ type PiSdk = {
   createAgentSession(options: PiCreateAgentSessionOptions): Promise<PiCreateAgentSessionResult>;
 };
 
-type PiAuthStorage = {
-  setRuntimeApiKey?(provider: string, apiKey: string): void;
-};
 type PiSessionManager = unknown;
-type PiResourceLoader = unknown;
+type PiResourceLoader = ResourceLoader;
 type PiSettingsManager = {
   getTransport?(): string;
   getSteeringMode?(): string;
   getFollowUpMode?(): string;
-  getThinkingBudgets?(): Record<string, number> | undefined;
+  getThinkingBudgets?(): PiSettings["thinkingBudgets"];
   getCompactionSettings(): {
     enabled: boolean;
     reserveTokens: number;
@@ -407,10 +405,12 @@ type PiSettings = {
   httpIdleTimeoutMs?: number;
 };
 
-type PiModelRegistry = {
-  getAvailable(): PiModel[];
-  getProviderAuthStatus?(provider: string): PiAuthStatus;
-  registerProvider?(providerName: string, config: PiProviderConfig): void;
+type PiModelRuntime = {
+  getAvailable(provider?: string): Promise<readonly PiModel[]>;
+  setRuntimeApiKey(provider: string, apiKey: string): Promise<void>;
+  registerProvider(providerName: string, config: PiProviderConfig): void;
+  getProviders: ModelRuntime["getProviders"];
+  registerNativeProvider: ModelRuntime["registerNativeProvider"];
 };
 
 type PiProviderConfig = {
@@ -425,11 +425,6 @@ type PiModel = {
   thinkingLevelMap?: Partial<Record<PiThinkingLevel, string | null>>;
 };
 
-type PiAuthStatus = {
-  source?: string;
-  label?: string;
-};
-
 type PiCreateAgentSessionOptions = {
   cwd: string;
   model: PiModel;
@@ -440,8 +435,7 @@ type PiCreateAgentSessionOptions = {
   resourceLoader: PiResourceLoader;
   sessionManager: PiSessionManager;
   settingsManager: PiSettingsManager;
-  authStorage: PiAuthStorage;
-  modelRegistry: PiModelRegistry;
+  modelRuntime: PiModelRuntime;
 };
 
 type PiCreateAgentSessionResult = {
@@ -479,75 +473,150 @@ type PiToolDefinition = {
 
 async function loadPiSdk(): Promise<PiSdk> {
   try {
-    return (await import(piPackageName)) as unknown as PiSdk;
+    // 0.85.0's entrypoint imports an unpublished pi-server dependency; stay on 0.84.4.
+    const sdk = await import("@earendil-works/pi-coding-agent");
+    return {
+      ModelRuntime: sdk.ModelRuntime,
+      createExtensionRuntime: sdk.createExtensionRuntime,
+      getAgentDir: sdk.getAgentDir,
+      SessionManager: sdk.SessionManager,
+      SettingsManager: sdk.SettingsManager,
+      // The adapter's injectable session shape omits provider-specific model/tool fields.
+      createAgentSession: sdk.createAgentSession as unknown as PiSdk["createAgentSession"],
+    };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw missingRequirement(`Failed to load ${piPackageName}: ${detail}`);
   }
 }
 
-function createPiRuntimeContext(
+async function createPiRuntimeContext(
   sdk: PiSdk,
   env: NodeJS.ProcessEnv | undefined,
   reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
-): {
-  authStorage: PiAuthStorage;
-  modelRegistry: PiModelRegistry;
+): Promise<{
+  modelRuntime: PiModelRuntime;
   availableModels: PiModel[];
   authOptions: NormalizedPiAuthOptions;
-} {
+}> {
   try {
-    return withProcessEnvSync(env, () => {
-      const authOptions = normalizePiAuthOptions(reviewer);
-      const authStorage = createPiAuthStorage(sdk, authOptions);
-      const providerOptions = normalizePiProviderOptions(reviewer);
-      const providerApiKey = materializeConfiguredProviderAuth(
-        authStorage,
-        reviewer,
-        env,
-        providerOptions,
-      );
-      const modelRegistry = sdk.ModelRegistry.inMemory(authStorage);
-      materializeConfiguredProviderRegistration(
-        modelRegistry,
-        reviewer,
-        env,
-        providerOptions,
-        providerApiKey,
-      );
-      const availableModels = modelRegistry.getAvailable();
-      materializeScopedEnvAuth(authStorage, modelRegistry, availableModels, env);
-      return {
-        authStorage,
-        modelRegistry,
-        availableModels,
-        authOptions,
-      };
+    const authOptions = normalizePiAuthOptions(reviewer);
+    const providerOptions = normalizePiProviderOptions(reviewer);
+    // Pi 0.81 replaced AuthStorage/ModelRegistry session options with ModelRuntime.
+    // Disable disk model configuration and network catalog refresh for review isolation.
+    const authPath =
+      authOptions.authPath ??
+      withProcessEnvSync(env, () => {
+        const directory = sdk.getAgentDir?.();
+        return directory === undefined ? undefined : path.join(directory, "auth.json");
+      });
+    const modelRuntime = await sdk.ModelRuntime.create({
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+      ...(authOptions.source === "shared"
+        ? authPath === undefined
+          ? {}
+          : { authPath }
+        : { credentials: createPiMemoryCredentials() }),
     });
+    const providerApiKey = await materializeConfiguredProviderAuth(
+      modelRuntime,
+      reviewer,
+      env,
+      providerOptions,
+    );
+    materializeConfiguredProviderRegistration(
+      modelRuntime,
+      reviewer,
+      env,
+      providerOptions,
+      providerApiKey,
+    );
+    scopePiProviderEnvironment(modelRuntime, env);
+    const providers = modelRuntime.getProviders();
+    const availableModels =
+      providers.length === 0
+        ? [...(await modelRuntime.getAvailable())]
+        : (
+            await Promise.all(providers.map((provider) => modelRuntime.getAvailable(provider.id)))
+          ).flat();
+    return { modelRuntime, availableModels, authOptions };
   } catch (error) {
-    if (error instanceof DiffwardenError) {
-      throw error;
-    }
-
+    if (error instanceof DiffwardenError) throw error;
     const detail = error instanceof Error ? error.message : String(error);
     throw reviewerFailed(`Pi reviewer setup failed: ${detail}`);
   }
 }
 
-function materializeConfiguredProviderAuth(
-  authStorage: PiAuthStorage,
+function createPiMemoryCredentials(): NonNullable<CreateModelRuntimeOptions["credentials"]> {
+  type Credential = Awaited<
+    ReturnType<NonNullable<CreateModelRuntimeOptions["credentials"]>["read"]>
+  >;
+  const credentials = new Map<string, Exclude<Credential, undefined>>();
+  return {
+    async read(provider) {
+      return credentials.get(provider);
+    },
+    async list() {
+      return [...credentials].map(([providerId, credential]) => ({
+        providerId,
+        type: credential.type,
+      }));
+    },
+    async modify(provider, update) {
+      const credential = await update(credentials.get(provider));
+      if (credential !== undefined) credentials.set(provider, credential);
+      return credentials.get(provider);
+    },
+    async delete(provider) {
+      credentials.delete(provider);
+    },
+  };
+}
+
+/** Bind asynchronous provider auth to the review environment without changing process.env. */
+function scopePiProviderEnvironment(
+  runtime: PiModelRuntime,
+  env: NodeJS.ProcessEnv | undefined,
+): void {
+  if (env === undefined) return;
+  const scopedEnv = { ...env };
+  for (const provider of runtime.getProviders()) {
+    const apiKey = provider.auth.apiKey;
+    if (apiKey === undefined) continue;
+    const check = apiKey.check;
+    runtime.registerNativeProvider({
+      ...provider,
+      auth: {
+        ...provider.auth,
+        apiKey: {
+          ...apiKey,
+          ...(check === undefined
+            ? {}
+            : {
+                check: (input) =>
+                  check({ ...input, ctx: { ...input.ctx, env: async (name) => scopedEnv[name] } }),
+              }),
+          resolve: (input) =>
+            apiKey.resolve({
+              ...input,
+              ctx: { ...input.ctx, env: async (name) => scopedEnv[name] },
+            }),
+        },
+      },
+    });
+  }
+}
+
+async function materializeConfiguredProviderAuth(
+  modelRuntime: PiModelRuntime,
   reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
   env: NodeJS.ProcessEnv | undefined,
   providerOptions: NormalizedPiProviderOptions,
-): string | undefined {
+): Promise<string | undefined> {
   if (providerOptions.apiKeyEnv === undefined) {
     return undefined;
-  }
-
-  if (authStorage.setRuntimeApiKey === undefined) {
-    throw missingRequirement(
-      `Pi AuthStorage cannot set runtime API keys for provider ${reviewer.provider}`,
-    );
   }
 
   const apiKey = env?.[providerOptions.apiKeyEnv]?.trim();
@@ -555,12 +624,12 @@ function materializeConfiguredProviderAuth(
     throw missingAuth(`Missing ${providerOptions.apiKeyEnv} for Pi provider ${reviewer.provider}`);
   }
 
-  authStorage.setRuntimeApiKey(providerOptions.provider, apiKey);
+  await modelRuntime.setRuntimeApiKey(providerOptions.provider, apiKey);
   return apiKey;
 }
 
 function materializeConfiguredProviderRegistration(
-  modelRegistry: PiModelRegistry,
+  modelRuntime: PiModelRuntime,
   reviewer: ReviewAdapterInput["reviewer"] | ReviewAdapterPreflightInput["reviewer"],
   env: NodeJS.ProcessEnv | undefined,
   providerOptions: NormalizedPiProviderOptions,
@@ -570,12 +639,6 @@ function materializeConfiguredProviderRegistration(
     return;
   }
 
-  if (modelRegistry.registerProvider === undefined) {
-    throw missingRequirement(
-      `Pi ModelRegistry cannot register provider ${reviewer.provider} from providerOptions.baseUrlEnv`,
-    );
-  }
-
   const baseUrl = env?.[providerOptions.baseUrlEnv]?.trim();
   if (!baseUrl) {
     throw missingRequirement(
@@ -583,7 +646,7 @@ function materializeConfiguredProviderRegistration(
     );
   }
 
-  modelRegistry.registerProvider(providerOptions.provider, {
+  modelRuntime.registerProvider(providerOptions.provider, {
     baseUrl,
     ...(providerApiKey !== undefined ? { apiKey: providerApiKey } : {}),
   });
@@ -655,25 +718,6 @@ function normalizePiAuthOptions(
     source,
     ...(authPath !== undefined ? { authPath: expandHomePath(authPath) } : {}),
   };
-}
-
-function createPiAuthStorage(sdk: PiSdk, authOptions: NormalizedPiAuthOptions): PiAuthStorage {
-  if (authOptions.source === "shared") {
-    if (sdk.AuthStorage.create === undefined) {
-      throw missingRequirement(
-        `${piPackageName} does not support shared CLI auth (AuthStorage.create); upgrade the package or use sdkOptions.authSource "isolated"`,
-      );
-    }
-    // AuthStorage.create touches disk: it reads auth.json and creates the file (and its
-    // parent dir) empty if absent, and rewrites it when refreshing an expired OAuth token.
-    // With no explicit authPath the SDK resolves the location from PI_CODING_AGENT_DIR/HOME,
-    // which it reads from process.env. This runs inside withProcessEnvSync, so the caller's
-    // env (full process.env for real runs) must carry those vars for the default path to
-    // match the Pi CLI's. An explicit (pre-expanded) authPath bypasses that resolution.
-    return sdk.AuthStorage.create(authOptions.authPath);
-  }
-
-  return sdk.AuthStorage.inMemory();
 }
 
 function createPiSettingsManager(
@@ -1178,35 +1222,6 @@ function throwIfAborted(signal: AbortSignal | undefined, message: string): void 
   throw reviewerFailed(message);
 }
 
-function materializeScopedEnvAuth(
-  authStorage: PiAuthStorage,
-  modelRegistry: PiModelRegistry,
-  availableModels: PiModel[],
-  env: NodeJS.ProcessEnv | undefined,
-): void {
-  if (env === undefined || authStorage.setRuntimeApiKey === undefined) {
-    return;
-  }
-
-  const providers = new Set(
-    availableModels.flatMap((model) =>
-      typeof model.provider === "string" ? [model.provider] : [],
-    ),
-  );
-
-  for (const provider of providers) {
-    const status = modelRegistry.getProviderAuthStatus?.(provider);
-    if (status?.source !== "environment" || status.label === undefined) {
-      continue;
-    }
-
-    const apiKey = env[status.label];
-    if (apiKey !== undefined) {
-      authStorage.setRuntimeApiKey(provider, apiKey);
-    }
-  }
-}
-
 function createReviewOutputTool(
   capture: (review: ReviewResult) => void,
   captureError: (message: string) => void,
@@ -1239,8 +1254,8 @@ function createReviewOutputTool(
   };
 }
 
-function createExtensionFreeResourceLoader(): PiResourceLoader {
-  const extensionRuntime = createEmptyExtensionRuntime();
+function createExtensionFreeResourceLoader(sdk: PiSdk): PiResourceLoader {
+  const extensionRuntime = sdk.createExtensionRuntime();
 
   return {
     getExtensions() {
@@ -1261,56 +1276,17 @@ function createExtensionFreeResourceLoader(): PiResourceLoader {
     getSystemPrompt() {
       return undefined;
     },
+    getSystemPromptSource() {
+      return undefined;
+    },
+    getAppendSystemPromptSources() {
+      return [];
+    },
     getAppendSystemPrompt() {
       return [];
     },
     extendResources() {},
     async reload() {},
-  };
-}
-
-type EmptyExtensionRuntime = {
-  pendingProviderRegistrations: Array<{ name: string; config: unknown; extensionPath: string }>;
-};
-
-function createEmptyExtensionRuntime(): EmptyExtensionRuntime & Record<string, unknown> {
-  const unavailable = () => {
-    throw new Error("Pi extension runtime is disabled for diffwarden reviews.");
-  };
-
-  return {
-    sendMessage: unavailable,
-    sendUserMessage: unavailable,
-    appendEntry: unavailable,
-    setSessionName: unavailable,
-    getSessionName: unavailable,
-    setLabel: unavailable,
-    getActiveTools: unavailable,
-    getAllTools: unavailable,
-    setActiveTools: unavailable,
-    refreshTools() {},
-    getCommands: unavailable,
-    setModel() {
-      return Promise.reject(new Error("Pi extension runtime is disabled for diffwarden reviews."));
-    },
-    getThinkingLevel: unavailable,
-    setThinkingLevel: unavailable,
-    flagValues: new Map<string, boolean | string>(),
-    pendingProviderRegistrations: [],
-    assertActive() {},
-    invalidate() {},
-    registerProvider(
-      name: string,
-      config: unknown,
-      extensionPath = "<diffwarden-extension-free-loader>",
-    ) {
-      this.pendingProviderRegistrations.push({ name, config, extensionPath });
-    },
-    unregisterProvider(name: string) {
-      this.pendingProviderRegistrations = this.pendingProviderRegistrations.filter(
-        (registration) => registration.name !== name,
-      );
-    },
   };
 }
 

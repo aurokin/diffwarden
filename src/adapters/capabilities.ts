@@ -114,7 +114,7 @@ const reviewerCapabilityDefinitions = {
         // Via Cursor.models.list with CURSOR_API_KEY.
         supportsModelCatalog: true,
         captureMode: "text",
-        readonlyCapability: "prompt-only",
+        readonlyCapability: "tool-restricted",
       },
       cli: {
         transport: "cli",
@@ -208,6 +208,7 @@ const reviewerCapabilityDefinitions = {
       envVars: ["FACTORY_API_KEY"],
       envVarsOptional: true,
       loginDelegated: true,
+      explicitAuthTransports: ["sdk"],
     },
     transports: {
       sdk: {
@@ -283,6 +284,7 @@ const reviewerCapabilityDefinitions = {
       "app-server": {
         transport: "app-server",
         supported: true,
+        supportsSystemPrompt: true,
         defaultExecutable: "codex",
         supportsModel: true,
         supportsEffort: true,
@@ -367,8 +369,8 @@ const reviewerCapabilityDefinitions = {
         transport: "cli",
         supported: true,
         defaultExecutable: "agy",
-        supportsModel: false,
-        supportsEffort: false,
+        supportsModel: true,
+        supportsEffort: true,
         captureMode: "text",
         readonlyCapability: "tool-restricted",
       },
@@ -507,6 +509,14 @@ export function validateReviewerCapabilityOverrides(
 
   if (capability.supportsEffort !== true && reviewer.effort !== undefined) {
     throw invalidCli(`${reviewer.sdk} CLI transport does not support per-run effort overrides`);
+  }
+
+  if (
+    reviewer.sdk === "antigravity" &&
+    reviewer.effort !== undefined &&
+    !["low", "medium", "high"].includes(reviewer.effort)
+  ) {
+    throw invalidCli("Antigravity CLI effort must be low, medium, or high");
   }
 
   return reviewer;

@@ -476,7 +476,7 @@ describe("live doctor executable provenance", () => {
       status: expect.stringContaining("found bundled runtime: "),
       executableSource: "adapter-default",
       executableSourceDetail: "SDK bundled runtime",
-      resolvedExecutable: expect.stringContaining(path.join("@github", "copilot", "index.js")),
+      resolvedExecutable: expect.stringMatching(/copilot-runtime(?:\.exe)?$/),
     });
     expect(row.executable).toBeUndefined();
   });
@@ -521,7 +521,7 @@ describe("live doctor executable provenance", () => {
       status: expect.stringContaining("found bundled runtime: "),
       executableSource: "adapter-default",
       executableSourceDetail: "SDK bundled runtime",
-      resolvedExecutable: expect.stringContaining(path.join("@github", "copilot", "index.js")),
+      resolvedExecutable: expect.stringMatching(/copilot-runtime(?:\.exe)?$/),
     });
     expect(row.executable).toBeUndefined();
   });

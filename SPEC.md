@@ -1379,9 +1379,9 @@ Each adapter must document its read-only capability level:
 
 The CLI should surface this in verbose output and ReviewArtifact metadata once adapter capability reporting exists.
 
-Cursor local mode remains `prompt-only` for v1. Diffwarden uses Cursor plan mode, sandbox
-options, auto-review, empty setting sources, no MCP servers, and an ephemeral local store, but
-does not imply hard read-only enforcement unless Cursor provides deterministic tool allowlisting.
+Cursor SDK local mode is `tool-restricted` with SDK 1.0.31. Diffwarden uses Cursor plan
+mode, sandbox options, auto-review, empty setting sources, no MCP servers, an ephemeral
+local store, and a `read`/`grep`/`glob`/`ls` tool allowlist. Cursor CLI remains `prompt-only`.
 
 ## 17. Test plan
 

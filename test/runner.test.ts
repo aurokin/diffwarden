@@ -166,6 +166,33 @@ describe("runReview", () => {
       model: "anthropic/claude-sonnet",
       adapters: { pi: captureAdapter("pi:sdk") },
     });
+    await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "codex-app-test",
+      config: { reviewers: [{ id: "codex-app-test", sdk: "codex", transport: "app-server" }] },
+      adapters: { codex: captureAdapter("codex:app-server") },
+    });
+
+    await runReview({
+      cwd: repo,
+      resolved,
+      reviewer: "codex-native-test",
+      config: {
+        reviewers: [
+          {
+            id: "codex-native-test",
+            sdk: "codex",
+            transport: "app-server",
+            appServerOptions: { reviewMode: "native" },
+          },
+        ],
+      },
+      adapters: { codex: captureAdapter("codex:native") },
+    });
+    expect(prompts.get("codex:native")?.systemPrompt).toBeUndefined();
+    expect(prompts.get("codex:native")?.prompt).toContain("Review guidelines:");
+    expect(prompts.get("codex:native")?.prompt).toContain("Patch provenance command:");
 
     const claudePrompts = prompts.get("claude:sdk");
     expect(claudePrompts?.systemPrompt).toContain("Review guidelines:");
@@ -180,6 +207,10 @@ describe("runReview", () => {
     expect(piPrompts?.systemPrompt).toBeUndefined();
     expect(piPrompts?.prompt).toContain("Review guidelines:");
     expect(piPrompts?.prompt).toContain("Review the code changes in this repository.");
+    const codexPrompts = prompts.get("codex:app-server");
+    expect(codexPrompts?.systemPrompt).toContain("Review guidelines:");
+    expect(codexPrompts?.prompt).not.toContain("Review guidelines:");
+    expect(codexPrompts?.prompt).toContain("Patch provenance command:");
   });
 
   it("passes environment-sourced model and effort provenance to adapters", async () => {

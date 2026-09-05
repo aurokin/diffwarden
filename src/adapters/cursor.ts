@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentOptions, ModelSelection } from "@cursor/sdk";
+import type { AgentOptions, ModelSelection, RunError } from "@cursor/sdk";
 import {
   DiffwardenError,
   missingAuth,
@@ -18,6 +18,7 @@ import {
   cursorReviewMode,
   cursorReviewSandboxOptions,
   cursorReviewSettingSources,
+  cursorReviewTools,
 } from "./cursor-policy.js";
 import {
   effortResolutionMetadata,
@@ -89,13 +90,13 @@ export function createCursorAdapter(
           },
           {
             name: "readonly",
-            status: "warning",
-            detail:
-              "Cursor SDK runs in plan mode with sandbox and auto-review enabled, but Cursor does not expose deterministic read/glob/grep-only tool enforcement.",
+            status: "passed",
+            detail: "Cursor SDK tools are restricted to read, grep, glob, and ls.",
           },
         ],
         metadata: sdkPreflightMetadata("cursor", {
           cursorMode: cursorReviewMode,
+          cursorTools: [...cursorReviewTools],
           cursorAutoReview: cursorReviewAutoReview,
           cursorSandboxEnabled: cursorReviewSandboxOptions.enabled,
           cursorSettingSources: cursorReviewSettingSources,
@@ -154,6 +155,7 @@ export function createCursorAdapter(
             id: configuredModel,
           },
           mode: cursorReviewMode,
+          tools: [...cursorReviewTools],
           mcpServers: cursorReviewMcpServers,
           local: {
             cwd: input.cwd,
@@ -203,7 +205,11 @@ export function createCursorAdapter(
         );
 
         if (result.status !== "finished") {
-          throw reviewerFailed(`Cursor reviewer finished with status: ${result.status}`);
+          const detail =
+            result.error === undefined
+              ? ""
+              : `: ${result.error.message}${result.error.code === undefined ? "" : ` (${result.error.code})`}`;
+          throw reviewerFailed(`Cursor reviewer finished with status: ${result.status}${detail}`);
         }
 
         const resolvedModel = result.model?.id ?? configuredModel;
@@ -217,6 +223,7 @@ export function createCursorAdapter(
             agentId: agent.agentId,
             runId: run.id,
             cursorMode: cursorReviewMode,
+            cursorTools: [...cursorReviewTools],
             cursorAutoReview: cursorReviewAutoReview,
             cursorSandboxEnabled: cursorReviewSandboxOptions.enabled,
             cursorSettingSources: cursorReviewSettingSources,
@@ -427,6 +434,7 @@ type CursorRun = {
     result?: string;
     model?: ModelSelection;
     durationMs?: number;
+    error?: RunError;
   }>;
   cancel?(): Promise<void> | void;
 };

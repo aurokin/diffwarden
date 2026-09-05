@@ -2,6 +2,10 @@
 
 Point-in-time note: 2026-05-12. This file intentionally avoids copying API details that can go stale. Treat these as pointers to upstream sources of truth, not as a versioned API summary.
 
+## September 4, 2026 compatibility refresh
+
+Current reviewer SDK versions and migration notes are in [adapters.md](docs/adapters.md#september-4-sdk-refresh). Package source/types were inspected for each upgraded SDK. Isolated CLI argument/help probes covered Claude Code 2.1.261, Cursor Agent 2026.09.02-c22c1a3, Pi 0.84.4, Gemini 0.58.0, OpenCode 1.18.29, Grok 1.0.13, and Antigravity 1.1.26. Droid SDK 0.9.1 tool-policy setup was also exercised against isolated Droid CLI 0.212.1 after verifying the official binary checksum. Copilot SDK 1.0.13 started bundled runtime 1.0.83 with protocol 3. These probes did not send model requests or replace installed executables.
+
 ## Cursor Agent SDK
 
 - Cursor TypeScript SDK documentation: https://cursor.com/docs/api/sdk/typescript
@@ -37,7 +41,7 @@ Use upstream docs for current `query()` options, structured output support, tool
 - Pi Agent Core package: https://www.npmjs.com/package/@earendil-works/pi-agent-core
 - Local source inspected on 2026-05-19: `/Users/auro/code/upstream/pi-mono` at commit `04e93af5`.
 - Implemented adapter dependency on 2026-05-19: `@earendil-works/pi-coding-agent@0.75.3`.
-- Pi structured execution uses `createAgentSession()` with explicit `model` and `scopedModels`, in-memory `AuthStorage`/`ModelRegistry`, an extension-free `ResourceLoader`, and a terminating custom `review_output` tool.
+- Pi structured execution uses `createAgentSession()` with explicit `model` and `scopedModels`, an isolated `ModelRuntime`, an extension-free `ResourceLoader`, and a terminating custom `review_output` tool.
 
 Use the upstream repository for the current SDK docs, JSON mode docs, extension examples, structured output patterns, and agent harness lifecycle.
 
@@ -57,6 +61,11 @@ Use the upstream repository for the current SDK docs, JSON mode docs, extension 
 Use official Factory docs over local source when CLI or SDK behavior differs.
 
 ## Codex review reference
+
+- Review-process refresh on 2026-09-04: Codex `rust-v0.153.4`. Detached reviews use
+  the bundled `review-agent` skill; Diffwarden adapts its inspection sequence into
+  a schema-constrained turn with developer-level review rules. The rubric's July 21
+  repository-rule attribution is included. See [the integration decision](docs/adr/0003-codex-review-process.md).
 
 - OpenAI Codex repository: https://github.com/openai/codex
 - Local reference inspected on 2026-05-14: `/Users/auro/code/upstream/codex` at commit `02a7205250`.

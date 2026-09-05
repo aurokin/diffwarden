@@ -1,5 +1,6 @@
 import type { DroidResultMessage } from "@factory/droid-sdk";
-import { describe, expect, it } from "vitest";
+import { DroidClient } from "@factory/droid-sdk/node";
+import { describe, expect, it, vi } from "vitest";
 import {
   createDroidAdapter,
   droidAdapter,
@@ -16,6 +17,86 @@ import {
 } from "./live/helpers.js";
 
 describe("droidAdapter", () => {
+  it("closes the session without prompting when the runtime exposes an unexpected tool", async () => {
+    const calls: unknown[] = [];
+    const sdk = mockDroidSdk(calls);
+    const createSession = sdk.createSession;
+    sdk.createSession = async (options) => {
+      const session = await createSession(options);
+      const tools = await session.listTools();
+      const first = tools[0];
+      if (first === undefined) throw new Error("missing tool fixture");
+      session.listTools = async () => [...tools, { ...first, id: "Execute" }];
+      return session;
+    };
+    const adapter = createDroidAdapter({
+      loadSdk: async () => sdk,
+      checkExecutable: async (executable) => executable,
+    });
+    await expect(adapter.run(createInput(createReviewer()))).rejects.toMatchObject({
+      code: "missing_requirement",
+      message: expect.stringContaining("tool allowlist"),
+    });
+    expect(calls).toContainEqual({ close: "session-1" });
+    expect(
+      calls.some((call) => typeof call === "object" && call !== null && "streamPrompt" in call),
+    ).toBe(false);
+  });
+
+  it("disables runtime tools outside the review allowlist before prompting", async () => {
+    const calls: unknown[] = [];
+    const sdk = mockDroidSdk(calls);
+    const createSession = sdk.createSession;
+    sdk.createSession = async (options) => {
+      const session = await createSession(options);
+      const tools = await session.listTools();
+      const first = tools[0];
+      if (first === undefined) throw new Error("missing tool fixture");
+      let extraAllowed = true;
+      session.listTools = async () => [
+        ...tools,
+        { ...first, id: "Execute", allowed: extraAllowed },
+      ];
+      const updateSettings = session.updateSettings.bind(session);
+      session.updateSettings = async (params) => {
+        const result = await updateSettings(params);
+        if (params.disabledToolIds?.includes("Execute")) extraAllowed = false;
+        return result;
+      };
+      return session;
+    };
+    const adapter = createDroidAdapter({
+      loadSdk: async () => sdk,
+      checkExecutable: async (executable) => executable,
+    });
+    await adapter.run(createInput(createReviewer()));
+    const settingsIndex = calls.findIndex(
+      (call) => typeof call === "object" && call !== null && "updateSettings" in call,
+    );
+    const promptIndex = calls.findIndex(
+      (call) => typeof call === "object" && call !== null && "streamPrompt" in call,
+    );
+    expect(calls[settingsIndex]).toEqual({ updateSettings: { disabledToolIds: ["Execute"] } });
+    expect(settingsIndex).toBeLessThan(promptIndex);
+  });
+
+  it("closes the review and discovery transports when effort discovery fails", async () => {
+    const calls: unknown[] = [];
+    const sdk = mockDroidSdk(calls);
+    sdk.DroidClient.prototype.listModels = async () => {
+      throw new Error("model discovery failed");
+    };
+    const adapter = createDroidAdapter({
+      loadSdk: async () => sdk,
+      checkExecutable: async (executable) => executable,
+    });
+    await expect(adapter.run(createInput(createReviewer({ effort: "off" })))).rejects.toMatchObject(
+      { message: expect.stringContaining("model discovery failed") },
+    );
+    expect(calls).toContainEqual({ close: "session-1" });
+    expect(calls).toContainEqual({ closeTransport: true });
+  });
+
   it("preflights the SDK, executable, auth, model, and effort", async () => {
     const calls: unknown[] = [];
     const adapter = createDroidAdapter({
@@ -60,7 +141,7 @@ describe("droidAdapter", () => {
       model: "claude-test",
       effort: "low",
       machineId: "machine-123",
-      sdkVersion: "0.3.0-test",
+      sdkVersion: "0.9.1-test",
     });
     expect(calls).toContainEqual(
       expect.objectContaining({
@@ -87,7 +168,7 @@ describe("droidAdapter", () => {
         sdkOptions: { executable: "/opt/droid-sdk" },
       }),
       readonly: true,
-      env: {},
+      env: { FACTORY_API_KEY: "factory-key" },
     });
 
     expect(preflight?.metadata).toMatchObject({
@@ -113,7 +194,7 @@ describe("droidAdapter", () => {
         sdkOptions: { executable: "   " },
       }),
       readonly: true,
-      env: {},
+      env: { FACTORY_API_KEY: "factory-key" },
     });
 
     expect(preflight?.metadata).toMatchObject({
@@ -131,15 +212,16 @@ describe("droidAdapter", () => {
     process.env.FACTORY_API_KEY = "ambient-key";
 
     try {
-      const preflight = await adapter.preflight?.({
-        cwd: "/repo",
-        reviewer: createReviewer(),
-        readonly: true,
-        env: {},
-      });
-
-      expect(preflight?.checks.find((check) => check.name === "auth")).toMatchObject({
-        status: "warning",
+      await expect(
+        adapter.preflight?.({
+          cwd: "/repo",
+          reviewer: createReviewer(),
+          readonly: true,
+          env: {},
+        }),
+      ).rejects.toMatchObject({
+        code: "missing_auth",
+        message: "Droid SDK requires FACTORY_API_KEY",
       });
     } finally {
       if (originalKey === undefined) {
@@ -223,7 +305,9 @@ describe("droidAdapter", () => {
         specModeReasoningEffort: "xhigh",
         interactionMode: "spec",
         autonomyLevel: "off",
-        enabledToolIds: ["Read", "Glob", "Grep", "LS", "ExitSpecMode"],
+        autoRejectPermissionRequests: true,
+        disableBuiltinSkills: true,
+        apiKey: "factory-key",
         tags: [
           {
             name: "diffwarden",
@@ -735,7 +819,7 @@ describe("droid model catalog", () => {
     expect(droidModelCatalogEntries([{ displayName: "no id" }, 42, { id: "" }], "sdk")).toEqual([]);
   });
 
-  it("lists models from a short-lived session and closes it", async () => {
+  it("lists models with the discovery transport and closes it", async () => {
     const calls: unknown[] = [];
     const adapter = createDroidAdapter({
       loadSdk: async () => mockDroidSdk(calls, {}, undefined, [], [opus46]),
@@ -747,6 +831,7 @@ describe("droid model catalog", () => {
       // A drafted model must not scope the listing session — the catalog is what the user
       // picks a model FROM.
       reviewer: createReviewer({ model: "claude-sonnet-5", effort: "high" }),
+      env: { FACTORY_API_KEY: "factory-key" },
     });
 
     expect(models).toEqual([
@@ -756,21 +841,10 @@ describe("droid model catalog", () => {
         supportedEffortLevels: ["off", "minimal", "low", "medium", "high", "max"],
       },
     ]);
-    const createCall = calls.find(
-      (call): call is { createSessionOptions: Record<string, unknown> } =>
-        typeof call === "object" && call !== null && "createSessionOptions" in call,
-    );
-    expect(createCall?.createSessionOptions).not.toHaveProperty("specModeModelId");
-    expect(createCall?.createSessionOptions).not.toHaveProperty("specModeReasoningEffort");
-    expect(createCall?.createSessionOptions).toMatchObject({
-      tags: [
-        {
-          name: "diffwarden",
-          metadata: { transport: "sdk", reviewer: "droid", target: "model-catalog" },
-        },
-      ],
+    expect(calls).toContainEqual({
+      transportOptions: expect.objectContaining({ cwd: "/repo", droidExecPath: "droid" }),
     });
-    expect(calls).toContainEqual({ close: "session-1" });
+    expect(calls).toContainEqual({ closeTransport: true });
   });
 
   it("maps auth-shaped catalog failures to an actionable not-authenticated message", async () => {
@@ -783,11 +857,49 @@ describe("droid model catalog", () => {
     });
 
     await expect(
-      adapter.listModels?.({ cwd: "/repo", reviewer: createReviewer() }),
+      adapter.listModels?.({
+        cwd: "/repo",
+        reviewer: createReviewer(),
+        env: { FACTORY_API_KEY: "factory-key" },
+      }),
     ).rejects.toMatchObject({
       code: "missing_auth",
-      message: 'droid is not authenticated — run "droid" and sign in, or set FACTORY_API_KEY',
+      message: "Droid SDK requires FACTORY_API_KEY",
     });
+  });
+
+  it("cancels a real SDK catalog request and clears its timeout when transport close is silent", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: unknown[] = [];
+      const controller = new AbortController();
+      const sdk = mockDroidSdk(calls);
+      const Transport = sdk.ProcessTransport;
+      sdk.ProcessTransport = class extends Transport {
+        onMessage() {}
+        onError() {}
+        async send() {
+          queueMicrotask(() => controller.abort());
+        }
+      };
+      sdk.DroidClient = DroidClient;
+      const adapter = createDroidAdapter({
+        loadSdk: async () => sdk,
+        checkExecutable: async (executable) => executable,
+      });
+      await expect(
+        adapter.listModels?.({
+          cwd: "/repo",
+          reviewer: createReviewer(),
+          env: { FACTORY_API_KEY: "factory-key" },
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ message: expect.stringContaining("pending requests cancelled") });
+      expect(calls).toContainEqual({ closeTransport: true });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses to open a session for an already-aborted fetch", async () => {
@@ -853,11 +965,32 @@ function mockDroidSdk(
   updateSettingsOverride?: () => never,
 ) {
   return {
-    SDK_VERSION: "0.3.0-test",
+    SDK_VERSION: "0.9.1-test",
     OutputFormatType: { JsonSchema: "json_schema" },
     DroidInteractionMode: { Spec: "spec" },
     AutonomyLevel: { Off: "off" },
     DroidMessageType: { Result: "result" },
+    ProcessTransport: class {
+      constructor(options: unknown) {
+        calls.push({ transportOptions: options });
+      }
+      async connect() {
+        calls.push({ connect: true });
+      }
+      async close() {
+        calls.push({ closeTransport: true });
+      }
+    },
+    DroidClient: class {
+      constructor(private options: { transport: { close(): Promise<void> } }) {}
+      async listModels() {
+        createSessionOverride?.();
+        return { result: { models: availableModels ?? [] } };
+      }
+      async close() {
+        await this.options.transport.close();
+      }
+    },
     async createSession(options: unknown) {
       calls.push({ createSessionOptions: options });
       createSessionOverride?.();
@@ -867,18 +1000,21 @@ function mockDroidSdk(
       };
       return {
         sessionId: "session-1",
-        initResult: {
-          settings: {
-            modelId: "droid-default-model",
-            reasoningEffort: "medium",
-            ...(sessionOptions.specModeModelId !== undefined
-              ? { specModeModelId: sessionOptions.specModeModelId }
-              : {}),
-            ...(sessionOptions.specModeReasoningEffort !== undefined
-              ? { specModeReasoningEffort: sessionOptions.specModeReasoningEffort }
-              : {}),
-          },
-          ...(availableModels !== undefined ? { availableModels } : {}),
+        settings: {
+          modelId: "droid-default-model",
+          reasoningEffort: "medium",
+          ...(sessionOptions.specModeModelId !== undefined
+            ? { specModeModelId: sessionOptions.specModeModelId }
+            : {}),
+          ...(sessionOptions.specModeReasoningEffort !== undefined
+            ? { specModeReasoningEffort: sessionOptions.specModeReasoningEffort }
+            : {}),
+        },
+        async listTools() {
+          return ["Read", "Glob", "Grep", "LS", "ExitSpecMode"].map((id) => ({
+            id,
+            allowed: true,
+          }));
         },
         async updateSettings(params: unknown) {
           calls.push({ updateSettings: params });
@@ -916,7 +1052,7 @@ function mockDroidSdk(
         },
       };
     },
-  } as typeof import("@factory/droid-sdk");
+  } as unknown as typeof import("@factory/droid-sdk/node");
 }
 
 type MockDroidResult = DroidResultMessage;

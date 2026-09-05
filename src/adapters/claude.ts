@@ -1,3 +1,4 @@
+import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { buildTextAdapterOutput } from "../core/adapter-output.js";
 import {
   DiffwardenError,
@@ -123,8 +124,8 @@ export function createClaudeAdapter(
         }
 
         if (structuredResult.subtype === "error_max_structured_output_retries") {
-          // This subtype carries no result text and no structured payload —
-          // nothing for the repair stage to transcribe. Return labeled empty
+          // SDK 0.3.260 adds validation errors to this subtype, but still no
+          // candidate review for the repair stage to transcribe. Return labeled empty
           // output so core runs its single labeled retry instead of failing.
           return buildTextAdapterOutput({
             text: "",
@@ -404,7 +405,7 @@ type RunClaudeQueryInput = {
 
 type ClaudeSdk = {
   query(params: {
-    prompt: string | AsyncIterable<unknown>;
+    prompt: string | AsyncIterable<SDKUserMessage>;
     options?: ClaudeQueryOptions;
   }): ClaudeQuery;
 };
@@ -432,7 +433,7 @@ type ClaudeQueryOptions = {
   permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
   systemPrompt?: string;
   settingSources?: Array<"user" | "project" | "local">;
-  mcpServers?: Record<string, unknown>;
+  mcpServers?: NonNullable<Options["mcpServers"]>;
   strictMcpConfig?: boolean;
   persistSession?: boolean;
   maxTurns?: number;
@@ -572,7 +573,7 @@ function buildClaudeModelPreflightOptions(
   return queryOptions;
 }
 
-async function* emptyClaudeStreamingInput(): AsyncIterable<unknown> {}
+async function* emptyClaudeStreamingInput(): AsyncIterable<SDKUserMessage> {}
 
 function resolveClaudeModelEffort(
   model: ClaudeModelInfo,
@@ -1033,7 +1034,7 @@ function claudeNativeEffort(effort: string): ClaudeNativeEffort {
 
 async function loadClaudeSdk(): Promise<ClaudeSdk> {
   try {
-    return (await import("@anthropic-ai/claude-agent-sdk")) as unknown as ClaudeSdk;
+    return await import("@anthropic-ai/claude-agent-sdk");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw missingRequirement(`Failed to load @anthropic-ai/claude-agent-sdk: ${detail}`);

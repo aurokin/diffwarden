@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { createExtensionRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { piReviewOutputToolName, piSdkReviewTools } from "../src/adapters/pi-tool-policy.js";
 import { createPiAdapter, piAdapter } from "../src/adapters/pi.js";
@@ -18,6 +19,38 @@ import {
 const defaultPiSmokeModel = "anthropic/claude-sonnet-4-5";
 
 describe("piAdapter", () => {
+  it("constructs the installed model runtime with isolated asynchronous environment auth", async () => {
+    const originalEnvironment = process.env;
+    const reviewer = { id: "pi", sdk: "pi", provider: "anthropic", readonly: true } as const;
+    if (piAdapter.preflight === undefined) throw new Error("missing Pi preflight");
+    const [authenticated, unauthenticated] = await Promise.allSettled([
+      piAdapter.preflight({
+        cwd: process.cwd(),
+        reviewer,
+        readonly: true,
+        env: { ANTHROPIC_API_KEY: "fixture-only-key" },
+      }),
+      piAdapter.preflight({ cwd: process.cwd(), reviewer, readonly: true, env: {} }),
+    ]);
+    expect(authenticated.status).toBe("fulfilled");
+    expect(unauthenticated).toMatchObject({ status: "rejected", reason: { code: "missing_auth" } });
+    expect(process.env).toBe(originalEnvironment);
+  });
+
+  it("constructs and disposes an installed SDK session without sending a model request", async () => {
+    const controller = new AbortController();
+    const abortReason = new Error("fixture stopped before prompting");
+    controller.abort(abortReason);
+    await expect(
+      piAdapter.run({
+        ...input(),
+        reviewer: { id: "pi", sdk: "pi", provider: "anthropic", readonly: true },
+        env: { ANTHROPIC_API_KEY: "fixture-only-key" },
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ message: "Pi reviewer failed: fixture stopped before prompting" });
+  });
+
   it("fails preflight clearly when no Pi models are authenticated", async () => {
     const { adapter } = createMockPiAdapter([]);
 
@@ -609,14 +642,10 @@ describe("piAdapter", () => {
     const adapter = createPiAdapter({
       async loadSdk() {
         return {
-          AuthStorage: {
-            inMemory() {
-              throw new Error("unexpected inMemory call");
-            },
-          },
-          ModelRegistry: {
-            inMemory() {
-              throw new Error("unexpected model registry call");
+          createExtensionRuntime,
+          ModelRuntime: {
+            async create() {
+              throw missingRequirement("Pi shared credentials unavailable");
             },
           },
           SessionManager: {
@@ -722,14 +751,10 @@ describe("piAdapter", () => {
     const adapter = createPiAdapter({
       async loadSdk() {
         return {
-          AuthStorage: {
-            inMemory() {
+          createExtensionRuntime,
+          ModelRuntime: {
+            async create() {
               throw new Error("auth storage failed");
-            },
-          },
-          ModelRegistry: {
-            inMemory() {
-              throw new Error("unexpected model registry call");
             },
           },
           SessionManager: {
@@ -781,8 +806,7 @@ describe("piAdapter", () => {
       model: reviewModel,
       scopedModels: [{ model: reviewModel }],
       tools: [...piSdkReviewTools],
-      authStorage: calls.authStorage,
-      modelRegistry: calls.modelRegistry,
+      modelRuntime: calls.modelRegistry,
       settingsManager: calls.settingsManager,
     });
     expect(calls.createAgentSession[0]?.customTools.map((tool) => tool.name)).toEqual([
@@ -1654,7 +1678,10 @@ type MockPiModel = {
 };
 
 type MockPiModelRegistry = {
-  getAvailable(): MockPiModel[];
+  getAvailable(): Promise<readonly MockPiModel[]>;
+  getProviders(): [];
+  registerNativeProvider(): void;
+  setRuntimeApiKey(provider: string, apiKey: string): Promise<void>;
   getProviderAuthStatus?(provider: string): { source?: string; label?: string };
   registerProvider(providerName: string, config: { baseUrl?: string; apiKey?: string }): void;
 };
@@ -1743,8 +1770,7 @@ function createMockPiAdapter(
       resourceLoader: unknown;
       sessionManager: unknown;
       settingsManager: unknown;
-      authStorage: unknown;
-      modelRegistry: unknown;
+      modelRuntime: unknown;
     }>;
     aborted: number;
     disposed: number;
@@ -1771,7 +1797,14 @@ function createMockPiAdapter(
     authStorage: createMockPiAuthStorage(),
     settingsManager,
     modelRegistry: {
-      getAvailable() {
+      getProviders() {
+        return [];
+      },
+      registerNativeProvider() {},
+      async setRuntimeApiKey(provider, key) {
+        calls.authStorage.setRuntimeApiKey(provider, key);
+      },
+      async getAvailable() {
         return typeof availableModels === "function"
           ? availableModels(calls.authStorage)
           : availableModels;
@@ -1787,19 +1820,11 @@ function createMockPiAdapter(
     async loadSdk() {
       return {
         ...(agentDir !== undefined ? { getAgentDir: () => agentDir } : {}),
-        AuthStorage: {
-          create(authPath?: string) {
-            calls.authStorageMode = "create";
-            calls.authStoragePath = authPath;
-            return calls.authStorage;
-          },
-          inMemory() {
-            calls.authStorageMode = "inMemory";
-            return calls.authStorage;
-          },
-        },
-        ModelRegistry: {
-          inMemory() {
+        createExtensionRuntime,
+        ModelRuntime: {
+          async create(options) {
+            calls.authStorageMode = options.credentials === undefined ? "create" : "inMemory";
+            calls.authStoragePath = options.authPath;
             return calls.modelRegistry;
           },
         },
@@ -1875,28 +1900,60 @@ function createEnvSensitiveMockPiAdapter(options: { prompt?: MockPiPromptHandler
     async loadSdk() {
       const authStorage = createMockPiAuthStorage();
       const settingsManager = createMockPiSettingsManager();
+      let pending: Promise<void> = Promise.resolve();
 
       return {
-        AuthStorage: {
-          inMemory() {
-            return authStorage;
-          },
-        },
-        ModelRegistry: {
-          inMemory() {
+        createExtensionRuntime,
+        ModelRuntime: {
+          async create() {
+            let scopedKey: string | undefined;
             return {
-              getAvailable() {
-                return process.env.ANTHROPIC_API_KEY
-                  ? [{ provider: "anthropic", id: "claude-test" }]
-                  : [];
+              async getAvailable() {
+                await pending;
+                return scopedKey ? [{ provider: "anthropic", id: "claude-test" }] : [];
               },
-              getProviderAuthStatus(provider: string) {
-                if (provider === "anthropic" && process.env.ANTHROPIC_API_KEY) {
-                  return { source: "environment", label: "ANTHROPIC_API_KEY" };
-                }
-
-                return {};
+              getProviders() {
+                return [
+                  {
+                    id: "anthropic",
+                    name: "Anthropic",
+                    getModels() {
+                      return [];
+                    },
+                    stream() {
+                      throw new Error("unexpected stream");
+                    },
+                    streamSimple() {
+                      throw new Error("unexpected stream");
+                    },
+                    auth: {
+                      apiKey: {
+                        name: "Anthropic key",
+                        async resolve(input) {
+                          const key = await input.ctx.env("ANTHROPIC_API_KEY");
+                          return key ? { auth: { apiKey: key } } : undefined;
+                        },
+                      },
+                    },
+                  },
+                ];
               },
+              registerNativeProvider(provider) {
+                // Availability follows the same scoped async auth callback as request auth.
+                const resolve = provider.auth.apiKey?.resolve;
+                if (resolve)
+                  pending = resolve({
+                    ctx: { env: async () => undefined, fileExists: async () => false },
+                    signal: new AbortController().signal,
+                  }).then((result) => {
+                    scopedKey = result?.auth.apiKey;
+                    if (scopedKey) authStorage.setRuntimeApiKey("anthropic", scopedKey);
+                  });
+              },
+              async setRuntimeApiKey(provider, key) {
+                authStorage.setRuntimeApiKey(provider, key);
+              },
+              registerProvider() {},
             };
           },
         },

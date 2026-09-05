@@ -14,7 +14,7 @@ describe("SDK adapter metadata", () => {
   it("derives preflight metadata defaults from SDK capability facts", () => {
     expect(sdkPreflightMetadata("cursor", { model: "composer-2.5" })).toMatchObject({
       transport: "sdk",
-      readonlyCapability: "prompt-only",
+      readonlyCapability: "tool-restricted",
       preferredCaptureMode: "text",
       model: "composer-2.5",
     });
@@ -39,7 +39,7 @@ describe("SDK adapter metadata", () => {
     expect(sdkOutputMetadata("cursor", { runId: "run-1" })).toMatchObject({
       transport: "sdk",
       captureMode: "text",
-      readonlyCapability: "prompt-only",
+      readonlyCapability: "tool-restricted",
       runId: "run-1",
     });
     expect(

@@ -1,6 +1,12 @@
 import type { AgentModeOption, AgentOptions, LocalAgentOptions } from "@cursor/sdk";
 import { execCliFile } from "./cli-process.js";
 
+// @cursor/sdk 1.0.27 added local tool allowlisting. Excluding task and mcp
+// also prevents subagent delegation and custom MCP tools.
+export const cursorReviewTools = ["read", "grep", "glob", "ls"] satisfies NonNullable<
+  AgentOptions["tools"]
+>;
+
 export const cursorReviewMode = "plan" satisfies AgentModeOption;
 export const cursorReviewAutoReview = true;
 export const cursorReviewSettingSources = [] satisfies NonNullable<

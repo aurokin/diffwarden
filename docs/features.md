@@ -60,18 +60,18 @@ SDK-backed reviewers can opt into CLI transport from config:
 | `codex` APP-SERVER | yes | yes | native structured; text in native review mode | enforced | executable and Codex auth preflight; shared `CODEX_HOME` by default or temporary `CODEX_HOME` with `stdio-isolated` |
 | `claude` SDK | yes | yes | native structured with text fallback | tool-restricted | SDK load, auth, and model preflight |
 | `claude` CLI | yes | yes | native structured | tool-restricted | executable preflight; CLI owns auth |
-| `cursor` SDK | yes | ignored | text | prompt-only | SDK load, `CURSOR_API_KEY`, model preflight, and Cursor review-control metadata |
+| `cursor` SDK | yes | ignored | text | tool-restricted | SDK load, `CURSOR_API_KEY`, model preflight, and Cursor review-control metadata |
 | `cursor` CLI | yes | no | text | prompt-only | executable preflight; CLI owns auth |
 | `pi` SDK | yes | yes | terminating tool call | tool-restricted | SDK load and environment-backed model preflight |
 | `pi` CLI | yes | yes | JSONL/text | tool-restricted | executable preflight; CLI owns auth |
-| `droid` SDK | yes | yes | native structured with text fallback | enforced | SDK load, executable check, auth warning/pass |
+| `droid` SDK | yes | yes | native structured with text fallback | enforced | SDK load, executable check, `FACTORY_API_KEY` required |
 | `droid` CLI | yes | yes | JSON/text | enforced | executable preflight; CLI owns auth |
 | `copilot` SDK | yes | yes | text | tool-restricted | SDK load; Copilot runtime owns auth |
 | `copilot` CLI | yes | yes | JSONL/text | tool-restricted | executable preflight; CLI owns auth |
 | `gemini` CLI | yes | no | JSON/text | tool-restricted | executable preflight; CLI owns auth |
 | `opencode` CLI | yes | yes | JSONL/text | prompt-only | executable preflight; CLI owns auth |
 | `grok` CLI | yes | yes | JSON/text | enforced | executable preflight; CLI owns auth |
-| `antigravity` CLI | no | no | text | tool-restricted | executable preflight; CLI owns auth |
+| `antigravity` CLI | yes | yes | text | tool-restricted | executable preflight; CLI owns auth |
 
 ## Adapter Notes
 
@@ -81,7 +81,7 @@ SDK-backed reviewers can opt into CLI transport from config:
 | `codex` APP-SERVER | Opt-in transport that defaults to the shared Codex `CODEX_HOME`, attaches to an existing Unix-socket app-server when available, and launches `codex app-server --listen unix://` only when needed. Structured mode is the default review path and keeps Diffwarden's schema contract. Reviews remain ephemeral and read-only with approval escalations denied, `web_search = "disabled"` by default, no client dynamic tools, and optional experimental native `review/start` mode. Native mode is text-only for Diffwarden artifacts and reports effective web search as disabled because Codex disables web search inside the review task. `appServerOptions.mode: "stdio-isolated"` selects a temporary `CODEX_HOME` stdio app-server and disables broad app/plugin/browser/computer/image/multi-agent features. This path is sandbox-enforced, not small-tool allowlisted. |
 | `claude` SDK | Uses `@anthropic-ai/claude-agent-sdk`, restricts built-in tools to `Read`, `Grep`, and `Glob`, pairs those tools with `allowedTools` and `permissionMode: "dontAsk"`, disables settings/MCP/session persistence with strict empty MCP config, and can reuse local Claude Code auth when no `ANTHROPIC_API_KEY` is present. |
 | `claude` CLI | Uses `claude -p` with `--tools Read,Grep,Glob`, matching `--allowedTools`, disallowed write/shell/web/broad-agent tools, `--permission-mode dontAsk`, no session persistence, disabled slash commands, strict empty MCP config, and JSON schema output. |
-| `cursor` SDK | Uses `@cursor/sdk` in local plan mode with sandbox enabled, auto-review enabled, empty setting sources, no MCP servers, and an ephemeral JSONL local store. Effort is accepted by the public config shape but reported as ignored for Cursor SDK runs. This path remains prompt-only because Cursor does not expose deterministic read/glob/grep-only tool allowlisting. |
+| `cursor` SDK | Uses `@cursor/sdk` in local plan mode with sandbox enabled, auto-review enabled, empty setting sources, no MCP servers, and an ephemeral JSONL local store. Effort is accepted by the public config shape but reported as ignored for Cursor SDK runs. The SDK tool allowlist enables only `read`, `grep`, `glob`, and `ls`. |
 | `cursor` CLI | Uses `cursor-agent -p` with JSON output, workspace scoping, plan mode, sandbox enabled, and trusted headless execution. Diffwarden treats read-only as prompt-only because Cursor CLI print mode can still expose broad agent tools and the plan/sandbox behavior is provider-owned. |
 | `pi` SDK | Uses a scoped Pi session with `read`, `grep`, `find`, `ls`, and a terminating `review_output` custom tool. Extensions, prompts, themes, and context files are not loaded. |
 | `pi` CLI | Uses print JSON mode, disables sessions, extensions, skills, prompt templates, themes, and context files, and restricts tools to `read`, `grep`, `find`, and `ls`. |
@@ -92,7 +92,7 @@ SDK-backed reviewers can opt into CLI transport from config:
 | `gemini` CLI | Uses JSON output, plan approval mode, a generated all-modes policy/admin policy allowing only `read_file`, `list_directory`, `glob`, and Gemini grep names (`grep_search` plus legacy alias `search_file_content`), empty MCP allowlisting, disabled extensions, and isolated session trust for headless startup. |
 | `opencode` CLI | Uses `opencode run --pure`, stdin prompt input, provider-qualified model support, effort mapped to variant, a generated low-tool `diffwarden-review-*` agent, and an `OPENCODE_PERMISSION` policy that allows only `read`, `glob`, and `grep` by default. It remains marked prompt-only until hard read-only enforcement is proven. |
 | `grok` CLI | Uses JSON output, `--permission-mode dontAsk`, `--tools read_file,grep,list_dir`, matching read/search allow rules, deny rules for shell/edit/write/web/MCP, `--sandbox read-only`, disabled subagents, disabled memory, and disabled web search. Diffwarden does not pass `--max-turns`; only an explicitly configured reviewer timeout limits the run. |
-| `antigravity` CLI | Uses prompt-bearing print mode with a temp prompt file, sandbox mode, an isolated temporary Antigravity CLI settings profile, empty MCP config, strict tool permission, and deny rules for write, shell, unsandboxed, web, and MCP actions. The profile preserves valid non-policy user settings after filtering policy/control keys, then overrides the review policy so file reads are allowed only inside run-scoped trusted roots for the repository and prompt directory. `agy` runs from the prompt directory with `HOME`/`USERPROFILE` pointed at the isolated profile and Windows drive/path home variables removed; copied auth identity files live outside that cwd and outside trusted roots, with fail-closed handling if the temp home or source `.gemini` directory would resolve inside the repo. Model and effort overrides are rejected for this path. |
+| `antigravity` CLI | Uses prompt-bearing print mode with a temp prompt file, sandbox mode, an isolated temporary Antigravity CLI settings profile, empty MCP config, strict tool permission, and deny rules for write, shell, unsandboxed, web, and MCP actions. The profile preserves valid non-policy user settings after filtering policy/control keys, then overrides the review policy so file reads are allowed only inside run-scoped trusted roots for the repository and prompt directory. `agy` runs from the prompt directory with `HOME`/`USERPROFILE` pointed at the isolated profile and Windows drive/path home variables removed; copied auth identity files live outside that cwd and outside trusted roots, with fail-closed handling if the temp home or source `.gemini` directory would resolve inside the repo. Model overrides and low/medium/high effort are supported. Slash commands are disabled. |
 
 ## Common Core Features
 

@@ -812,6 +812,8 @@ describe("claudeAdapter", () => {
       {
         type: "result",
         subtype: "error_max_structured_output_retries",
+        // SDK 0.3.260 adds the last schema validation error, not a candidate review.
+        errors: ["StructuredOutput: findings must be an array"],
         duration_ms: 15,
         total_cost_usd: 0.15,
         session_id: "structured-session",
@@ -1567,6 +1569,7 @@ describe("claudeAdapter SDK debug output", () => {
 type MockClaudeResult = {
   type: "result";
   subtype: string;
+  errors?: string[];
   result?: string;
   structured_output?: unknown;
   duration_ms?: number;

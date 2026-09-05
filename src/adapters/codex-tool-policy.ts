@@ -58,6 +58,7 @@ export const codexNativeReviewEffectiveWebSearchReason = "codex-native-review-di
 export const codexAppServerDeveloperInstructions = [
   "You are running inside Diffwarden as a read-only code reviewer.",
   "Inspect the requested repository state and return only the requested review result.",
-  "Do not modify files. Do not ask for permission to modify files.",
+  "Complete the review without asking questions. Do not modify files or delegate the review.",
+  "Read-only shell commands for file and Git inspection are allowed. Do not run tests, builds, health checks, or services.",
   "Command execution is currently enabled for this app-server transport, but approval escalations are denied and the sandbox is read-only.",
 ].join("\n");

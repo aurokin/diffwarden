@@ -222,8 +222,8 @@ describe("reviewerCapabilities", () => {
     });
     expect(getTransportCapability("antigravity", "cli")).toMatchObject({
       defaultExecutable: "agy",
-      supportsModel: false,
-      supportsEffort: false,
+      supportsModel: true,
+      supportsEffort: true,
       captureMode: "text",
       readonlyCapability: "tool-restricted",
     });
@@ -267,6 +267,7 @@ describe("reviewerCapabilities", () => {
       envVars: ["FACTORY_API_KEY"],
       envVarsOptional: true,
       loginDelegated: true,
+      explicitAuthTransports: ["sdk"],
     });
     expect(getReviewerAuthSignal("codex")).toEqual({
       credentialFile: { baseEnvVar: "CODEX_HOME", homeSubdir: ".codex", file: "auth.json" },

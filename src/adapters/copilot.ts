@@ -584,7 +584,7 @@ export async function resolveCopilotBundledRuntimeExecutable(): Promise<string> 
   const runtime = await firstReadableFile(copilotBundledRuntimeCandidates(packageRoot));
   if (runtime === undefined) {
     throw missingRequirement(
-      `Copilot SDK bundled runtime was not found. Reinstall dependencies so ${copilotPackageName}'s @github/copilot dependency is available.`,
+      `Copilot SDK bundled runtime was not found. Reinstall dependencies so ${copilotPackageName}'s platform runtime dependency is available.`,
     );
   }
   return runtime;
@@ -592,12 +592,20 @@ export async function resolveCopilotBundledRuntimeExecutable(): Promise<string> 
 
 function copilotBundledRuntimeCandidates(packageRoot: string): string[] {
   const sdkRequire = createRequire(path.join(packageRoot, "package.json"));
-  const searchPaths = sdkRequire.resolve.paths("@github/copilot") ?? [];
-  // @github/copilot hides index.js behind package exports; direct candidates handle pnpm links.
-  return [
-    path.join(path.dirname(packageRoot), "copilot", "index.js"),
-    ...searchPaths.map((base) => path.join(base, "@github", "copilot", "index.js")),
-  ];
+  // Copilot SDK 1.0.13 ships its native runtime in platform optional dependencies.
+  const report = process.platform === "linux" ? process.report.getReport() : undefined;
+  const header = isRecord(report) ? report.header : undefined;
+  const platform =
+    process.platform === "linux" && (!isRecord(header) || header.glibcVersionRuntime === undefined)
+      ? "linuxmusl"
+      : process.platform;
+  const target = `${platform}-${process.arch}`;
+  const runtimePackage = `@github/copilot-sdk-${target}`;
+  const searchPaths = sdkRequire.resolve.paths(runtimePackage) ?? [];
+  const executable = process.platform === "win32" ? "copilot-runtime.exe" : "copilot-runtime";
+  return searchPaths.map((base) =>
+    path.join(base, "@github", `copilot-sdk-${target}`, "prebuilds", target, executable),
+  );
 }
 
 async function firstReadableFile(candidates: readonly string[]): Promise<string | undefined> {
@@ -1018,7 +1026,7 @@ function copilotClientOptions(
     workingDirectory,
     baseDirectory,
     env,
-    // Copilot SDK spawns .js runtime entries through Node, so the bundled runtime path is cross-platform.
+    // Keep runtime environment and cwd isolated; JavaScript overrides launch through Node.
     connection: sdk.RuntimeConnection.forStdio({
       ...copilotRuntimeLaunchCommand(resolvedExecutable),
     }),

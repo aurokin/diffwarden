@@ -708,7 +708,7 @@ describe("createCopilotAdapter", () => {
     expect(preflight?.metadata?.sdkVersion).toEqual(expect.stringMatching(/^\d+\.\d+\.\d+/));
     expect(preflight?.metadata).toMatchObject({
       copilotRuntimeSource: "sdk-bundled",
-      resolvedExecutable: expect.stringContaining(path.join("@github", "copilot", "index.js")),
+      resolvedExecutable: expect.stringContaining(`${path.sep}copilot-runtime`),
     });
     expect(preflight?.checks).toEqual(
       expect.arrayContaining([

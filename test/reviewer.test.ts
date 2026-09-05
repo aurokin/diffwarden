@@ -487,9 +487,9 @@ describe("resolveReviewerConfig", () => {
     expect(() =>
       resolveReviewerConfig({
         spec: "antigravity",
-        model: "gemini-pro",
+        effort: "xhigh",
       }),
-    ).toThrow("antigravity CLI transport does not support per-run model overrides");
+    ).toThrow("Antigravity CLI effort must be low, medium, or high");
 
     expect(() =>
       resolveReviewerConfigs({

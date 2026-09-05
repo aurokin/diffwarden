@@ -8,7 +8,7 @@ import {
   unwrapStructuredReview,
   unwrapText,
 } from "../core/adapter-output.js";
-import { reviewerFailed } from "../core/errors.js";
+import { invalidCli, reviewerFailed } from "../core/errors.js";
 import { reviewResultJsonSchema, reviewResultStrictJsonSchema } from "../core/schema.js";
 import {
   antigravityCliReviewMcpConfigFileName,
@@ -1453,6 +1453,10 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
   },
   antigravity: {
     async buildInvocation(input, tempDir) {
+      const effort = input.reviewer.effort;
+      if (effort !== undefined && effort !== "low" && effort !== "medium" && effort !== "high") {
+        throw invalidCli("Antigravity CLI supports only low, medium, or high effort");
+      }
       // agy has no prompt-file flag; a 2026-05-31 live probe confirmed
       // print mode can read this file.
       const reviewRoot = path.resolve(input.target.repo_root);
@@ -1472,6 +1476,12 @@ export const cliSpecs: Record<CliEngine, CliSpec> = {
         `Read the full Diffwarden review prompt from ${promptPath} and follow it exactly.`,
         "antigravity",
       );
+      // Print mode expands custom commands from 1.1.9; keep review input literal.
+      args.push("--disable-slash-commands");
+      pushModel(args, input.reviewer);
+      if (effort !== undefined) {
+        args.push("--effort", effort);
+      }
       const printTimeoutSeconds = numberCliOption(input.reviewer, "printTimeoutSeconds");
       if (printTimeoutSeconds !== undefined) {
         args.push("--print-timeout", `${printTimeoutSeconds}s`);

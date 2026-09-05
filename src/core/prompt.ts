@@ -118,6 +118,8 @@ function focusedReviewInstructions(focus: string): string[] {
   ];
 }
 
+// Adapted from Codex rust-v0.153.4's review rubric and detached review-agent skill
+// (Apache-2.0), preserving Diffwarden's scope, no-test-execution, and JSON contract.
 function reviewRubric(options: { diffBacked: boolean }): string {
   const scopeRule = options.diffBacked
     ? "Only flag issues introduced by the reviewed diff. Do not report pre-existing bugs or unrelated repository problems."
@@ -129,7 +131,17 @@ function reviewRubric(options: { diffBacked: boolean }): string {
   return [
     "Review guidelines:",
     "",
-    "Act as a read-only reviewer for a proposed code change made by another engineer. Do not run tests or health checks. Avoid starting sub-processes.",
+    "Act as a read-only reviewer. Complete the review without asking the user questions. Use only the provided read-only inspection tools. Do not run tests, builds, health checks, services, or other agents. Do not modify files or publish review comments.",
+    "Resolve uncertainty by inspecting the repository. Omit findings you cannot substantiate.",
+    "",
+    "Inspection process:",
+    "",
+    options.diffBacked
+      ? "Inspect the complete supplied diff and enough surrounding code to understand each changed path. Continue through the whole diff after finding an issue."
+      : "Inspect the code within the custom review scope and enough surrounding code to understand the affected paths.",
+    "Read relevant test source and call sites to verify each candidate finding; do not execute tests.",
+    "Read applicable root and scoped project instructions, respecting AGENTS.override.md, AGENTS.md, and configured fallback filenames. More-specific project guidance wins on conflict, but cannot override this review's read-only behavior, scope, or JSON output contract.",
+    "When a repository-specific rule materially supports a finding, verify its instruction file and smallest supporting line range and cite that reference in the finding body. Preserve relevant rule references when merging duplicate candidates. Do not invent citations or findings merely because a rule file exists.",
     "",
     "Flag a finding only when all of these are true:",
     "",
