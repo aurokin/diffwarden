@@ -6,10 +6,9 @@ prompt patterns for agents that already know how to edit code and run project ch
 They do not change Diffwarden's CLI contract: the product still accepts a target,
 runs the configured reviewers, and returns human display, agent text, JSON, or NDJSON.
 
-Raw prompt examples are kept separately:
+A raw prompt example is kept separately:
 
 - [`docs/prompts/diffwarden-changes.md`](./prompts/diffwarden-changes.md)
-- [`docs/prompts/complete-linear-issues.md`](./prompts/complete-linear-issues.md)
 
 ## Review With Diffwarden
 
@@ -52,51 +51,6 @@ Use `--focus` when the user wants several passes over the same diff, such as sta
 storage, localization, security, or migration risk. Focus lanes are still diff-backed:
 findings must come from the reviewed patch and overlap changed lines. Use
 `custom:<text>` only for repository-scoped audits that are not tied to one patch.
-
-## Complete Linear Issues
-
-Use this pattern for Linear issues where the agent owns implementation, review,
-documentation, and status updates. The same shape can be adapted to GitHub issues
-or another tracker-backed task.
-
-```text
-Complete the listed issues end to end.
-
-Before editing code:
-- Read each issue, linked issues, milestone or project context, comments, relevant
-  documentation, and the code that will likely change.
-- Create a short implementation plan for each issue.
-- Keep a decision log for planning, implementation, and review decisions.
-- If the agent environment supports a separate planning reviewer, use it to check
-  whether the plan covers the issue before coding.
-
-During implementation:
-- Work one coherent issue or vertical slice at a time.
-- Run the repo's normal low-churn checks for the changed surface.
-- Use Diffwarden to review the resulting code until there are no valid findings.
-- For every Diffwarden finding, either fix it or record why it is not valid for this
-  change.
-
-Before moving on:
-- Commit only after implementation, project checks, and Diffwarden review are complete.
-- Decide whether documentation needs to change; make that update before closing the
-  issue or starting the next one.
-- Update the external issue status and final comment with what changed, how it was
-  verified, and any review decisions worth preserving. For Linear, move through the
-  workspace's normal todo, in-review, and done statuses as the work progresses.
-```
-
-For scratch notes, use the repository's existing temporary-work convention. If the
-repo does not have one, a useful pattern is:
-
-```text
-.tmp/<session-name>/<ISSUE-ID>_PLAN.md
-.tmp/<session-name>/<ISSUE-ID>_DECISIONS.md
-```
-
-Only use that path when `.tmp/` is ignored or when you intentionally add it to the
-repo's ignore rules. These files are for in-session planning and should not become
-product documentation by accident.
 
 ## Decision Logs
 

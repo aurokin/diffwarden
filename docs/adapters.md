@@ -926,6 +926,35 @@ extraction work should not build additional Gemini-specific behavior. Antigravit
 passes `--disable-slash-commands`, which requires Antigravity 1.1.9 or newer. The updated
 invocation was checked against 1.1.26.
 
+### Stream-mode research caveats
+
+These notes come from the July 2026 stream-debug research behind
+[ADR 0004](./adr/0004-reviewer-debug-output-activity-sink.md). They matter when adding or
+changing a native stream mode for `--debug-reviewer-output`.
+
+- **Grok** spells its stream value `--output-format streaming-json`, not `stream-json`.
+  `grok --help` lists `plain, json, streaming-json`; a probe that only looks for `stream-json`
+  fails. The `end` event carries usage and session fields but no answer text, so the json
+  envelope is rebuilt from the concatenated `text` deltas. `thought` deltas are reasoning and
+  are dropped.
+- **Gemini** `--output-format stream-json` was never live-verified: the schema (`init`,
+  `message`, `tool_use`, `tool_result`, `error`, `result`) was read from the installed 0.50.0
+  bundle while the CLI was logged out. The terminal `result` event has only `status`, `stats`,
+  and an optional `error`, so final text must be accumulated from assistant `message` content
+  deltas, resetting the accumulator on each `tool_use`, and a `{session_id, response, stats,
+  error}` envelope synthesized. Skip the echoed `role: "user"` message (the full prompt) and
+  tolerate a non-JSON preamble line on auth failure. Probe with stdin closed, because an
+  unauthenticated CLI prints an interactive OAuth prompt that consumes piped stdin. An invalid
+  `--output-format` value fails yargs validation with exit code 42 before any auth or spend.
+  This work was dropped in July 2026 once Gemini CLI became enterprise-only; re-capture live
+  runs (trivial and tool-using) before reviving it.
+- **Antigravity** support probes must be help-text only, never an argument-validation run.
+  In print mode `agy` does not reject unknown flags: it folds them into the prompt and starts
+  a paid, tool-executing agent run. Debug capture therefore tails the transcript JSONL at
+  `$HOME/.gemini/antigravity-cli/brain/<conversation-id>/.system_generated/logs/transcript.jsonl`
+  under the isolated home. That path is undocumented internal surface and may change; the
+  `thinking` field on `PLANNER_RESPONSE` events is chain-of-thought and is dropped.
+
 ## Live Test Controls
 
 Inspect local tool availability:
